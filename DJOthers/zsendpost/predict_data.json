@@ -1,0 +1,251 @@
+{
+  "version": 1,
+  "savedAt": "2026-03-13T08:43:19.917Z",
+  "templates": [
+    {
+      "account": "xh2001",
+      "title": "好人资料必中新DAJIANG{period}期",
+      "type": "zodiac_single",
+      "records": [
+        {
+          "period": "72",
+          "zodiac": "龙",
+          "hit": null
+        }
+      ]
+    },
+    {
+      "account": "xh2002",
+      "title": "新DAJIANG看我分析{period}期",
+      "type": "odd_even",
+      "content": "上期DAJIANG门特MA{last_type}，今天特MA买{new_type}，稳",
+      "_state": {
+        "2026072": {
+          "newType": "双"
+        }
+      }
+    },
+    {
+      "account": "xh2003",
+      "title": "新DAJIANG门{period}期不看错过1个亿",
+      "type": "tail",
+      "records": [
+        {
+          "period": "72",
+          "tail": "7",
+          "hit": null
+        }
+      ]
+    },
+    {
+      "account": "xh2004",
+      "title": "do侠新DAJIANG{period}期心水推荐",
+      "type": "zodiac_double",
+      "content": "今日平肖 {zodiac1} {zodiac2}  中1不亏中2血赚\n\n上期中 0",
+      "_state": {
+        "2026072": {
+          "z1": "蛇",
+          "z2": "牛"
+        }
+      }
+    },
+    {
+      "account": "xh2006",
+      "title": "财神托梦{period}期",
+      "type": "zodiac_four",
+      "content": "加精 加精 加精\n四肖中特\n{zodiacs}\n回血计划 跟上发财",
+      "_state": {
+        "2026072": {
+          "zodiacs": [
+            "龙",
+            "牛",
+            "兔",
+            "马"
+          ]
+        }
+      }
+    },
+    {
+      "account": "xh2007",
+      "title": "新DAJIANG门第{period}期心水推荐",
+      "type": "big_small",
+      "records": [
+        {
+          "period": "72",
+          "value": "小",
+          "hit": null
+        }
+      ]
+    },
+    {
+      "account": "xh2008",
+      "title": "DAJIANG门传真{period}期",
+      "type": "zodiac_single_text",
+      "content": "DAJIANG门本期{zodiac}，大吉大利！今晚买{zodiac}稳",
+      "_state": {
+        "2026072": {
+          "zodiac": "猴"
+        }
+      }
+    },
+    {
+      "account": "xh2009",
+      "title": "{period}期小明心水大放送",
+      "type": "zodiac_single_text",
+      "content": "本期平特一肖绝对有{zodiac}，这期买{zodiac}，稳",
+      "_state": {
+        "2026072": {
+          "zodiac": "马"
+        }
+      }
+    },
+    {
+      "account": "xh2010",
+      "title": "DAJIANG门{period}期长跟必赚",
+      "type": "zodiac_six",
+      "records": [
+        {
+          "period": "72",
+          "zodiacs": [
+            "虎",
+            "羊",
+            "鸡",
+            "蛇",
+            "牛",
+            "猴"
+          ],
+          "hit": null
+        }
+      ]
+    },
+    {
+      "account": "xh2011",
+      "title": "{period}期内幕来了",
+      "type": "zodiac_bet",
+      "content": "本期平肖{zodiac}×300\n霞姐带你买飞机",
+      "_state": {
+        "2026072": {
+          "zodiac": "羊"
+        }
+      }
+    },
+    {
+      "account": "xh2012",
+      "title": "{period}期新DAJIANG一肖",
+      "type": "zodiac_single",
+      "records": [
+        {
+          "period": "72",
+          "zodiac": "鸡",
+          "hit": null
+        }
+      ]
+    },
+    {
+      "account": "xh2013",
+      "title": "新DAJIANG{period}期买了就中",
+      "type": "zodiac_single_text",
+      "content": "今日黄历宜，那就{zodiac}",
+      "_state": {
+        "2026072": {
+          "zodiac": "羊"
+        }
+      }
+    },
+    {
+      "account": "xh2014",
+      "title": "新DAJIANG门{period}期丝滑小连肖",
+      "type": "zodiac_triple",
+      "content": "三连肖\n{zodiacs}\n复式三连肖",
+      "_state": {
+        "2026072": {
+          "zodiacs": [
+            "蛇",
+            "牛",
+            "羊"
+          ]
+        }
+      }
+    },
+    {
+      "account": "xh2015",
+      "title": "新DAJIANG心水{period}期",
+      "type": "tail_single",
+      "records": [
+        {
+          "period": "72",
+          "tail": "2",
+          "hit": null
+        }
+      ]
+    },
+    {
+      "account": "xh2016",
+      "title": "走过路过不要错过DAJIANG门{period}",
+      "type": "special_numbers",
+      "content": "{period}期特MA今天买{head}头{tail}尾 中中中\n买{numbers}",
+      "_state": {
+        "2026072": {
+          "head": 4,
+          "tail": 0,
+          "nums": [
+            3,
+            45,
+            19,
+            48,
+            27,
+            35,
+            33,
+            11,
+            37
+          ]
+        }
+      }
+    },
+    {
+      "account": "xh2017",
+      "title": "每日推荐一肖{period}期",
+      "type": "zodiac_single_text",
+      "content": "今日推荐平特一肖-{zodiac}\n走势无常\n理性参考",
+      "_state": {
+        "2026072": {
+          "zodiac": "兔"
+        }
+      }
+    },
+    {
+      "account": "xh2018",
+      "title": "{period}DAJIANG门发车了",
+      "type": "zodiac_single_text",
+      "content": "本期平肖{zodiac}，稳！干就完了！",
+      "_state": {
+        "2026072": {
+          "zodiac": "蛇"
+        }
+      }
+    },
+    {
+      "account": "xh2019",
+      "title": "买马致富{period}期",
+      "type": "exclude_numbers",
+      "content": "{period}期今天继续买五不中{numbers}干就完事",
+      "_state": {
+        "2026072": {
+          "nums": [
+            41,
+            45,
+            23,
+            44,
+            10
+          ]
+        }
+      }
+    },
+    {
+      "account": "xh2020",
+      "title": "新DAJIANG{period}期李白发来贺诗",
+      "type": "poem",
+      "content": "霜枫如火照寒川，北雁南飞又一年\n独倚危楼风满袖，云山万里隔苍烟"
+    }
+  ]
+}

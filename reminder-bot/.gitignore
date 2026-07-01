@@ -1,0 +1,17 @@
+# Environment
+.env
+
+# Database
+*.sqlite
+*.sqlite-*
+
+# Dependencies
+node_modules/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/

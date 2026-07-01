@@ -1,0 +1,1234 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>新澳预测中心</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link
+      href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --bg-main: #f0f4f8;
+        --bg-card: #ffffff;
+        --bg-header: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        --accent-primary: #6366f1;
+        --accent-secondary: #8b5cf6;
+        --accent-success: #10b981;
+        --accent-danger: #ef4444;
+        --text-primary: #1e293b;
+        --text-secondary: #64748b;
+        --text-muted: #94a3b8;
+        --border-light: #e2e8f0;
+        --shadow-soft: 0 4px 20px rgba(0, 0, 0, 0.06);
+        --shadow-card: 0 8px 30px rgba(0, 0, 0, 0.08);
+      }
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      body {
+        font-family: "Noto Sans SC", sans-serif;
+        background: var(--bg-main);
+        color: var(--text-primary);
+        min-height: 100vh;
+        line-height: 1.6;
+      }
+
+      .bg-decoration {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        z-index: 0;
+        overflow: hidden;
+      }
+      .bg-blob {
+        position: absolute;
+        border-radius: 50%;
+        filter: blur(80px);
+        opacity: 0.5;
+      }
+      .bg-blob-1 {
+        width: 600px;
+        height: 600px;
+        background: linear-gradient(135deg, #c7d2fe 0%, #ddd6fe 100%);
+        top: -200px;
+        right: -200px;
+      }
+      .bg-blob-2 {
+        width: 400px;
+        height: 400px;
+        background: linear-gradient(135deg, #a5f3fc 0%, #99f6e4 100%);
+        bottom: 10%;
+        left: -100px;
+      }
+      .bg-blob-3 {
+        width: 300px;
+        height: 300px;
+        background: linear-gradient(135deg, #fde68a 0%, #fca5a5 100%);
+        bottom: 30%;
+        right: 5%;
+      }
+
+      .header {
+        position: relative;
+        z-index: 10;
+        background: var(--bg-header);
+        padding: 2.5rem 1.5rem;
+        text-align: center;
+        color: white;
+        border-radius: 0 0 40px 40px;
+        margin-bottom: 2rem;
+      }
+      .period-pills {
+        display: flex;
+        justify-content: center;
+        gap: 1rem;
+        margin-top: 1.5rem;
+        flex-wrap: wrap;
+      }
+      .period-pill {
+        background: rgba(255, 255, 255, 0.2);
+        backdrop-filter: blur(10px);
+        padding: 0.625rem 1.25rem;
+        border-radius: 100px;
+        font-size: 0.875rem;
+        border: 1px solid rgba(255, 255, 255, 0.3);
+      }
+
+      .result-section {
+        position: relative;
+        z-index: 10;
+        max-width: 600px;
+        margin: 0 auto 2rem;
+        padding: 0 1rem;
+      }
+      .result-card {
+        background: var(--bg-card);
+        border-radius: 24px;
+        padding: 1.5rem;
+        box-shadow: var(--shadow-card);
+        border: 1px solid var(--border-light);
+      }
+      .result-header-box {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 1.25rem;
+        padding-bottom: 0.75rem;
+        border-bottom: 1px solid var(--border-light);
+      }
+      .result-label {
+        font-size: 0.9375rem;
+        font-weight: 600;
+        color: var(--text-primary);
+      }
+      .result-badge {
+        background: linear-gradient(
+          135deg,
+          var(--accent-primary),
+          var(--accent-secondary)
+        );
+        color: white;
+        padding: 0.375rem 1rem;
+        border-radius: 100px;
+        font-size: 0.8125rem;
+        font-weight: 600;
+        box-shadow: 0 2px 8px rgba(99, 102, 241, 0.3);
+      }
+
+      .numbers-row {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+        margin-bottom: 1rem;
+      }
+      .number-ball {
+        width: 44px;
+        height: 44px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 700;
+        font-size: 1rem;
+        color: white;
+        transition: transform 0.2s;
+      }
+      .number-ball:hover {
+        transform: scale(1.1);
+      }
+      .number-ball.red {
+        background: linear-gradient(135deg, #f87171 0%, #ef4444 100%);
+        box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+      }
+      .number-ball.blue {
+        background: linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%);
+        box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+      }
+      .number-ball.green {
+        background: linear-gradient(135deg, #4ade80 0%, #22c55e 100%);
+        box-shadow: 0 4px 12px rgba(34, 197, 94, 0.3);
+      }
+      .zodiacs-row {
+        display: flex;
+        justify-content: center;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+      }
+      .zodiac-tag {
+        background: #f1f5f9;
+        color: var(--text-secondary);
+        padding: 0.375rem 0.875rem;
+        border-radius: 8px;
+        font-size: 0.8125rem;
+        font-weight: 500;
+      }
+
+      .predict-section {
+        position: relative;
+        z-index: 10;
+        max-width: 600px;
+        margin: 0 auto;
+        padding: 0 1rem 7rem;
+      }
+      .predict-card {
+        background: var(--bg-card);
+        border-radius: 20px;
+        margin-bottom: 1rem;
+        box-shadow: var(--shadow-soft);
+        border: 1px solid var(--border-light);
+        overflow: hidden;
+        opacity: 0;
+        transform: translateY(20px);
+        transition: all 0.4s ease;
+      }
+      .predict-card.visible {
+        opacity: 1;
+        transform: translateY(0);
+      }
+      .predict-card:hover {
+        box-shadow: var(--shadow-card);
+        transform: translateY(-2px);
+      }
+      .card-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 1rem 1.25rem;
+        background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+        border-bottom: 1px solid var(--border-light);
+      }
+      .author-avatar {
+        width: 40px;
+        height: 40px;
+        border-radius: 12px;
+        background: linear-gradient(
+          135deg,
+          var(--accent-primary),
+          var(--accent-secondary)
+        );
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: white;
+        font-weight: 700;
+        font-size: 0.75rem;
+      }
+      .verified-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.25rem;
+        background: linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%);
+        color: #059669;
+        padding: 0.25rem 0.625rem;
+        border-radius: 6px;
+        font-size: 0.6875rem;
+        font-weight: 600;
+      }
+      .card-title {
+        padding: 1rem 1.25rem 0.75rem;
+        font-weight: 600;
+        color: var(--accent-primary);
+      }
+      .card-content {
+        padding: 0 1.25rem 1.25rem;
+      }
+
+      .record-item {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.625rem 0;
+        border-bottom: 1px dashed #e2e8f0;
+      }
+      .record-item:last-child {
+        border-bottom: none;
+      }
+      .status-hit {
+        background: linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%);
+        color: #059669;
+      }
+      .status-miss {
+        background: linear-gradient(135deg, #fee2e2 0%, #fecaca 100%);
+        color: #dc2626;
+      }
+      .status-pending {
+        background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+        color: #d97706;
+      }
+      .record-status {
+        font-size: 0.6875rem;
+        padding: 0.25rem 0.625rem;
+        border-radius: 6px;
+        font-weight: 600;
+      }
+      .zodiac-badge {
+        display: inline-block;
+        background: linear-gradient(135deg, #e0e7ff 0%, #c7d2fe 100%);
+        color: #4f46e5;
+        padding: 0.25rem 0.625rem;
+        margin: 0.125rem;
+        border-radius: 6px;
+        font-size: 0.75rem;
+        font-weight: 500;
+      }
+      .number-badge {
+        display: inline-block;
+        background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+        color: #b45309;
+        padding: 0.25rem 0.5rem;
+        margin: 0.1rem;
+        border-radius: 6px;
+        font-size: 0.75rem;
+        font-weight: 600;
+        min-width: 28px;
+        text-align: center;
+      }
+      .big-badge {
+        background: linear-gradient(135deg, #fee2e2 0%, #fecaca 100%);
+        color: #dc2626;
+        padding: 0.25rem 0.625rem;
+        border-radius: 6px;
+        font-size: 0.75rem;
+        font-weight: 600;
+      }
+      .small-badge {
+        background: linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%);
+        color: #2563eb;
+        padding: 0.25rem 0.625rem;
+        border-radius: 6px;
+        font-size: 0.75rem;
+        font-weight: 600;
+      }
+      .plain-text {
+        font-size: 0.8125rem;
+        color: var(--text-secondary);
+        line-height: 1.8;
+        white-space: pre-line;
+      }
+
+      .loader-overlay {
+        position: fixed;
+        inset: 0;
+        background: var(--bg-main);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        z-index: 200;
+        transition:
+          opacity 0.5s ease,
+          visibility 0.5s ease;
+      }
+      .loader-overlay.done {
+        opacity: 0;
+        visibility: hidden;
+      }
+      .loader-spinner {
+        width: 48px;
+        height: 48px;
+        border: 3px solid var(--border-light);
+        border-top-color: var(--accent-primary);
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      .action-bar {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        background: rgba(255, 255, 255, 0.95);
+        backdrop-filter: blur(10px);
+        padding: 1rem;
+        display: flex;
+        justify-content: center;
+        gap: 0.75rem;
+        z-index: 50;
+        border-top: 1px solid var(--border-light);
+        flex-wrap: wrap;
+      }
+      .action-btn {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.75rem 1.25rem;
+        border: none;
+        border-radius: 12px;
+        font-size: 0.875rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        color: white;
+      }
+      .action-btn svg {
+        width: 18px;
+        height: 18px;
+      }
+      .refresh-btn {
+        background: linear-gradient(
+          135deg,
+          var(--accent-primary),
+          var(--accent-secondary)
+        );
+        box-shadow: 0 4px 14px rgba(99, 102, 241, 0.35);
+      }
+      .export-btn {
+        background: linear-gradient(135deg, #10b981, #059669);
+        box-shadow: 0 4px 14px rgba(16, 185, 129, 0.35);
+      }
+      .export-txt-btn {
+        background: linear-gradient(135deg, #f59e0b, #d97706);
+        box-shadow: 0 4px 14px rgba(245, 158, 11, 0.35);
+      }
+      .import-btn {
+        background: linear-gradient(135deg, #06b6d4, #0891b2);
+        box-shadow: 0 4px 14px rgba(6, 182, 212, 0.35);
+      }
+      .progress-bar {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 3px;
+        background: var(--border-light);
+        z-index: 100;
+      }
+      .progress-fill {
+        height: 100%;
+        background: linear-gradient(
+          90deg,
+          var(--accent-primary),
+          var(--accent-success)
+        );
+        width: 0%;
+        transition: width 0.3s ease;
+      }
+      .toast {
+        position: fixed;
+        top: 20px;
+        left: 50%;
+        transform: translateX(-50%) translateY(-100px);
+        background: var(--accent-success);
+        color: white;
+        padding: 0.75rem 1.5rem;
+        border-radius: 12px;
+        z-index: 300;
+        transition: transform 0.3s ease;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+      }
+      .toast.show {
+        transform: translateX(-50%) translateY(0);
+      }
+      .toast.error {
+        background: var(--accent-danger);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="bg-decoration">
+      <div class="bg-blob bg-blob-1"></div>
+      <div class="bg-blob bg-blob-2"></div>
+      <div class="bg-blob bg-blob-3"></div>
+    </div>
+    <div class="progress-bar">
+      <div class="progress-fill" id="progressFill"></div>
+    </div>
+    <div class="loader-overlay" id="loader">
+      <div class="loader-spinner"></div>
+      <div class="loader-text">正在获取最新开奖数据...</div>
+    </div>
+    <div class="toast" id="toast"></div>
+
+    <header class="header">
+      <h1 class="header-title">新澳预测中心</h1>
+      <p class="header-subtitle">数据分析 走势预测</p>
+      <div class="period-pills">
+        <div class="period-pill">
+          <span>当前期号</span><strong id="currentPeriod">--</strong>
+        </div>
+        <div class="period-pill">
+          <span>预测期号</span><strong id="nextPeriod">--</strong>
+        </div>
+      </div>
+    </header>
+
+    <section class="result-section">
+      <div class="result-card">
+        <div class="result-header-box">
+          <span class="result-label">最新开奖结果</span>
+          <span class="result-badge" id="resultPeriod">--</span>
+        </div>
+        <div class="numbers-row" id="numbersRow"></div>
+        <div class="zodiacs-row" id="zodiacsRow"></div>
+      </div>
+    </section>
+
+    <section class="predict-section">
+      <h2
+        class="section-title"
+        style="
+          font-size: 1.125rem;
+          font-weight: 600;
+          display: flex;
+          align-items: center;
+          gap: 0.625rem;
+        "
+      >
+        <span
+          style="
+            width: 4px;
+            height: 20px;
+            background: linear-gradient(
+              180deg,
+              var(--accent-primary),
+              var(--accent-secondary)
+            );
+            border-radius: 2px;
+          "
+        ></span>
+        第 <span id="predictPeriod">--</span> 期预测推荐
+      </h2>
+      <div id="cardsContainer"></div>
+    </section>
+
+    <div class="action-bar">
+      <input type="file" id="fileInput" style="display: none" accept=".json" />
+      <button class="action-btn import-btn" id="importBtn">
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          stroke-width="2"
+        >
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"
+          />
+        </svg>
+        导入
+      </button>
+      <button class="action-btn export-btn" id="exportBtn">
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          stroke-width="2"
+        >
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4"
+          />
+        </svg>
+        导出
+      </button>
+      <button class="action-btn export-txt-btn" id="exportTxtBtn">
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          stroke-width="2"
+        >
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+          />
+        </svg>
+        导出TXT
+      </button>
+      <button class="action-btn refresh-btn" id="refreshBtn">
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          stroke-width="2"
+        >
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+          />
+        </svg>
+        刷新
+      </button>
+    </div>
+
+    <script>
+      // ================= 配置与状态 =================
+      const CONFIG = {
+        ZODIACS: [
+          "鼠",
+          "牛",
+          "虎",
+          "兔",
+          "龙",
+          "蛇",
+          "马",
+          "羊",
+          "猴",
+          "鸡",
+          "狗",
+          "猪",
+        ],
+        API_URL: "https://macaumarksix.com/api/macaujc2.com",
+        MAX_RECORDS: 9,
+      };
+
+      const TRAD_TO_SIMP = {
+        雞: "鸡",
+        馬: "马",
+        牛: "牛",
+        狗: "狗",
+        豬: "猪",
+        猴: "猴",
+        鼠: "鼠",
+        虎: "虎",
+        兔: "兔",
+        龍: "龙",
+        蛇: "蛇",
+        羊: "羊",
+      };
+
+      const defaultTemplates = [
+        {
+          account: "xh2001",
+          title: "好人资料必中新澳{period}期",
+          type: "zodiac_single",
+          records: [],
+        },
+        {
+          account: "xh2002",
+          title: "新澳看我分析{period}期",
+          type: "odd_even",
+          content: "上期澳门特码{last_type}，今天特码买{new_type}，稳",
+        },
+        {
+          account: "xh2003",
+          title: "新澳门{period}期不看错过1个亿",
+          type: "tail",
+          records: [],
+        },
+        {
+          account: "xh2004",
+          title: "赌侠新澳{period}期心水推荐",
+          type: "zodiac_double",
+          content: "今日平肖 {zodiac1} {zodiac2}  中1不亏中2血赚\n\n上期中 0",
+        },
+        {
+          account: "xh2006",
+          title: "财神托梦{period}期",
+          type: "zodiac_four",
+          content: "加精 加精 加精\n四肖中特\n{zodiacs}\n回血计划 跟上发财",
+        },
+        {
+          account: "xh2007",
+          title: "新澳门第{period}期心水推荐",
+          type: "big_small",
+          records: [],
+        }, // 修正：定义为 big_small
+        {
+          account: "xh2008",
+          title: "澳门传真{period}期",
+          type: "zodiac_single_text",
+          content: "澳门本期{zodiac}，大吉大利！今晚买{zodiac}稳",
+        },
+        {
+          account: "xh2009",
+          title: "{period}期小明心水大放送",
+          type: "zodiac_single_text",
+          content: "本期平特一肖绝对有{zodiac}，这期买{zodiac}，稳",
+        },
+        {
+          account: "xh2010",
+          title: "澳门{period}期长跟必赚",
+          type: "zodiac_six",
+          records: [],
+        },
+        {
+          account: "xh2011",
+          title: "{period}期内幕来了",
+          type: "zodiac_bet",
+          content: "本期平肖{zodiac}×300\n霞姐带你买飞机",
+        },
+        {
+          account: "xh2012",
+          title: "{period}期新澳一肖",
+          type: "zodiac_single",
+          records: [],
+        },
+        {
+          account: "xh2013",
+          title: "新澳{period}期买了就中",
+          type: "zodiac_single_text",
+          content: "今日黄历宜，那就{zodiac}",
+        },
+        {
+          account: "xh2014",
+          title: "新澳门{period}期丝滑小连肖",
+          type: "zodiac_triple",
+          content: "三连肖\n{zodiacs}\n复式三连肖",
+        },
+        {
+          account: "xh2015",
+          title: "新澳心水{period}期",
+          type: "tail_single",
+          records: [],
+        },
+        {
+          account: "xh2016",
+          title: "走过路过不要错过澳门{period}",
+          type: "special_numbers",
+          content: "{period}期特码今天买{head}头{tail}尾 中中中\n买{numbers}",
+        },
+        {
+          account: "xh2017",
+          title: "每日推荐一肖{period}期",
+          type: "zodiac_single_text",
+          content: "今日推荐平特一肖-{zodiac}\n走势无常\n理性参考",
+        },
+        {
+          account: "xh2018",
+          title: "{period}澳门发车了",
+          type: "zodiac_single_text",
+          content: "本期平肖{zodiac}，稳！梭哈就完了！",
+        },
+        {
+          account: "xh2019",
+          title: "买马致富{period}期",
+          type: "exclude_numbers",
+          content: "{period}期今天继续买五不中{numbers}干就完事",
+        },
+        {
+          account: "xh2020",
+          title: "新澳{period}期李白发来贺诗",
+          type: "poem",
+          content:
+            "霜枫如火照寒川，北雁南飞又一年\n独倚危楼风满袖，云山万里隔苍烟",
+        },
+      ];
+
+      let templates = JSON.parse(JSON.stringify(defaultTemplates));
+      let currentData = {};
+      let actualZodiacs = [],
+        actualNumbers = [],
+        actualTails = [],
+        actualSpecialNumber = 0;
+      let generatedData = [];
+
+      // ================= 工具函数 =================
+      const Utils = {
+        randomInt: (min, max) =>
+          Math.floor(Math.random() * (max - min + 1)) + min,
+        randomZodiac: () => CONFIG.ZODIACS[Utils.randomInt(0, 11)],
+        randomZodiacs: (count) => {
+          const res = [];
+          while (res.length < count) {
+            const z = Utils.randomZodiac();
+            if (!res.includes(z)) res.push(z);
+          }
+          return res;
+        },
+        randomNumbers: (count, min = 1, max = 49) => {
+          const res = [];
+          while (res.length < count) {
+            const n = Utils.randomInt(min, max);
+            if (!res.includes(n)) res.push(n);
+          }
+          return res;
+        },
+        getPeriodInt: (p) => parseInt(String(p).slice(-3), 10),
+        getShortPeriod: (p) => String(p).slice(-3),
+        formatDisplay: (p) => `${String(p).slice(0, 4)}-${String(p).slice(4)}`,
+        showToast: (msg, isErr) => {
+          const el = document.getElementById("toast");
+          el.textContent = msg;
+          el.className = `toast ${isErr ? "error" : ""}`;
+          setTimeout(() => el.classList.add("show"), 10);
+          setTimeout(() => el.classList.remove("show"), 3000);
+        },
+        toSimplified: (char) => TRAD_TO_SIMP[char] || char,
+      };
+
+      // ================= 核心逻辑 =================
+      const Checkers = {
+        zodiac: (val) => actualZodiacs.includes(val),
+        specialZodiac: (vals) =>
+          actualZodiacs.length &&
+          vals.includes(actualZodiacs[actualZodiacs.length - 1]),
+        bigSmall: (val) => {
+          const num = actualSpecialNumber;
+          if (num === 49) return false;
+          const isSmall = num >= 1 && num <= 24;
+          return val === "小" ? isSmall : !isSmall;
+        },
+        tail: (val) => actualTails.includes(Number(val)),
+      };
+
+      function processRecords(template, currentPeriod, nextPeriod) {
+        const records = template.records || [];
+        const currInt = Utils.getPeriodInt(currentPeriod);
+        const nextInt = Utils.getPeriodInt(nextPeriod);
+
+        if (!records.length) {
+          addRecord(records, nextInt, template.type);
+          return records;
+        }
+
+        const currentRec = records.find(
+          (r) => Utils.getPeriodInt(r.period) === currInt,
+        );
+        if (currentRec && currentRec.hit === null) {
+          switch (template.type) {
+            case "zodiac_single":
+              currentRec.hit = Checkers.zodiac(currentRec.zodiac);
+              break;
+            case "zodiac_six":
+              currentRec.hit = Checkers.specialZodiac(currentRec.zodiacs);
+              break;
+            case "big_small":
+              currentRec.hit = Checkers.bigSmall(currentRec.value);
+              break; // 对应 big_small
+            case "tail":
+            case "tail_single":
+              currentRec.hit = Checkers.tail(currentRec.tail);
+              break;
+          }
+        }
+
+        const lastInt = Utils.getPeriodInt(records[records.length - 1].period);
+        if (lastInt < nextInt) addRecord(records, nextInt, template.type);
+
+        while (records.length > CONFIG.MAX_RECORDS) records.shift();
+        return records;
+      }
+
+      function addRecord(records, period, type) {
+        const p = Utils.getShortPeriod(period);
+        const map = {
+          zodiac_single: () => ({
+            period: p,
+            zodiac: Utils.randomZodiac(),
+            hit: null,
+          }),
+          zodiac_six: () => ({
+            period: p,
+            zodiacs: Utils.randomZodiacs(6),
+            hit: null,
+          }),
+          big_small: () => ({
+            period: p,
+            value: Math.random() > 0.5 ? "大" : "小",
+            hit: null,
+          }), // 对应 big_small
+          tail: () => ({
+            period: p,
+            tail: String(Utils.randomInt(0, 9)),
+            hit: null,
+          }),
+          tail_single: () => ({
+            period: p,
+            tail: String(Utils.randomInt(0, 9)),
+            hit: null,
+          }),
+        };
+        if (map[type]) records.push(map[type]());
+      }
+
+      // ================= 渲染逻辑 =================
+      const StatusUI = {
+        text: (h) => (h === true ? "中" : h === false ? "挂" : "稳"),
+        symbol: (h) => (h === true ? "√" : h === false ? "×" : "???"),
+        cls: (h) =>
+          h === true
+            ? "status-hit"
+            : h === false
+              ? "status-miss"
+              : "status-pending",
+      };
+
+      function generatePrediction(template, nextPeriod, currentPeriod) {
+        const shortP = Utils.getShortPeriod(nextPeriod);
+        let title = template.title.replace("{period}", shortP);
+        let html = "",
+          text = "";
+
+        const cache = (key, fn) => {
+          template._state = template._state || {};
+          template._state[nextPeriod] = template._state[nextPeriod] || {};
+          if (!template._state[nextPeriod][key])
+            template._state[nextPeriod][key] = fn();
+          return template._state[nextPeriod][key];
+        };
+
+        switch (template.type) {
+          case "zodiac_single": {
+            const recs = processRecords(template, currentPeriod, nextPeriod);
+            html = recs
+              .map(
+                (r) => `
+                    <div class="record-item">
+                        <div class="record-left"><span class="record-period">${r.period}期一肖</span><span class="record-value">${r.zodiac}</span></div>
+                        <span class="record-status ${StatusUI.cls(r.hit)}">${StatusUI.text(r.hit)}</span>
+                    </div>`,
+              )
+              .join("");
+            text = recs
+              .map(
+                (r) => `${r.period}期一肖 ${r.zodiac}  ${StatusUI.text(r.hit)}`,
+              )
+              .join("\n");
+            break;
+          }
+          case "odd_even": {
+            const lastT = actualSpecialNumber % 2 === 1 ? "单" : "双";
+            const newT = cache("newType", () =>
+              Math.random() > 0.5 ? "单" : "双",
+            );
+            const content = template.content
+              .replace("{last_type}", lastT)
+              .replace("{new_type}", newT);
+            html = `<div class="plain-text">${content}</div>`;
+            text = content;
+            break;
+          }
+          case "tail": {
+            const recs = processRecords(template, currentPeriod, nextPeriod);
+            html =
+              "加精 加精 加精" +
+              recs
+                .map(
+                  (r) => `
+                    <div class="record-item">
+                        <div class="record-left"><span class="record-period">${r.period}期平特尾数</span><span class="record-value">${r.tail}</span></div>
+                        <span class="record-status ${StatusUI.cls(r.hit)}">${StatusUI.symbol(r.hit)}</span>
+                    </div>`,
+                )
+                .join("");
+            text =
+              "加精 加精 加精\n" +
+              recs
+                .map(
+                  (r) =>
+                    `${r.period}期平特尾数${r.tail} ${StatusUI.symbol(r.hit)}`,
+                )
+                .join("\n");
+            break;
+          }
+          case "zodiac_double": {
+            const z1 = cache("z1", Utils.randomZodiac);
+            const z2 = cache("z2", () => {
+              let z = Utils.randomZodiac();
+              while (z === z1) z = Utils.randomZodiac();
+              return z;
+            });
+            const content = `今日平肖 ${z1} ${z2}  中1不亏中2血赚\n\n上期中 0`;
+            html = `<div class="plain-text">${content}</div>`;
+            text = content;
+            break;
+          }
+          case "zodiac_four": {
+            const zs = cache("zodiacs", () => Utils.randomZodiacs(4));
+            html = `<div class="plain-text">加精 加精 加精\n四肖中特</div><div style="margin-top:0.5rem">${zs.map((z) => `<span class="zodiac-badge">${z}</span>`).join("")}</div><div class="plain-text" style="margin-top:0.5rem">回血计划 跟上发财</div>`;
+            text = `加精 加精 加精\n四肖中特\n${zs.join(" ")}\n回血计划 跟上发财`;
+            break;
+          }
+          case "big_small": {
+            // 匹配 big_small
+            const recs = processRecords(template, currentPeriod, nextPeriod);
+            html =
+              "七期必中特码" +
+              recs
+                .map(
+                  (r) => `
+                    <div class="record-item">
+                        <div class="record-left"><span class="record-period">${r.period}期特码</span><span class="${r.value === "大" ? "big-badge" : "small-badge"}">${r.value}</span></div>
+                        <span class="record-status ${StatusUI.cls(r.hit)}">${StatusUI.text(r.hit)}</span>
+                    </div>`,
+                )
+                .join("");
+            text =
+              "七期必中特码\n" +
+              recs
+                .map(
+                  (r) => `${r.period}期特码${r.value} ${StatusUI.text(r.hit)}`,
+                )
+                .join("\n");
+            break;
+          }
+          case "zodiac_single_text": {
+            const z = cache("zodiac", Utils.randomZodiac);
+            const content = template.content.replace(/{zodiac}/g, z);
+            html = `<div class="plain-text">${content}</div>`;
+            text = content;
+            break;
+          }
+          case "zodiac_six": {
+            const recs = processRecords(template, currentPeriod, nextPeriod);
+            html =
+              '<div class="plain-text">加精 加精 加精\n6肖中特</div>' +
+              recs
+                .map(
+                  (r) => `
+                    <div class="record-item">
+                        <span class="record-period">${r.period}</span>
+                        <span>${r.zodiacs.map((z) => `<span class="zodiac-badge">${z}</span>`).join("")}</span>
+                        <span class="record-status ${StatusUI.cls(r.hit)}">${StatusUI.text(r.hit)}</span>
+                    </div>`,
+                )
+                .join("");
+            text =
+              "加精 加精 加精\n6肖中特\n" +
+              recs
+                .map(
+                  (r) =>
+                    `${r.period} ${r.zodiacs.join("")}  ${StatusUI.text(r.hit)}`,
+                )
+                .join("\n");
+            break;
+          }
+          case "zodiac_bet": {
+            const z = cache("zodiac", Utils.randomZodiac);
+            const content = `本期平肖${z}×300\n霞姐带你买飞机`;
+            html = `<div class="plain-text">${content}</div>`;
+            text = content;
+            break;
+          }
+          case "zodiac_triple": {
+            const zs = cache("zodiacs", () => Utils.randomZodiacs(3));
+            html = `<div class="plain-text">三连肖</div><div style="margin:0.5rem 0">${zs.map((z) => `<span class="zodiac-badge">${z}</span>`).join("")}</div><div class="plain-text">复式三连肖</div>`;
+            text = `三连肖\n${zs.join(" ")}\n复式三连肖`;
+            break;
+          }
+          case "tail_single": {
+            const recs = processRecords(template, currentPeriod, nextPeriod);
+            const curr = recs[recs.length - 1];
+            const last = recs.length > 1 ? recs[recs.length - 2] : null;
+            let content = "今日推荐\n";
+            if (last)
+              content += `昨天推荐${last.tail}尾${last.hit ? "中" : "挂"}，`;
+            content += `今天推荐买${curr.tail}尾`;
+            html = `<div class="plain-text">${content}</div>`;
+            text = content;
+            break;
+          }
+          case "special_numbers": {
+            const head = cache("head", () => Utils.randomInt(1, 4));
+            const tail = cache("tail", () => Utils.randomInt(0, 9));
+            const nums = cache("nums", () => Utils.randomNumbers(9));
+            html = `<div class="plain-text">${shortP}期特码今天买${head}头${tail}尾 中中中</div><div style="margin-top:0.5rem">${nums.map((n) => `<span class="number-badge">${n}</span>`).join("")}</div>`;
+            text = `${shortP}期特码今天买${head}头${tail}尾 中中中\n买${nums.join(", ")}`;
+            break;
+          }
+          case "exclude_numbers": {
+            const nums = cache("nums", () => Utils.randomNumbers(5));
+            html = `<div class="plain-text">${shortP}期今天继续买五不中</div><div style="margin-top:0.5rem">${nums.map((n) => `<span class="number-badge">${n}</span>`).join("")}</div><div class="plain-text">干就完事</div>`;
+            text = `${shortP}期今天继续买五不中${nums.join(", ")}干就完事`;
+            break;
+          }
+          case "poem": {
+            html = `<div class="plain-text">${template.content}</div>`;
+            text = template.content;
+            break;
+          }
+          default: {
+            // 兜底处理，防止未知类型导致空白
+            html = `<div class="plain-text">未知类型: ${template.type}</div>`;
+            text = `未知类型: ${template.type}`;
+          }
+        }
+        return { title, html, text };
+      }
+
+      async function init() {
+        const loader = document.getElementById("loader");
+        const progress = document.getElementById("progressFill");
+        try {
+          progress.style.width = "30%";
+          const resp = await fetch(CONFIG.API_URL);
+          const data = await resp.json();
+          currentData = data[0] || {
+            expect: "2026050",
+            openCode: "08,38,29,32,46,16,24",
+            wave: "red,blue,red,green,blue,green,red",
+            zodiac: "猪,蛇,虎,猪,鸡,兔,羊",
+          };
+
+          progress.style.width = "80%";
+
+          actualNumbers = currentData.openCode.split(",").map(Number);
+          actualZodiacs = currentData.zodiac
+            .split(",")
+            .map((z) => Utils.toSimplified(z.trim()));
+          actualSpecialNumber = actualNumbers[actualNumbers.length - 1];
+          actualTails = actualNumbers.map((n) => n % 10);
+
+          document.getElementById("numbersRow").innerHTML = actualNumbers
+            .map(
+              (n, i) =>
+                `<div class="number-ball ${currentData.wave.split(",")[i] || "red"}">${n < 10 ? "0" : ""}${n}</div>`,
+            )
+            .join("");
+          document.getElementById("zodiacsRow").innerHTML = actualZodiacs
+            .map((z) => `<span class="zodiac-tag">${z}</span>`)
+            .join("");
+          document.getElementById("currentPeriod").textContent =
+            Utils.formatDisplay(currentData.expect);
+          document.getElementById("resultPeriod").textContent =
+            `第 ${currentData.expect} 期`;
+          const nextP = (parseInt(currentData.expect) + 1).toString();
+          document.getElementById("nextPeriod").textContent =
+            Utils.formatDisplay(nextP);
+          document.getElementById("predictPeriod").textContent = nextP;
+
+          const container = document.getElementById("cardsContainer");
+          container.innerHTML = "";
+          generatedData = [];
+
+          templates.forEach((t, i) => {
+            const pred = generatePrediction(t, nextP, currentData.expect);
+            generatedData.push({
+              account: t.account,
+              title: pred.title,
+              content: pred.text,
+            });
+
+            const card = document.createElement("div");
+            card.className = "predict-card";
+            card.innerHTML = `
+                    <div class="card-header">
+                        <div class="author-info">
+                            <div class="author-avatar">${t.account.slice(-4)}</div>
+                            <span class="author-name">${t.account}</span>
+                        </div>
+                        <span class="verified-badge"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg>已验证</span>
+                    </div>
+                    <div class="card-title">${pred.title}</div>
+                    <div class="card-content">${pred.html}</div>`;
+            container.appendChild(card);
+            setTimeout(() => card.classList.add("visible"), i * 50);
+          });
+
+          progress.style.width = "100%";
+          setTimeout(() => loader.classList.add("done"), 300);
+        } catch (e) {
+          console.error(e);
+          Utils.showToast("初始化失败", true);
+          loader.classList.add("done");
+        }
+      }
+
+      // ================= 交互事件 =================
+      document.getElementById("refreshBtn").onclick = () => {
+        document
+          .querySelectorAll(".predict-card")
+          .forEach((c) => c.classList.remove("visible"));
+        setTimeout(init, 400);
+      };
+
+      document.getElementById("exportBtn").onclick = () => {
+        const blob = new Blob(
+          [
+            JSON.stringify(
+              { version: 1, savedAt: new Date().toISOString(), templates },
+              null,
+              2,
+            ),
+          ],
+          { type: "application/json" },
+        );
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = "predict_data.json";
+        a.click();
+        Utils.showToast("数据已导出");
+      };
+
+      document.getElementById("exportTxtBtn").onclick = () => {
+        if (!generatedData.length) return Utils.showToast("无数据", true);
+        const nextP = Utils.getShortPeriod(parseInt(currentData.expect) + 1);
+        const content = generatedData
+          .map(
+            (i) =>
+              `账号   ${i.account}\n标题   ${i.title}\n内容   \n${i.content}\n`,
+          )
+          .join("\n");
+        const blob = new Blob([content], { type: "text/plain" });
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = `新澳${nextP}期预测.txt`;
+        a.click();
+        Utils.showToast("已导出TXT");
+      };
+
+      document.getElementById("importBtn").onclick = () =>
+        document.getElementById("fileInput").click();
+      document.getElementById("fileInput").onchange = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+          try {
+            const data = JSON.parse(ev.target.result);
+            if (data.templates && Array.isArray(data.templates)) {
+              // 自动修复类型错误：将 xh2007 的 big_size 修正为 big_small
+              data.templates.forEach((t) => {
+                if (t.account === "xh2007" && t.type === "big_size") {
+                  t.type = "big_small";
+                  console.log("已自动修复 xh2007 的类型为 big_small");
+                }
+              });
+
+              templates = data.templates;
+              Utils.showToast("导入成功，正在校对...");
+              init();
+            } else Utils.showToast("格式错误", true);
+          } catch (err) {
+            Utils.showToast("文件解析失败", true);
+          }
+        };
+        reader.readAsText(file);
+        e.target.value = "";
+      };
+
+      // 启动
+      init();
+    </script>
+  </body>
+</html>

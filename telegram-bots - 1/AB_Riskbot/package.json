@@ -1,0 +1,41 @@
+{
+  "name": "risk-control-bot",
+  "version": "5.0.0",
+  "description": "提现风控提醒机器人 - Telegram Bot with risk control monitoring",
+  "main": "index.ts",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "dev": "NODE_OPTIONS=--dns-result-order=ipv4first tsx watch index.ts",
+    "start": "NODE_OPTIONS=--dns-result-order=ipv4first tsx index.ts",
+    "start:local": "NODE_OPTIONS=--dns-result-order=ipv4first tsx index.ts",
+    "postinstall": "prisma generate",
+    "db:push": "prisma db push",
+    "db:generate": "prisma generate",
+    "db:studio": "prisma studio",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.22.0",
+    "axios": "^1.7.0",
+    "dotenv": "^16.4.0",
+    "grammy": "^1.34.0",
+    "lru-cache": "^11.5.0",
+    "pino": "^10.3.1",
+    "prisma": "^5.22.0",
+    "tsx": "^4.19.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "prisma",
+      "@prisma/client",
+      "@prisma/engines",
+      "esbuild"
+    ]
+  }
+}

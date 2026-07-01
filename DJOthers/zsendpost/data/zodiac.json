@@ -1,0 +1,16 @@
+{
+  "records": [
+    { "period": "011", "animal": "鼠", "result": "没中" },
+    { "period": "012", "animal": "羊", "result": "中" },
+    { "period": "013", "animal": "猪", "result": "没中" },
+    { "period": "014", "animal": "猴", "result": "没中" },
+    { "period": "015", "animal": "猪", "result": "中" },
+    { "period": "016", "animal": "兔", "result": "没中" },
+    { "period": "017", "animal": "狗", "result": "中" },
+    { "period": "018", "animal": "鸡", "result": "没中" },
+    { "period": "019", "animal": "虎", "result": "必中" }
+  ],
+  "meta": {
+    "last_updated": "2024-01-01 12:00:00"
+  }
+}

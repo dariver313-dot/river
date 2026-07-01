@@ -1,0 +1,416 @@
+查询彩票类游戏官彩有效投注API：
+https://cf-admin.ahoub1999.com/api/admin/lot/bet/queryPage?account=cheese123456&status=1&currency=CNY&betStartTime=1782144000000&betEndTime=1782835199000&gameId=79%2C149%2C179%2C182%2C148%2C70%2C222%2C202%2C151%2C10%2C11%2C231%2C228%2C229%2C230&summary=true&current=1&size=500
+
+GET
+
+请求参数：
+account
+cheese123456
+status
+1
+currency
+CNY
+betStartTime
+1782144000000
+betEndTime
+1782835199000
+gameId
+79,149,179,182,148,70,222,202,151,10,11,231,228,229,230
+summary
+true
+current
+1
+size
+500
+
+返回数据：
+
+{
+    "code": 0,
+    "traceId": null,
+    "message": "Success",
+    "data": {
+        "page": {
+            "records": [
+                {
+                    "orderNo": "L53010020260627113558437278125",
+                    "userId": 771683,
+                    "account": "cheese123456",
+                    "superName": "jimao55555",
+                    "userName": "UhMLgPa5Cu",
+                    "fullName": "v1_202407_4ThCe9OnH9bdVezJpDValA==",
+                    "userType": "A",
+                    "cateCode": "LHCZ119101",
+                    "cateName": "特肖",
+                    "betInfo": "snake",
+                    "betInfoName": "蛇",
+                    "currency": "CNY",
+                    "walletType": null,
+                    "fixedMultiple": 1,
+                    "model": 1,
+                    "money": 10,
+                    "validAmount": 10,
+                    "betModel": 0,
+                    "multiple": 1,
+                    "totalNums": 1,
+                    "totalMoney": 10,
+                    "odds": "11.943",
+                    "oddsName": "",
+                    "rebate": 0,
+                    "rebateMoney": 0,
+                    "companyRebate": 0,
+                    "companyRebateMoney": 0,
+                    "gameId": 202,
+                    "gameName": "新澳门六合彩",
+                    "issueNum": "2026178",
+                    "openNum": "26,46,22,44,31,17,18",
+                    "openNumJson": null,
+                    "openNumTemplate": "lhc",
+                    "openTime": 1782567152000,
+                    "statTime": 1782518400000,
+                    "betStartTime": 1782482400000,
+                    "betEndTime": 1782566100000,
+                    "winCount": 0,
+                    "status": 1,
+                    "reward": 0,
+                    "payoutAmount": null,
+                    "drawMoney": 0,
+                    "result": 0,
+                    "betTime": 1782560158437,
+                    "createTime": 1782560158451,
+                    "updateTime": 1782567304051,
+                    "settleTime": null,
+                    "winnableAmount": 119.43,
+                    "traceOrderNo": null,
+                    "recoverMoney": null,
+                    "followCode": null,
+                    "popularizeId": 182324813
+                }
+            ],
+            "total": 1,
+            "size": 500,
+            "current": 1,
+            "orders": [],
+            "optimizeCountSql": true,
+            "searchCount": true,
+            "countId": null,
+            "maxLimit": null,
+            "pages": 1
+        },
+        "otherData": {
+            "payoutAmount": 0,
+            "betAmount": 10,
+            "validAmount": 10,    
+            "winAmount": -10,
+            "totalNums": 1,
+            "companyRebateMoney": 0,
+            "rebateMoney": 0,
+            "winnableAmount": 0.119,
+            "recoverMoney": 0
+        }
+    },
+    "succeed": true
+}
+
+validAmount  所有官彩游戏的投注总金额
+
+
+会员个人详细信息API：
+https://cf-admin.ahoub1999.com/api/admin/member/list
+POST
+
+表单数据：
+flag
+0
+baseSearchType
+8
+baseSearchFuzzy
+0
+otherSearchType
+0
+accountSearchType
+2
+current
+1
+size
+500
+account
+cheese123456
+
+返回数据：
+{
+    "code": 0,
+    "traceId": null,
+    "message": "Success",
+    "data": {
+        "records": [
+            {
+                "realName": "*海",                      // （图片未提及，不注释）
+                "nickname": "UhMLgPa5Cu",               // 会员昵称
+                "dialCode": "86",
+                "phone": "156****0235",                 // 手机号（脱敏）
+                "taxType": null,
+                "taxNum": null,
+                "email": null,
+                "wechat": null,
+                "qq": null,
+                "tikTok": null,
+                "facebook": null,
+                "google": null,
+                "zalo": null,
+                "zaloAreaCode": null,
+                "zaloPhone": null,
+                "cnpjTaxNum": null,
+                "telegramCode": null,
+                "telegram": null,
+                "telegramAccount": null,
+                "whatsCode": null,
+                "whatsApp": null,
+                "cardNo": null,
+                "bankCard": null,
+                "cardHolder": null,
+                "fullName": null,
+                "id": 771683,
+                "brandId": 100,
+                "popularizeId": 182324813,              // 会员ID
+                "account": "cheese123456",              // 会员账号
+                "vipLevel": 4,                          // VIP等级
+                "remark": "234  新规则已警告",          // 会员备注（图片中为“2048. 2”，但此处为实际数据，字段对应）
+                "parentId": null,
+                "parentPopularizeId": 174231963,        // 上级ID
+                "parentName": "jimao55555",             // 上级代理
+                "userType": "A",                        
+                "superPath": "/webRoot/sanming777/jimao55555/cheese123456/",
+                "userLevel": 0,                         
+                "lowerNum": "0",
+                "withdrawFlag": "Y",
+                "currency": "CNY",                      
+                "balance": 60.354,                      // 账户余额
+                "freeze": 0,
+                "gameFreeze": 0,
+                "totalRechAmount": 18259,               // 充值总全额
+                "totalRechTimes": 131,                  // 充值次数
+                "totalWithdrawAmount": -16960,          // 提现金额
+                "totalWithdrawTimes": 62,               // 提现次数
+                "registerIp": "43.250.245.93",          
+                "registerIpCount": 1,
+                "createTime": 1771589531000,            // 注册时间
+                "invitationCode": "225588",             // 推广码
+                "registerHost": "48b50b4aee0aefb5.952181.com", 
+                "registerSource": 2,                     
+                "status": 1,
+                "online": false,
+                "lastLoginIp": "220.200.126.133",
+                "lastLoginIpCount": 5,
+                "lastLoginTime": 1782738406000,         // 最后登录时间
+                "lastLoginDeviceClientId": "7yDJidFWw6hTTjSXSxmPZwsaxrcE74HS",
+                "agentLevel": "3",                      // 代理层级
+                "registerBrowser": "",
+                "registerDeviceClientId": "7yDJidFWw6hTTjSXSxmPZwsaxrcE74HS", // 注册设备
+                "registerDeviceCount": 1,
+                "registerOs": "Android",                // 注册操作系统（图片“Android”）
+                "growth": null,
+                "goldCoin": 0,
+                "salaryFlag": 0,
+                "balanceDifference": 1299,              // 充提差额   正数为输钱   负数为赢钱
+                "winAmount": -2915.921,                 
+                "waterAmount": 0,
+                "betAmount": 0,
+                "validAmount": 92407.24,                // 有效投注额
+                "iconId": null,
+                "adSource": 0,
+                "adInfo": null,
+                "registerMode": "un",                   // 注册方式（图片“用户名注册”）
+                "validAmountToday": null,
+                "validAmountHistory": null,
+                "winAmountToday": 0,                    
+                "winAmountHistory": -2915.921,          
+                "waterAmountToday": 1.47,               
+                "waterAmountHistory": 290.635,          // 返水金额
+                "bonusAmountToday": 58,                 
+                "bonusAmountHistory": 1327.17,          红利金额                                  		
+		"exceptionRechargeTotalAmount": 0,
+                "exceptionWithdrawTotalAmount": 0,
+                "commissionAmountToday": 0,                             				
+		"commissionAmountHistory": 0,           // 代理佣金累计
+                "inviter": null,
+                "interestAmount": 0,
+                "firstRechTime": 1771589861000,         
+                "firstRechAmount": 100,                 
+                "firstWithdrawTime": 1771691257000,     
+                "firstWithdrawAmount": -435,            
+                "lastRechTime": 1782558243000,          
+                "lastRechAmount": 107,                  
+                "appVersion": "android/6.5.80.03"       
+            }
+        ],
+        "total": 1,
+        "size": 10,
+        "current": 1,
+        "orders": [],
+        "optimizeCountSql": true,
+        "searchCount": true,
+        "optimizeJoinOfCountSql": true,
+        "countId": null,
+        "maxLimit": null,
+        "pages": 1
+    }
+}
+ 
+使用字段：commissionAmountHistory、bonusAmountHistory、waterAmountHistory 的总金额（赠送金额） 除以  totalRechAmount  总充值金额  超过15%需要人工审核
+
+
+查询会员所有游戏的有效投注金额API：
+https://cf-admin.ahoub1999.com/api/admin/member/dayReport/findMemberbetAnalysis?brandId=100&account=cheese123456&isTrue=0&startTime=2026-06-23&endTime=2026-06-30
+
+GET
+请求参数：
+brandId=100&account=cheese123456&isTrue=0&startTime=2026-06-23&endTime=2026-06-30
+
+返回数据：
+{
+    "lotteryOrderCount": 92,
+    "sportOrderCount": 0,
+    "realOrderCount": 0,
+    "hunterOrderCount": 0,
+    "chessOrderCount": 0,
+    "lotteryWinOrderCount": 41,
+    "sportWinOrderCount": 0,
+    "realWinOrderCount": 0,
+    "hunterWinOrderCount": 0,
+    "chessWinOrderCount": 0,
+    "lotteryValidAmount": 1940,       // 彩票有效投注金额
+    "sportValidAmount": 0,            // 体育有效投注金额
+    "realValidAmount": 0,             // 真人有效投注金额
+    "hunterValidAmount": 0,           // 捕鱼有效投注金额
+    "chessValidAmount": 0,            // 棋牌有效投注金额
+    "lotteryWinAmount": -33.51,
+    "sportWinAmount": 0,
+    "realWinAmount": 0,
+    "hunterWinAmount": 0,
+    "chessWinAmount": 0,
+    "lotteryWaterAmount": 0,
+    "sportWaterAmount": 0,
+    "realWaterAmount": 0,
+    "hunterWaterAmount": 0,
+    "chessWaterAmount": 0,
+    "lotteryProfitRate": -1.73,
+    "sportProfitRate": 0,
+    "realProfitRate": 0,
+    "hunterProfitRate": 0,
+    "chessProfitRate": 0,
+    "lotteryWinRate": 44.57,
+    "sportWinRate": 0,
+    "realWinRate": 0,
+    "hunterWinRate": 0,
+    "chessWinRate": 0,
+    "allWinAmount": -33.51,
+    "currency": "SET_CNY",
+    "egameWinRate": 0,
+    "esportWinRate": 0,
+    "egameProfitRate": 0,
+    "esportProfitRate": 0,
+    "egameValidAmount": 0,            // 电子有效投注金额
+    "esportValidAmount": 0,           // 电竞有效投注金额
+    "egameWinAmount": 0,
+    "esportWinAmount": 0,
+    "egameWaterAmount": 0,
+    "esportWaterAmount": 0,
+    "egameOrderCount": 0,
+    "esportOrderCount": 0,
+    "egameWinOrderCoun": 0,
+    "esportWinOrderCount": 0
+}
+
+
+7个有效投注金额的总额为会员的所有游戏投注总金额   所有游戏投注总金额减去彩票有效投注金额  再加上根据彩票类游戏官彩有效投注API 根据字段 validAmount  所有彩票官彩游戏的投注总金额  
+根据以上信息获取 所有官彩游戏+三方游戏 占据总的投注金额的占比  比例超过20%需要人工审核
+
+
+查询会员最近七天的彩金加款详情API：
+https://cf-admin.ahoub1999.com/api/admin/finance/rechargeOrderHistory/page?orderBy=auditTime&order=DESC&adSource=0&rechargeTimes=-1&flag=0&superPathLike=false&current=1&size=500&modeList=2,3&account=cheese123456&discountTypes=888&beginDatetime=2026-06-23+00:00:00&endDatetime=2026-06-30+23:59:59
+POST
+orderBy=auditTime&order=DESC&adSource=0&rechargeTimes=-1&flag=0&superPathLike=false&current=1&size=500&modeList=2,3&account=cheese123456&discountTypes=888&beginDatetime=2026-06-23+00:00:00&endDatetime=2026-06-30+23:59:59
+
+
+返回数据：
+{
+    "code": 0,
+    "traceId": null,
+    "message": "Success",
+    "data": {
+        "records": [
+            {
+                "id": 335160,                          // 充值记录内部ID
+                "brandId": 100,                        // 品牌ID
+                "account": "cheese123456",             // 会员账号
+                "nickname": "*海",                     // 会员姓名（脱敏）
+                "balance": 2.354,                      // 当时余额
+                "superAccount": "jimao55555",          // 上级代理账号
+                "orderNo": "R53010020260630045908627484535", // 订单号
+                "payTypeName": "",                     // 支付类型名称（空）
+                "payAccountAccount": "",               // 支付账户账号（空）
+                "payAccountOwner": "",                 // 支付账户持有人（空）
+                "payAccountBankName": null,            // 支付银行名称
+                "tpInterfaceName": null,               // 第三方接口名称
+                "tpMerchantName": null,                // 第三方商户名称
+                "tpPayChannelName": "",                // 第三方支付渠道名
+                "tpOrderNo": null,                     // 第三方订单号
+                "amount": 0,                           // 充值金额（图片中为0）
+                "payAmount": 0,                        // 到账金额（图片中为0）
+                "discountAmount": 58,                  // 充值优惠金额（+58）
+                "discountType": 888,                   // 优惠类型（代码）
+                "totalAmount": 58,                     // 到账总额（=优惠金额）
+                "discountDml": 58,                     // 优惠金额（同discountAmount）
+                "rechargePerson": "",                  // 充值经办人（空）
+                "rechargeTime": null,                  // 充值时间（空）
+                "status": 3,                           // 状态（3=已入款）
+                "remarks": "企音通",                   // 备注信息
+                "acceptAccount": null,                 // 受理人（空）
+                "acceptTime": null,                    // 受理时间（空）
+                "auditorAccount": "xiaoyue111",        // 审核人
+                "auditTime": 1782795549000,            // 审核时间（时间戳）
+                "auditRemarks": "直接入款",            // 审核备注
+                "ipAddress": "47.242.10.81",           // 申请IP
+                "createTime": 1782795549000,           // 创建时间（同审核时间）
+                "memberType": "A",                     // 会员类型（A=代理）
+                "mode": 3,                             // 充值方式（3=人工充值）
+                "payType": null,                       // 支付类型（空）
+                "currencyRate": null,                  // 汇率（空）
+                "currencyCount": null,                 // 币种数量（空）
+                "memberId": 771683,                    // 会员ID
+                "memberLevel": 0,                      // 会员层级（默认层级）
+                "pointFlag": 1,                        // 积分标志（1=有）
+                "currency": "CNY",                     // 币种（人民币）
+                "targetCurrency": "SET_CNY",           // 目标币种（设置币种）
+                "targetAmount": 0,                     // 目标金额（0）
+                "targetDiscountAmount": 58,            // 目标优惠金额（58）
+                "fee": 0,                              // 手续费（0）
+                "taxNumber": null,                     // 税号（空）
+                "iconIds": null,                       // 头像ID（空）
+                "rechargeTimes": 0,                    // 充值次数（此处为0）
+                "adSource": 0,                         // 广告来源（0=无）
+                "adInfo": null,                        // 广告信息（空）
+                "popularizeId": 182324813,             // 推广ID（会员ID）
+                "parentPopularizeId": 174231963,       // 上级推广ID
+                "rechargeVoucher": null,               // 充值凭证（空）
+                "rechargeCard": null,                  // 充值卡号（空）
+                "vipLevel": 4,                         // VIP等级（VIP4）
+                "iconId": null,                        // 头像ID（空）
+                "userRemark": "234  新规则已警告"      // 会员备注
+            },
+            // 第二条记录字段结构完全相同，不再重复注释
+            { ... }
+        ],
+        "total": 2,               // 总记录数
+        "size": 500,               // 每页大小
+        "current": 1,             // 当前页码
+        "orders": [],             // 排序条件
+        "optimizeCountSql": true, // 优化计数SQL
+        "searchCount": true,      // 是否查询总数
+        "countId": null,          // 计数ID
+        "maxLimit": null,         // 最大限制
+        "pages": 1                // 总页数
+    },
+    "succeed": true               // 请求成功标志
+}

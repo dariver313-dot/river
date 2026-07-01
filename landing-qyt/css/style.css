@@ -1,0 +1,226 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+:root {
+    --layout-max: 420px;
+    --bg-top: #5ab0ff;
+    --bg-mid: #3d8ef7;
+    --bg-bottom: #1e40af;
+    --text: #ffffff;
+    --btn-blue-top: #5ab0ff;
+    --btn-blue-mid: #2d8df6;
+    --btn-blue-bottom: #156dd9;
+    --space-sm: 0.5rem;
+    --space-md: 0.75rem;
+    --space-lg: 1rem;
+    --content-pad: 1.5rem;
+    --anim-duration: 500ms;
+    --anim-stagger: 120ms;
+}
+
+html {
+    font-size: clamp(14px, 100vw / 20, 22px);
+    min-height: 100%;
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+}
+
+a {
+    text-decoration: none;
+    color: inherit;
+}
+
+body {
+    font-family: 'Helvetica Neue', Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    min-height: 100vh;
+    min-height: 100dvh;
+    overflow-x: hidden;
+    color: var(--text);
+    background: linear-gradient(165deg, var(--bg-top) 0%, var(--bg-mid) 40%, var(--bg-bottom) 100%);
+    background-attachment: fixed;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+}
+
+@supports not (height: 100dvh) {
+    body {
+        min-height: 100vh;
+    }
+}
+
+/* 背景光晕装饰 */
+body::before {
+    content: '';
+    position: fixed;
+    top: -15%;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 130%;
+    height: 55%;
+    background: radial-gradient(ellipse at center, rgba(90, 176, 255, 0.4) 0%, rgba(90, 176, 255, 0.12) 35%, transparent 65%);
+    pointer-events: none;
+    z-index: 0;
+}
+
+body::after {
+    content: '';
+    position: fixed;
+    bottom: -20%;
+    right: -10%;
+    width: 70%;
+    height: 50%;
+    background: radial-gradient(ellipse at center, rgba(45, 141, 246, 0.25) 0%, transparent 60%);
+    pointer-events: none;
+    z-index: 0;
+}
+
+.page {
+    width: 100%;
+    max-width: var(--layout-max);
+    margin: 0 auto;
+    padding: 0 var(--content-pad);
+    position: relative;
+    z-index: 1;
+}
+
+.page__body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 0 0;
+}
+
+/* 品牌区 */
+.brand {
+    text-align: center;
+    margin-bottom: 0.9rem;
+}
+
+.brand__logo {
+    width: 5.5rem;
+    height: 5.5rem;
+    margin: 0 auto 0.9rem;
+    border-radius: 1.4rem;
+    overflow: hidden;
+    box-shadow: 0 0.6rem 2.2rem rgba(90, 176, 255, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.12);
+    border: 2px solid rgba(255, 255, 255, 0.25);
+    position: relative;
+}
+
+.brand__logo img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.brand__slogan {
+    font-size: 1.15rem;
+    font-weight: 700;
+    color: #ffffff;
+    letter-spacing: 0.14rem;
+}
+
+.brand__sub-slogan {
+    margin-top: 0.35rem;
+    font-size: 0.74rem;
+    font-weight: 400;
+    color: rgba(255, 255, 255, 0.72);
+    letter-spacing: 0.06rem;
+}
+
+/* 按钮区 */
+.action-bar {
+    display: flex;
+    flex-direction: row;
+    gap: 0.8rem;
+    width: 100%;
+}
+
+.action-bar__btn {
+    flex: 1;
+    min-width: 0;
+    background: linear-gradient(180deg, var(--btn-blue-top) 0%, var(--btn-blue-mid) 50%, var(--btn-blue-bottom) 100%);
+    border-radius: 0.9rem;
+    border: 1px solid rgba(255, 255, 255, 0.28);
+    box-shadow: 0 0.35rem 1rem rgba(21, 109, 217, 0.45);
+    cursor: pointer;
+    transition: transform 160ms ease, box-shadow 160ms ease;
+}
+
+.action-bar__btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 0.5rem 1.4rem rgba(21, 109, 217, 0.55);
+}
+
+.action-bar__btn:active {
+    transform: translateY(1px);
+}
+
+.action-bar__btn a {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.2rem;
+    padding: 0.7rem 0.5rem;
+    color: #fff;
+}
+
+.action-bar__icon {
+    flex-shrink: 0;
+    width: 1.1rem;
+    height: 1.1rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+}
+
+.action-bar__icon svg {
+    width: 1rem;
+    height: 1rem;
+    display: block;
+}
+
+.action-bar__text {
+    font-size: 0.74rem;
+    font-weight: 600;
+    color: #fff;
+    letter-spacing: 0.04em;
+    line-height: 1.2;
+}
+
+/* 动画 */
+@keyframes fadeInUp {
+    from {
+        opacity: 0;
+        transform: translate3d(0, 1.5rem, 0);
+    }
+    to {
+        opacity: 1;
+        transform: translate3d(0, 0, 0);
+    }
+}
+
+.animate-in {
+    opacity: 0;
+    animation: fadeInUp var(--anim-duration) cubic-bezier(0.22, 1, 0.36, 1) forwards;
+    animation-delay: calc(var(--anim-delay) * var(--anim-stagger));
+    will-change: opacity, transform;
+}
+
+@media (max-width: 360px) {
+    .action-bar__text {
+        font-size: 0.66rem;
+    }
+
+    .action-bar__btn a {
+        padding: 0.6rem 0.3rem;
+    }
+}

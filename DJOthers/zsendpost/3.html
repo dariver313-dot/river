@@ -1,0 +1,590 @@
+<!doctype html>
+<html lang="zh">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>黄历 · 今日宜什么 (AI生成版)</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+        font-family: "Segoe UI", "华文楷体", "KaiTi", "Microsoft YaHei", serif;
+      }
+
+      body {
+        min-height: 100vh;
+        background: linear-gradient(145deg, #fdf8ed 0%, #f4e9d8 100%);
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        padding: 16px;
+        position: relative;
+      }
+
+      /* 宣纸纹理 */
+      body::before {
+        content: "";
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100"><filter id="noise" x="0%" y="0%" width="100%" height="100%"><feTurbulence type="fractalNoise" baseFrequency="0.6" numOctaves="2" stitchTiles="stitch"/><feColorMatrix type="matrix" values="1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 0.15 0"/></filter><rect width="100" height="100" filter="url(%23noise)" opacity="0.15"/></svg>');
+        pointer-events: none;
+        opacity: 0.2;
+      }
+
+      .calendar-card {
+        width: 100%;
+        max-width: 560px;
+        background: rgba(252, 246, 235, 0.75);
+        backdrop-filter: blur(6px);
+        border-radius: 48px 48px 32px 32px;
+        box-shadow:
+          0 20px 40px -10px rgba(90, 60, 30, 0.3),
+          0 0 0 1px rgba(200, 170, 130, 0.4) inset,
+          0 0 0 2px rgba(255, 245, 225, 0.8) inset;
+        padding: 30px 24px 36px 24px;
+        border: 1px solid #e8d7bf;
+        position: relative;
+      }
+
+      /* 中式挂轴装饰 */
+      .calendar-card::before,
+      .calendar-card::after {
+        content: "";
+        position: absolute;
+        top: 30px;
+        bottom: 30px;
+        width: 12px;
+        background: linear-gradient(to right, #ba9f7b, #dac29c, #ba9f7b);
+        border-radius: 20px;
+        box-shadow: 0 5px 10px rgba(100, 70, 40, 0.2);
+      }
+
+      .calendar-card::before {
+        left: -4px;
+      }
+
+      .calendar-card::after {
+        right: -4px;
+      }
+
+      .header {
+        text-align: center;
+        margin-bottom: 24px;
+      }
+
+      .chinese-date {
+        font-size: 1.3rem;
+        color: #a6552e;
+        letter-spacing: 4px;
+        background: #efd8bc;
+        display: inline-block;
+        padding: 6px 28px;
+        border-radius: 40px;
+        box-shadow: 0 4px 0 #b2825a;
+        border: 1px solid #f1dabc;
+        margin-bottom: 20px;
+        font-family: "华文楷体", "KaiTi", serif;
+      }
+
+      .gregorian-date {
+        font-size: 1rem;
+        color: #846b51;
+        background: #f6eadb;
+        display: inline-block;
+        padding: 4px 16px;
+        border-radius: 30px;
+        border: 1px dashed #bda78b;
+      }
+
+      .main-lucky {
+        background: #e5d5bb;
+        border-radius: 120px;
+        padding: 40px 10px;
+        margin: 30px 0 20px 0;
+        box-shadow:
+          0 8px 0 #a48362,
+          inset 0 2px 10px #fff6e5;
+        border: 1px solid #ffeac6;
+        position: relative;
+        transition: opacity 0.3s;
+      }
+
+      .main-lucky .label {
+        font-size: 1.5rem;
+        color: #6e4d31;
+        letter-spacing: 6px;
+        display: block;
+        margin-bottom: 10px;
+        font-weight: 300;
+      }
+
+      .lucky-word {
+        font-size: 8rem;
+        font-weight: 700;
+        color: #8f3d0c;
+        line-height: 1;
+        text-shadow:
+          3px 3px 0 #fad6a0,
+          6px 6px 0 rgba(160, 100, 40, 0.2);
+        letter-spacing: 16px;
+        margin-left: 16px;
+        font-family: "华文楷体", "KaiTi", serif;
+        min-height: 160px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .sub-info {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        margin: 28px 0 20px;
+      }
+
+      .sub-block {
+        flex: 1;
+        background: #f2e3d2;
+        border-radius: 40px;
+        padding: 14px 0;
+        text-align: center;
+        box-shadow:
+          0 4px 0 #b39272,
+          inset 0 1px 4px #ffefdb;
+        border: 1px solid #dbbc98;
+      }
+
+      .sub-block .small-label {
+        font-size: 0.8rem;
+        color: #86644b;
+        letter-spacing: 2px;
+        margin-bottom: 6px;
+      }
+
+      .sub-block .value {
+        font-size: 1.7rem;
+        font-weight: 600;
+        color: #602f0e;
+        font-family: "华文楷体", "KaiTi", serif;
+      }
+
+      .color-dot {
+        display: inline-block;
+        width: 24px;
+        height: 24px;
+        border-radius: 50%;
+        vertical-align: middle;
+        margin-right: 6px;
+        box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+        border: 2px solid white;
+      }
+
+      .button-group {
+        display: flex;
+        gap: 16px;
+        margin: 30px 0 10px;
+        justify-content: center;
+      }
+
+      .btn {
+        border: none;
+        background: #dbbd9b;
+        color: #442e1c;
+        font-size: 1.4rem;
+        padding: 16px 28px;
+        border-radius: 60px;
+        font-weight: 600;
+        box-shadow:
+          0 7px 0 #836e52,
+          0 4px 12px rgba(120, 70, 20, 0.3);
+        cursor: pointer;
+        transition: 0.05s linear;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        border: 1px solid #ffdbb5;
+        flex: 1;
+      }
+
+      .btn:active {
+        transform: translateY(5px);
+        box-shadow:
+          0 2px 0 #836e52,
+          0 4px 12px rgba(120, 70, 20, 0.3);
+      }
+
+      .btn:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+        transform: none;
+        box-shadow: 0 7px 0 #836e52;
+      }
+
+      .btn-secondary {
+        background: #c7b09b;
+        box-shadow: 0 5px 0 #78644f;
+        font-size: 1.2rem;
+        padding: 12px 20px;
+        flex: 0.6;
+      }
+
+      .footer-note {
+        text-align: center;
+        font-size: 0.9rem;
+        color: #ba9b7b;
+        margin-top: 24px;
+        border-top: 1px dashed #dac09f;
+        padding-top: 18px;
+      }
+
+      .loading {
+        display: inline-block;
+        width: 40px;
+        height: 40px;
+        border: 4px solid #e2c7a9;
+        border-top-color: #a6552e;
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      .error-message {
+        color: #b0453a;
+        font-size: 0.9rem;
+        margin-top: 10px;
+        text-align: center;
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="calendar-card">
+      <div class="header">
+        <div class="chinese-date" id="lunarDate">乙巳年 正月廿三</div>
+        <div class="gregorian-date" id="gregorianDate">加载中...</div>
+      </div>
+
+      <div class="main-lucky">
+        <span class="label">宜</span>
+        <div class="lucky-word" id="luckyWord">--</div>
+      </div>
+
+      <div class="sub-info">
+        <div class="sub-block">
+          <div class="small-label">忌</div>
+          <div class="value" id="unluckyWord">--</div>
+        </div>
+        <div class="sub-block">
+          <div class="small-label">幸运色</div>
+          <div
+            class="value"
+            style="display: flex; align-items: center; justify-content: center"
+          >
+            <span
+              class="color-dot"
+              id="luckyColorDot"
+              style="background-color: #ccc"
+            ></span>
+            <span id="luckyColorText">--</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="button-group">
+        <button class="btn" id="aiBtn">
+          <span class="btn-icon">☯</span> AI 摇签
+        </button>
+        <button class="btn btn-secondary" id="localBtn">🎋 本地随机</button>
+      </div>
+
+      <div class="error-message" id="errorMsg"></div>
+      <div class="footer-note" id="hint">✦ 每日宜忌，心诚则灵 ✦</div>
+    </div>
+
+    <script>
+      (function () {
+        // ==================== 你的API配置 ====================
+        const DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions";
+        const DEEPSEEK_API_KEY = "YOUR_API_KEY_HERE";
+        // ====================================================
+
+        // 本地备用词库
+        const LUCKY_POOL = [
+          "纳财",
+          "开市",
+          "交易",
+          "签约",
+          "出行",
+          "嫁娶",
+          "祭祀",
+          "祈福",
+          "求嗣",
+          "入学",
+          "聚餐",
+          "约会",
+          "观影",
+          "健身",
+          "读书",
+          "创作",
+          "编程",
+          "开会",
+          "汇报",
+          "面试",
+          "摸鱼",
+          "躺平",
+          "发呆",
+          "喝茶",
+          "品茗",
+          "赏花",
+        ];
+        const UNLUCKY_POOL = [
+          "投资",
+          "借贷",
+          "远行",
+          "争执",
+          "熬夜",
+          "冲动",
+          "签约",
+          "搬家",
+          "动土",
+          "探病",
+          "买醉",
+          "跳槽",
+        ];
+        const COLOR_POOL = [
+          { name: "赤金", code: "#b76e3c" },
+          { name: "琥珀", code: "#c9a87c" },
+          { name: "青碧", code: "#6c9a7a" },
+          { name: "月白", code: "#cfd9d2" },
+          { name: "玄青", code: "#4a4e5a" },
+          { name: "朱砂", code: "#b0453a" },
+          { name: "秋香", code: "#b8945a" },
+          { name: "海蓝", code: "#3f7796" },
+        ];
+        const HINT_POOL = [
+          "✦ 顺势而为，诸事皆宜 ✦",
+          "✦ 心平气和，百福自集 ✦",
+          "✦ 但行好事，莫问前程 ✦",
+          "✦ 日日是好日 ✦",
+        ];
+
+        // DOM元素
+        const luckyWordEl = document.getElementById("luckyWord");
+        const unluckyWordEl = document.getElementById("unluckyWord");
+        const luckyColorDot = document.getElementById("luckyColorDot");
+        const luckyColorText = document.getElementById("luckyColorText");
+        const hintEl = document.getElementById("hint");
+        const lunarDateEl = document.getElementById("lunarDate");
+        const gregorianDateEl = document.getElementById("gregorianDate");
+        const aiBtn = document.getElementById("aiBtn");
+        const localBtn = document.getElementById("localBtn");
+        const errorMsg = document.getElementById("errorMsg");
+
+        // 更新日期显示
+        function updateDateDisplay() {
+          const now = new Date();
+          const year = now.getFullYear();
+          const month = String(now.getMonth() + 1).padStart(2, "0");
+          const day = String(now.getDate()).padStart(2, "0");
+          const weekdays = [
+            "周日",
+            "周一",
+            "周二",
+            "周三",
+            "周四",
+            "周五",
+            "周六",
+          ];
+          const weekday = weekdays[now.getDay()];
+          gregorianDateEl.innerText = `${year}年${month}月${day}日 ${weekday}`;
+
+          // 简单模拟农历（装饰用）
+          const lunarMonths = [
+            "正月",
+            "二月",
+            "三月",
+            "四月",
+            "五月",
+            "六月",
+            "七月",
+            "八月",
+            "九月",
+            "十月",
+            "冬月",
+            "腊月",
+          ];
+          const lunarDays = [
+            "初一",
+            "初二",
+            "初三",
+            "初四",
+            "初五",
+            "初六",
+            "初七",
+            "初八",
+            "初九",
+            "初十",
+            "十一",
+            "十二",
+            "十三",
+            "十四",
+            "十五",
+            "十六",
+            "十七",
+            "十八",
+            "十九",
+            "二十",
+            "廿一",
+            "廿二",
+            "廿三",
+            "廿四",
+            "廿五",
+            "廿六",
+            "廿七",
+            "廿八",
+            "廿九",
+            "三十",
+          ];
+          const dayOfYear = Math.floor(
+            (now - new Date(now.getFullYear(), 0, 0)) / 86400000,
+          );
+          lunarDateEl.innerText = `乙巳年 ${lunarMonths[(dayOfYear + 13) % 12]} ${lunarDays[(dayOfYear + 9) % 30]}`;
+        }
+
+        // 本地随机（备用/快速）
+        function localRandom() {
+          luckyWordEl.innerText =
+            LUCKY_POOL[Math.floor(Math.random() * LUCKY_POOL.length)];
+          unluckyWordEl.innerText =
+            UNLUCKY_POOL[Math.floor(Math.random() * UNLUCKY_POOL.length)];
+          const color =
+            COLOR_POOL[Math.floor(Math.random() * COLOR_POOL.length)];
+          luckyColorDot.style.backgroundColor = color.code;
+          luckyColorText.innerText = color.name;
+          hintEl.innerText =
+            HINT_POOL[Math.floor(Math.random() * HINT_POOL.length)];
+          errorMsg.style.display = "none";
+        }
+
+        // 调用DeepSeek API生成今日宜
+        async function fetchAILucky() {
+          // 显示加载状态
+          const originalText = aiBtn.innerHTML;
+          aiBtn.innerHTML =
+            '<span class="loading" style="width:24px;height:24px;"></span>';
+          aiBtn.disabled = true;
+          localBtn.disabled = true;
+          errorMsg.style.display = "none";
+
+          try {
+            // 获取当前日期，让AI有点时间概念
+            const today = new Date();
+            const dateStr = `${today.getFullYear()}年${today.getMonth() + 1}月${today.getDate()}日`;
+
+            const response = await fetch(DEEPSEEK_API_URL, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${DEEPSEEK_API_KEY}`,
+              },
+              body: JSON.stringify({
+                model: "deepseek-chat",
+                messages: [
+                  {
+                    role: "system",
+                    content:
+                      "你是一个黄历生成助手。根据当前日期，输出今日宜什么。必须严格按JSON格式输出，不要有多余文字。",
+                  },
+                  {
+                    role: "user",
+                    content: `今天是${dateStr}。请生成今日宜忌，要求：
+1. "lucky"：今日宜什么，必须是**两个汉字**的吉利词（可从纳财、开市、交易、签约、出行、嫁娶、祭祀、祈福、入学、聚餐、约会、创作、编程、开会、摸鱼、躺平中选择或创新，但必须2字）
+2. "unlucky"：今日忌什么，两个汉字
+3. "color"：今日幸运色，两个汉字（如赤金、琥珀、青碧）
+4. "hint"：一句简短的吉祥话，10字以内
+
+输出格式示例：
+{"lucky":"纳财","unlucky":"投资","color":"琥珀","hint":"✦ 财源广进 ✦"}
+
+直接输出JSON，不要任何其他内容。`,
+                  },
+                ],
+                temperature: 0.8,
+                max_tokens: 100,
+              }),
+            });
+
+            if (!response.ok) {
+              throw new Error(`API错误: ${response.status}`);
+            }
+
+            const data = await response.json();
+            const content = data.choices[0].message.content;
+
+            // 提取JSON
+            const jsonMatch = content.match(/\{.*\}/s);
+            if (!jsonMatch) throw new Error("AI返回格式不对");
+
+            const result = JSON.parse(jsonMatch[0]);
+
+            // 更新UI
+            luckyWordEl.innerText = result.lucky || "祈福";
+            unluckyWordEl.innerText = result.unlucky || "无";
+
+            // 颜色处理
+            if (result.color) {
+              luckyColorText.innerText = result.color;
+              // 根据颜色名给个大概色值（也可以让AI返回code，但先简单映射）
+              const colorMap = {
+                赤金: "#b76e3c",
+                琥珀: "#c9a87c",
+                青碧: "#6c9a7a",
+                月白: "#cfd9d2",
+                玄青: "#4a4e5a",
+                朱砂: "#b0453a",
+                秋香: "#b8945a",
+                海蓝: "#3f7796",
+              };
+              luckyColorDot.style.backgroundColor =
+                colorMap[result.color] || "#c9a87c";
+            } else {
+              luckyColorText.innerText = "琥珀";
+              luckyColorDot.style.backgroundColor = "#c9a87c";
+            }
+
+            hintEl.innerText = result.hint || "✦ 心诚则灵 ✦";
+          } catch (error) {
+            console.error("AI生成失败:", error);
+            errorMsg.style.display = "block";
+            errorMsg.innerText = "⚠️ AI摇签失败，使用本地随机";
+            localRandom(); // 失败时降级到本地随机
+          } finally {
+            aiBtn.innerHTML = originalText;
+            aiBtn.disabled = false;
+            localBtn.disabled = false;
+          }
+        }
+
+        // 初始化
+        updateDateDisplay();
+        localRandom(); // 先显示本地随机
+
+        // 事件绑定
+        aiBtn.addEventListener("click", fetchAILucky);
+        localBtn.addEventListener("click", localRandom);
+
+        // 每分钟更新日期
+        setInterval(updateDateDisplay, 60000);
+      })();
+    </script>
+  </body>
+</html>

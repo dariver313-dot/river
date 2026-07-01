@@ -1,0 +1,476 @@
+import { db } from '@/lib/db'
+import { eventBus } from '@/lib/event-bus'
+import { NextResponse } from 'next/server'
+import { readFile, rm } from 'fs/promises'
+import { safeJsonParse, serializeBotResponse, getCurrentUserId, isBotOwner, parseJsonBody, mergeAndEncryptEnvVars } from '@/lib/api-helpers'
+import { resolveFromProjectRoot } from '@/lib/project-root'
+import { validateBotId, validateBotUpdate, validateBotPatch, sanitizeBotName, sanitizeBotDescription, sanitizeEmoji, sanitizeCustomIcon, VALID_BOT_STATUSES, VALID_BOT_HEALTHS } from '@/lib/validation'
+import type { BotStatus, BotHealth } from '@/types/bot'
+import { decryptEnvVarsMaskedAsync, decryptEnvVarsAsync } from '@/lib/crypto'
+import { BOT_RUNNER_URL } from '@/lib/bot-runner-url'
+import { logger } from '@/lib/logger'
+
+async function checkOwnership(request: Request, botId: string): Promise<{ authorized: boolean; userId: string | null }> {
+  const userId = await getCurrentUserId(request)
+  if (!userId) return { authorized: false, userId: null }
+  const bot = await db.bot.findUnique({ where: { id: botId }, select: { ownerId: true } })
+  if (!bot) return { authorized: false, userId }
+  // SECURITY FIX: Handle migration scenario where ownerId is null (bots created
+  // before the ownerId feature was added). Auto-claim is only allowed when
+  // ALLOW_BOT_AUTO_CLAIM is explicitly set to 'true' (single-user dev mode).
+  // For multi-tenant deployments, orphaned bots require admin assignment.
+  if (!bot.ownerId || bot.ownerId === 'migrate-pending') {
+    if (process.env.ALLOW_BOT_AUTO_CLAIM === 'true') {
+      // FIX: Use transaction to reduce 4 DB queries to 2.
+      // Previously: (1) findFirst admin, (2) updateMany, (3) findUnique re-check, (4) implicit.
+      // Now: (1) findFirst admin, (2) transaction(updateMany + findUnique if needed)
+      const firstAccount = await db.account.findFirst({ orderBy: { createdAt: 'asc' }, select: { id: true } })
+      if (firstAccount && firstAccount.id !== userId) {
+        return { authorized: false, userId }
+      }
+      const whereClause = bot.ownerId === 'migrate-pending'
+        ? { id: botId, ownerId: 'migrate-pending' }
+        : { id: botId, ownerId: '' }
+      const result = await db.bot.updateMany({
+        where: whereClause,
+        data: { ownerId: userId },
+      })
+      if (result.count > 0) {
+        return { authorized: true, userId }
+      }
+      // Concurrent claim may have already assigned this user as owner.
+      // Single re-check instead of full flow.
+      const currentBot = await db.bot.findUnique({ where: { id: botId }, select: { ownerId: true } })
+      return { authorized: currentBot?.ownerId === userId, userId }
+    }
+    logger.warn('bot-api', `Bot ${botId} has no ownerId — access denied. Set ALLOW_BOT_AUTO_CLAIM=true or assign ownerId manually.`)
+    return { authorized: false, userId }
+  }
+  return { authorized: isBotOwner(bot.ownerId, userId), userId }
+}
+
+/** P1 FIX: Read the runner secret for authenticating with bot-runner cleanup endpoint */
+async function getRunnerSecret(): Promise<string> {
+  try {
+    const secretPath = resolveFromProjectRoot('mini-services', 'bot-runner', 'config', 'runner-secret')
+    const secret = await readFile(secretPath, 'utf-8')
+    return secret.trim()
+  } catch {
+    return ''
+  }
+}
+
+/** P0-3 OPT: Check if a Prisma error is a "record not found" error (P2025) */
+function isPrismaNotFoundError(error: unknown): boolean {
+  if (error && typeof error === 'object' && 'code' in error) {
+    return (error as { code: string }).code === 'P2025'
+  }
+  return false
+}
+
+export async function GET(
+  request: Request,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  let id: string = 'unknown'
+  try {
+    const resolved = await params
+    id = resolved.id
+
+    const idErrors = validateBotId(id)
+    if (idErrors.length > 0) {
+      return NextResponse.json({ error: idErrors[0].message }, { status: 400 })
+    }
+
+    const userId = await getCurrentUserId(request)
+    if (!userId) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+
+    const bot = await db.bot.findUnique({
+      where: { id },
+      select: {
+        id: true, name: true, description: true, emoji: true, customIcon: true,
+        status: true, health: true, language: true, template: true, version: true,
+        code: true, codeBlocks: true, dependencies: true, envVars: true, config: true,
+        stats: true, projectFiles: true, entryPoint: true, lastRunnerStatus: true,
+        lastDeployedAt: true, webhookSecret: true, createdAt: true, updatedAt: true,
+        ownerId: true,
+      },
+    })
+    if (!bot || !isBotOwner(bot.ownerId, userId)) {
+      return NextResponse.json({ error: 'Bot not found' }, { status: 404 })
+    }
+
+    // Reuse shared serializer with full token validation
+    const serialized = await serializeBotResponse(bot, decryptEnvVarsMaskedAsync, decryptEnvVarsAsync)
+    return NextResponse.json(serialized, {
+      headers: { 'Cache-Control': 'private, no-store, no-cache, must-revalidate' },
+    })
+  } catch (error) {
+    logger.error('bot-api', `GET /api/bots/${id} error`, error instanceof Error ? error.message : String(error))
+    return NextResponse.json({ error: 'Failed to fetch bot' }, { status: 500 })
+  }
+}
+
+export async function PUT(
+  request: Request,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  let id: string = 'unknown'
+  try {
+    const resolved = await params
+    id = resolved.id
+
+    const idErrors = validateBotId(id)
+    if (idErrors.length > 0) {
+      return NextResponse.json({ error: idErrors[0].message }, { status: 400 })
+    }
+
+    const { authorized } = await checkOwnership(request, id)
+    if (authorized !== true) {
+      return NextResponse.json({ error: 'Bot not found' }, { status: 404 })
+    }
+
+    // Parse request body with size limit protection (shared utility)
+    // SECURITY FIX (S5): Explicit 5MB limit for bot updates (projectFiles can be large)
+    const parsed = await parseJsonBody(request, 5_000_000)
+    if (parsed instanceof NextResponse) return parsed
+    const bot = parsed
+
+    // Full input validation
+    const validation = validateBotUpdate(bot)
+    if (!validation.valid) {
+      return NextResponse.json(
+        { error: validation.errors[0].message, details: validation.errors },
+        { status: 400 }
+      )
+    }
+
+    // BUG FIX: Merge masked env vars with existing DB values (same as PATCH handler).
+    // When the client sends masked placeholders (••••••••••••) for encrypted vars,
+    // preserve the existing encrypted value from the database instead of encrypting
+    // the placeholder and destroying the real secret.
+    const incomingEnvVars = (bot.envVars as { key: string; value: string; isEncrypted?: boolean; id?: string; description?: string }[]) || []
+
+    const updated = await db.$transaction(async (tx) => {
+      // P3 FIX: Acquire write lock immediately (BEGIN IMMEDIATE) to prevent
+      // concurrent read-modify-write races on envVars. Without this, two
+      // concurrent PATCH requests can both read the same envVars state,
+      // merge independently, and the second write overwrites the first.
+      // This lightweight UPDATE forces SQLite to acquire the write lock
+      // before any SELECT, serializing the entire transaction.
+      // NOTE (M7): This is the standard pattern for SQLite write lock
+      // acquisition in Prisma. In WAL mode, reads don't block writes, but
+      // BEGIN IMMEDIATE ensures the transaction holds the write lock from
+      // the start, preventing concurrent transactions from interleaving.
+      // The transaction isolation guarantees that if two transactions
+      // conflict, one will receive a BUSY error and retry.
+      await tx.$executeRaw`UPDATE Bot SET updatedAt = updatedAt WHERE id = ${id}`
+
+      const existingBot = await tx.bot.findUnique({
+        where: { id },
+        select: { envVars: true, config: true, webhookSecret: true },
+      })
+      if (!existingBot) {
+        throw new Error('BOT_NOT_FOUND')
+      }
+      const processedEnvVars = await mergeAndEncryptEnvVars(incomingEnvVars, existingBot.envVars)
+      const existingConfig = safeJsonParse(existingBot.config, {}) as Record<string, unknown>
+      const configObj = { ...existingConfig, ...((bot.config as Record<string, unknown>) || {}) }
+      if (!(('webhookSecret' in ((bot.config as Record<string, unknown>) || {}))) && existingBot.webhookSecret) {
+        configObj.webhookSecret = existingBot.webhookSecret
+      }
+      const updateData = {
+        name: sanitizeBotName(bot.name),
+        description: sanitizeBotDescription(bot.description),
+        emoji: sanitizeEmoji(bot.emoji),
+        customIcon: sanitizeCustomIcon(bot.customIcon),
+        status: VALID_BOT_STATUSES.includes(bot.status as BotStatus) ? (bot.status as BotStatus) : 'inactive',
+        health: VALID_BOT_HEALTHS.includes(bot.health as BotHealth) ? (bot.health as BotHealth) : 'unknown',
+        language: (bot.language as string) || 'typescript',
+        template: (bot.template as string) || 'custom',
+        version: (bot.version as string) || '1.0.0',
+        code: (bot.code as string) || '',
+        codeBlocks: JSON.stringify(bot.codeBlocks || []),
+        dependencies: JSON.stringify(bot.dependencies || []),
+        envVars: JSON.stringify(processedEnvVars),
+        config: JSON.stringify(configObj),
+        stats: JSON.stringify(bot.stats || {}),
+        projectFiles: JSON.stringify(bot.projectFiles || []),
+        entryPoint: (bot.entryPoint as string) || '',
+        lastRunnerStatus: (bot.lastRunnerStatus as string) || '',
+        lastDeployedAt: (bot.lastDeployedAt as string) ? new Date(bot.lastDeployedAt as string) : undefined,
+        webhookSecret: (configObj.webhookSecret as string) || '',
+      }
+
+      return tx.bot.update({
+        where: { id },
+        data: updateData as Parameters<typeof tx.bot.update>[0]['data'],
+      })
+    })
+
+    // P1 OPT: Emit status event to event bus for instant SSE push
+    eventBus.emit(`bot:${id}`, 'status', { botId: id, status: updated.status, health: updated.health })
+
+    const serialized = await serializeBotResponse(updated, decryptEnvVarsMaskedAsync, decryptEnvVarsAsync)
+    return NextResponse.json(serialized)
+  } catch (error) {
+    // P0-3 OPT: Catch Prisma "record not found" and return 404 instead of 500
+    if (isPrismaNotFoundError(error)) {
+      return NextResponse.json({ error: 'Bot not found' }, { status: 404 })
+    }
+    // H2 FIX: Catch our custom BOT_NOT_FOUND error from the transaction
+    if (error instanceof Error && error.message === 'BOT_NOT_FOUND') {
+      return NextResponse.json({ error: 'Bot not found' }, { status: 404 })
+    }
+    logger.error('bot-api', `PUT /api/bots/${id} error`, error instanceof Error ? error.message : String(error))
+    return NextResponse.json({ error: 'Failed to update bot' }, { status: 500 })
+  }
+}
+
+export async function PATCH(
+  request: Request,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  let id: string = 'unknown'
+  try {
+    const resolved = await params
+    id = resolved.id
+
+    const idErrors = validateBotId(id)
+    if (idErrors.length > 0) {
+      return NextResponse.json({ error: idErrors[0].message }, { status: 400 })
+    }
+
+    const { authorized } = await checkOwnership(request, id)
+    if (authorized !== true) {
+      return NextResponse.json({ error: 'Bot not found' }, { status: 404 })
+    }
+
+    // Parse request body with size limit protection (shared utility)
+    // SECURITY FIX (S5): Explicit 5MB limit for bot patches (projectFiles can be large)
+    const parsed = await parseJsonBody(request, 5_000_000)
+    if (parsed instanceof NextResponse) return parsed
+    const body = parsed
+
+    // Partial input validation (all fields optional for PATCH)
+    const validation = validateBotPatch(body)
+    if (!validation.valid) {
+      return NextResponse.json(
+        { error: validation.errors[0].message, details: validation.errors },
+        { status: 400 }
+      )
+    }
+
+    const updated = await db.$transaction(async (tx) => {
+      // P3 FIX: Acquire write lock immediately (BEGIN IMMEDIATE) to prevent
+      // concurrent read-modify-write races on envVars/config.
+      await tx.$executeRaw`UPDATE Bot SET updatedAt = updatedAt WHERE id = ${id}`
+
+      const existing = await tx.bot.findUnique({
+        where: { id },
+        select: {
+          status: true,
+          health: true,
+          language: true,
+          template: true,
+          version: true,
+          envVars: true,
+          config: true,
+          webhookSecret: true,
+        },
+      })
+      if (!existing) {
+        throw new Error('BOT_NOT_FOUND')
+      }
+
+      const updateData: Record<string, unknown> = {}
+
+      if ('name' in body) updateData.name = sanitizeBotName(body.name)
+      if ('description' in body) updateData.description = sanitizeBotDescription(body.description)
+      if ('emoji' in body) updateData.emoji = sanitizeEmoji(body.emoji)
+      if ('customIcon' in body) updateData.customIcon = sanitizeCustomIcon(body.customIcon)
+      if ('status' in body) {
+        updateData.status = VALID_BOT_STATUSES.includes(body.status as BotStatus) ? (body.status as BotStatus) : existing.status
+      }
+      if ('health' in body) {
+        updateData.health = VALID_BOT_HEALTHS.includes(body.health as BotHealth) ? (body.health as BotHealth) : existing.health
+      }
+      if ('language' in body) updateData.language = (body.language as string) || existing.language
+      if ('template' in body) updateData.template = (body.template as string) || existing.template
+      if ('version' in body) updateData.version = (body.version as string) || existing.version
+      if ('code' in body) updateData.code = (body.code as string) || ''
+      if ('codeBlocks' in body) updateData.codeBlocks = JSON.stringify(body.codeBlocks || [])
+      if ('dependencies' in body) updateData.dependencies = JSON.stringify(body.dependencies || [])
+      if ('envVars' in body) {
+        const incomingEnvVars = (body.envVars as { key: string; value: string; isEncrypted?: boolean; id?: string; description?: string }[]) || []
+        const processedEnvVars = await mergeAndEncryptEnvVars(incomingEnvVars, existing.envVars)
+        updateData.envVars = JSON.stringify(processedEnvVars)
+      }
+      if ('config' in body) {
+        const existingConfig = safeJsonParse(existing.config, {}) as Record<string, unknown>
+        const incomingConfig = (body.config as Record<string, unknown>) || {}
+        const mergedConfig = { ...existingConfig, ...incomingConfig }
+        if (!('webhookSecret' in incomingConfig) && existing.webhookSecret) {
+          mergedConfig.webhookSecret = existing.webhookSecret
+        }
+        updateData.config = JSON.stringify(mergedConfig)
+        if ('webhookSecret' in incomingConfig) {
+          updateData.webhookSecret = (incomingConfig.webhookSecret as string) || ''
+        }
+      }
+      if ('stats' in body) updateData.stats = JSON.stringify(body.stats || {})
+      if ('projectFiles' in body) updateData.projectFiles = JSON.stringify(body.projectFiles || [])
+      if ('entryPoint' in body) updateData.entryPoint = (body.entryPoint as string) || ''
+      if ('lastRunnerStatus' in body) updateData.lastRunnerStatus = (body.lastRunnerStatus as string) || ''
+      if ('lastDeployedAt' in body) updateData.lastDeployedAt = (body.lastDeployedAt as string) ? new Date(body.lastDeployedAt as string) : undefined
+
+      return tx.bot.update({
+        where: { id },
+        data: updateData,
+      })
+    })
+
+    // P1 OPT: Emit status event to event bus for instant SSE push
+    eventBus.emit(`bot:${id}`, 'status', { botId: id, status: updated.status, health: updated.health })
+
+    const serialized = await serializeBotResponse(updated, decryptEnvVarsMaskedAsync, decryptEnvVarsAsync)
+    return NextResponse.json(serialized)
+  } catch (error) {
+    if (isPrismaNotFoundError(error)) {
+      return NextResponse.json({ error: 'Bot not found' }, { status: 404 })
+    }
+    // Catch our custom BOT_NOT_FOUND error from the transaction
+    if (error instanceof Error && error.message === 'BOT_NOT_FOUND') {
+      return NextResponse.json({ error: 'Bot not found' }, { status: 404 })
+    }
+    logger.error('bot-api', `PATCH /api/bots/${id} error`, error instanceof Error ? error.message : String(error))
+    return NextResponse.json({ error: 'Failed to update bot' }, { status: 500 })
+  }
+}
+
+export async function DELETE(
+  request: Request,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  let id: string = 'unknown'
+  try {
+    const resolved = await params
+    id = resolved.id
+
+    const idErrors = validateBotId(id)
+    if (idErrors.length > 0) {
+      return NextResponse.json({ error: idErrors[0].message }, { status: 400 })
+    }
+
+    const { authorized, userId: deleteUserId } = await checkOwnership(request, id)
+    if (!authorized || !deleteUserId) {
+      return NextResponse.json({ error: 'Bot not found' }, { status: 404 })
+    }
+
+    // SECURITY FIX (M-14): Call Runner cleanup FIRST, then delete from DB.
+    // Previously, DB deletion happened first, which meant if Runner cleanup failed,
+    // the bot record was already gone and the runner process/files were orphaned.
+    // Now we try to clean up the runner first; if it fails, we still delete from
+    // DB but log a warning and attempt local file cleanup as fallback.
+
+    // ── Stop bot process and clean up files via bot-runner ──────────
+    const runnerSecret = await getRunnerSecret()
+    const runnerUrl = `${BOT_RUNNER_URL}/cleanup/${encodeURIComponent(id)}`
+    const runnerHeaders: Record<string, string> = {}
+    if (runnerSecret) {
+      runnerHeaders['X-Runner-Secret'] = runnerSecret
+    }
+
+    let runnerCleanupSucceeded = false
+    try {
+      const resp = await fetch(runnerUrl, {
+        method: 'DELETE',
+        headers: runnerHeaders,
+        signal: AbortSignal.timeout(18000), // 18s — must exceed the bot-runner's 15s cleanup timeout
+      })
+      if (resp.ok) {
+        const result = await resp.json().catch(() => ({ ok: false }))
+        if (result.filesDeleted) {
+          runnerCleanupSucceeded = true
+          logger.info('bot-api', `Bot ${id} cleanup completed by runner: processKilled=${result.processKilled}, filesDeleted=${result.filesDeleted}`)
+        } else if (result.skipped) {
+          logger.info('bot-api', `Bot ${id} cleanup skipped by runner: ${result.skipped}`)
+        } else {
+          logger.warn('bot-api', `Runner cleanup for bot ${id} returned ok but filesDeleted=false`)
+        }
+      } else {
+        logger.warn('bot-api', `Runner cleanup returned ${resp.status} for bot ${id}`)
+      }
+    } catch (err) {
+      logger.warn('bot-api', `Runner cleanup request failed for bot ${id} — will attempt local cleanup`, err instanceof Error ? err.message : String(err))
+    }
+
+    // Fallback: local file cleanup if bot-runner was unreachable or failed to delete files.
+    if (!runnerCleanupSucceeded) {
+      try {
+        const botDir = resolveFromProjectRoot('mini-services', 'bot-runner', 'bots', id)
+        const logFile = resolveFromProjectRoot('mini-services', 'bot-runner', 'logs', `${id}.log`)
+        const configFile = resolveFromProjectRoot('mini-services', 'bot-runner', 'config', `${id}.json`)
+        const runningFile = resolveFromProjectRoot('mini-services', 'bot-runner', 'config', `${id}.running`)
+        const pidFile = resolveFromProjectRoot('mini-services', 'bot-runner', 'bots', id, '.pid')
+        const expectedBotsDir = resolveFromProjectRoot('mini-services', 'bot-runner', 'bots')
+        const expectedLogsDir = resolveFromProjectRoot('mini-services', 'bot-runner', 'logs')
+        const expectedConfigDir = resolveFromProjectRoot('mini-services', 'bot-runner', 'config')
+        if (!botDir.startsWith(expectedBotsDir) || !logFile.startsWith(expectedLogsDir) || !configFile.startsWith(expectedConfigDir)) {
+          logger.error('bot-api', `SECURITY: Path traversal detected in bot delete — skipping file cleanup. id=${id}`)
+        } else {
+          await Promise.all([
+            rm(botDir, { recursive: true, force: true }),
+            rm(logFile, { force: true }),
+            rm(configFile, { force: true }),
+            rm(runningFile, { force: true }),
+            rm(pidFile, { force: true }),
+          ])
+        }
+      } catch (err) {
+        logger.warn('bot-api', `Local file cleanup warning for bot ${id}`, err instanceof Error ? err.message : String(err))
+      }
+    }
+
+    // Now delete from DB — even if Runner cleanup failed, we still delete the record
+    let deletedBot: { id: string; ownerId: string | null } | null = null
+    try {
+      deletedBot = await db.$transaction(async (tx) => {
+        // P3 FIX: Acquire write lock immediately (BEGIN IMMEDIATE) to prevent
+        // race between delete and concurrent update on the same bot.
+        await tx.$executeRaw`UPDATE Bot SET updatedAt = updatedAt WHERE id = ${id}`
+
+        const bot = await tx.bot.findUnique({ where: { id }, select: { ownerId: true } })
+        if (!bot || !isBotOwner(bot.ownerId, deleteUserId)) {
+          throw new Error('BOT_NOT_FOUND')
+        }
+        return tx.bot.delete({ where: { id } })
+      })
+    } catch (err) {
+      if (err instanceof Error && err.message === 'BOT_NOT_FOUND') {
+        return NextResponse.json({ error: 'Bot not found' }, { status: 404 })
+      }
+      throw err
+    }
+
+    if (!deletedBot) {
+      return NextResponse.json({ error: 'Bot not found' }, { status: 404 })
+    }
+
+    // SECURITY FIX (SEC-86): Audit log for bot deletion
+    logger.info('bot-api', `Bot deleted: id=${id}, owner=${deleteUserId || 'unknown'}`)
+
+    // P1 OPT: Emit deleted event so SSE clients disconnect gracefully
+    eventBus.emit(`bot:${id}`, 'deleted', { botId: id })
+
+    return NextResponse.json({ success: true })
+  } catch (error) {
+    if (isPrismaNotFoundError(error)) {
+      return NextResponse.json({ error: 'Bot not found' }, { status: 404 })
+    }
+    logger.error('bot-api', `DELETE /api/bots/${id} error`, error instanceof Error ? error.message : String(error))
+    return NextResponse.json({ error: 'Failed to delete bot' }, { status: 500 })
+  }
+}

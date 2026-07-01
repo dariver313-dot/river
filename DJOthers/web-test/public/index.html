@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>链接检测工具（本地后端）</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        textarea { width: 100%; height: 200px; font-family: monospace; }
+        button { margin-top: 10px; padding: 8px 16px; font-size: 16px; }
+        table { border-collapse: collapse; width: 100%; margin-top: 20px; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; vertical-align: top; }
+        .ok { color: green; font-weight: bold; }
+        .fail { color: red; font-weight: bold; }
+        .loading { display: none; margin: 10px 0; color: #666; }
+    </style>
+</head>
+<body>
+    <h1>🔗 链接可用性检测（本地后端代理）</h1>
+    <p>⚠️ 检测请求从本机发出，反映的是<strong>当前网络环境</strong>的访问结果。</p>
+    <textarea id="urls" placeholder="每行一个 URL（支持 http/https，也可直接输入域名）"></textarea>
+    <button id="testBtn">开始检测</button>
+    <div id="loading" class="loading">⏳ 检测中，请稍候...</div>
+    <div id="resultArea" style="display:none;">
+        <h3>检测结果</h3>
+        <table id="resultTable">
+            <thead>
+                <tr><th>原始输入</th><th>实际请求URL</th><th>状态</th><th>详情</th><th>耗时(ms)</th>
+                </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+    </div>
+
+    <script>
+        const testBtn = document.getElementById('testBtn');
+        const urlsInput = document.getElementById('urls');
+        const loadingDiv = document.getElementById('loading');
+        const resultArea = document.getElementById('resultArea');
+        const tbody = document.querySelector('#resultTable tbody');
+
+        testBtn.addEventListener('click', async () => {
+            const raw = urlsInput.value;
+            const urls = raw.split(/\r?\n/).filter(l => l.trim() !== '');
+            if (urls.length === 0) {
+                alert('请输入至少一个 URL');
+                return;
+            }
+
+            loadingDiv.style.display = 'block';
+            resultArea.style.display = 'none';
+            tbody.innerHTML = '';
+
+            try {
+                const response = await fetch('/api/check', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ urls })
+                });
+                const results = await response.json();
+                results.forEach(r => {
+                    const row = tbody.insertRow();
+                    row.insertCell(0).textContent = r.rawUrl;
+                    row.insertCell(1).textContent = r.targetUrl;
+                    row.insertCell(2).innerHTML = r.ok ? '<span class="ok">✅ 可访问</span>' : '<span class="fail">❌ 不可访问</span>';
+                    row.insertCell(3).textContent = r.error || (r.status ? `HTTP ${r.status}` : '');
+                    row.insertCell(4).textContent = r.time;
+                });
+                resultArea.style.display = 'block';
+            } catch (err) {
+                alert('请求失败：' + err.message);
+            } finally {
+                loadingDiv.style.display = 'none';
+            }
+        });
+    </script>
+</body>
+</html>

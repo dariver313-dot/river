@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>余额扣除工具</title>
+<style>
+  :root { --bg: #f8fafc; --card: #fff; --border: #e2e8f0; --text: #1e293b; --muted: #94a3b8; --accent: #059669; --danger: #dc2626; --warn: #d97706; --selected: #ecfdf5; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); line-height: 1.5; }
+  .wrap { max-width: 1200px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
+  .sub { font-size: 13px; color: var(--muted); margin-bottom: 20px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+  .card-title { font-size: 15px; font-weight: 600; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+  .step { width: 24px; height: 24px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; color: #fff; background: var(--accent); flex-shrink: 0; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
+  .field { display: flex; flex-direction: column; gap: 4px; }
+  .field label { font-size: 12px; font-weight: 500; color: #64748b; }
+  .field input, .field select, .field textarea { height: 36px; border: 1px solid var(--border); border-radius: 8px; padding: 0 10px; font-size: 13px; outline: none; transition: border .2s; }
+  .field textarea { height: auto; min-height: 72px; padding: 8px 10px; font-family: monospace; font-size: 12px; resize: vertical; }
+  .field input:focus, .field textarea:focus { border-color: var(--accent); }
+  .token-area { width: 100%; }
+  .sm-input { width: 80px; }
+  .btn { height: 36px; padding: 0 16px; border-radius: 8px; font-size: 13px; font-weight: 600; border: none; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; transition: all .15s; }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover:not(:disabled) { background: #047857; }
+  .btn-danger { background: var(--danger); color: #fff; }
+  .btn-danger:hover:not(:disabled) { background: #b91c1c; }
+  .btn-warn { background: var(--warn); color: #fff; }
+  .btn-warn:hover:not(:disabled) { background: #b45309; }
+  .btn-ghost { background: #fff; color: #475569; border: 1px solid #cbd5e1; }
+  .btn-ghost:hover:not(:disabled) { background: #f8fafc; }
+  .toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+  .badge { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: 20px; font-size: 12px; font-weight: 600; }
+  .badge-green { background: #ecfdf5; color: #059669; }
+  .badge-gray { background: #f1f5f9; color: #64748b; }
+  .tbl-wrap { max-height: 520px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; }
+  .tbl-wrap::-webkit-scrollbar { width: 6px; }
+  .tbl-wrap::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  thead { position: sticky; top: 0; z-index: 1; }
+  th { background: #f1f5f9; padding: 8px 10px; text-align: left; font-weight: 600; font-size: 12px; color: #475569; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  td { padding: 8px 10px; border-bottom: 1px solid #f1f5f9; white-space: nowrap; }
+  tr:hover td { background: #f8fafc; }
+  tr.selected td { background: var(--selected); }
+  .amount-input { width: 100px; height: 28px; text-align: right; font-family: monospace; font-size: 13px; border: 1px solid var(--border); border-radius: 6px; padding: 0 6px; outline: none; }
+  .amount-input:focus { border-color: var(--accent); }
+  .mono { font-family: monospace; }
+  .green { color: var(--accent); }
+  .ellipsis { max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .progress-bar { height: 6px; background: #e2e8f0; border-radius: 3px; overflow: hidden; margin: 8px 0; }
+  .progress-fill { height: 100%; background: var(--accent); border-radius: 3px; transition: width .3s; }
+  .progress-text { font-size: 12px; color: var(--muted); display: flex; justify-content: space-between; }
+  .log-area { max-height: 300px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; padding: 10px; font-size: 12px; font-family: monospace; background: #f8fafc; margin-top: 10px; }
+  .log-area::-webkit-scrollbar { width: 5px; }
+  .log-area::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+  .log-ok { color: var(--accent); }
+  .log-fail { color: var(--danger); }
+  .log-info { color: #64748b; }
+  .log-warn { color: var(--warn); }
+  .tip { font-size: 12px; color: var(--muted); margin-top: 10px; }
+  .pagination { display: flex; justify-content: space-between; align-items: center; margin-top: 12px; font-size: 13px; color: #64748b; }
+  .filter-bar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; padding: 10px 14px; background: #ecfdf5; border: 1px solid #a7f3d0; border-radius: 8px; font-size: 12px; color: #059669; }
+  .stat-row { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 8px; }
+  .stat-item { font-size: 12px; color: #64748b; }
+  .stat-item b { color: var(--text); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>⚡ 余额扣除工具</h1>
+  <p class="sub">查询会员 → 获取账户ID → 扣除余额</p>
+
+  <!-- Step 1 -->
+  <div class="card">
+    <div class="card-title"><span class="step">1</span> 配置 & 查询会员</div>
+    <div class="field token-area" style="margin-bottom:12px">
+      <label>认证信息（3行：第1行Cookie，第2行User-Agent，第3行操作密码）</label>
+      <textarea id="tokenArea" rows="4" placeholder="SESSION=xxx&#10;Mozilla/5.0 ...&#10;8520" spellcheck="false"></textarea>
+    </div>
+    <div class="row">
+      <div class="field">
+        <label>每页条数</label>
+        <input id="pageSize" class="sm-input" type="number" value="10" min="1" max="200">
+      </div>
+      <div class="field">
+        <label>页码</label>
+        <input id="pageNumber" class="sm-input" type="number" value="1" min="1">
+      </div>
+      <div class="field">
+        <label>会员状态</label>
+        <input id="statusFilter" class="sm-input" type="number" value="1">
+      </div>
+      <div class="field">
+        <label>操作类型</label>
+        <input id="opType" class="sm-input" type="number" value="22">
+      </div>
+      <div class="field">
+        <label>投注稽核</label>
+        <select id="checkBetNum" style="height:36px;border:1px solid var(--border);border-radius:8px;padding:0 8px;font-size:13px">
+          <option value="1">需要(1)</option>
+          <option value="2">不需要(2)</option>
+        </select>
+      </div>
+      <button id="fetchBtn" class="btn btn-primary" onclick="fetchMembers()">⬇ 查询会员</button>
+    </div>
+    <div id="fetchInfo" style="margin-top:10px;font-size:13px;color:#64748b;display:none"></div>
+  </div>
+
+  <!-- Step 2 -->
+  <div id="step2" class="card" style="display:none">
+    <div class="card-title"><span class="step" style="background:#d97706">2</span> 选择 & 确认</div>
+    <div class="filter-bar">
+      ✅ 已自动排除：余额=0 的数据 + 备注含"超过60天未登陆"或"系统自动禁用"的数据
+      &nbsp;|&nbsp;原始 <b id="rawCount">0</b> 条 → 显示 <b id="filteredCount">0</b> 条
+    </div>
+    <div class="toolbar">
+      <button class="btn btn-ghost" onclick="toggleAll()" id="toggleAllBtn">☑ 全选</button>
+      <span id="countBadge" class="badge badge-gray">已选: 0</span>
+      <span id="sumBadge" class="badge badge-green" style="display:none">扣除总额: 0</span>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:36px">✓</th>
+            <th style="width:40px">#</th>
+            <th>账号</th>
+            <th>用户名</th>
+            <th>层级</th>
+            <th>代理</th>
+            <th>备注</th>
+            <th style="text-align:right">余额</th>
+            <th style="text-align:right">扣除金额</th>
+            <th style="text-align:center;width:56px">状态</th>
+          </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+    <div id="pagination" class="pagination" style="display:none">
+      <span id="pageInfo"></span>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-ghost" style="height:30px;font-size:12px" onclick="changePage(-1)">上一页</button>
+        <button class="btn btn-ghost" style="height:30px;font-size:12px" onclick="changePage(1)">下一页</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Step 3 -->
+  <div id="step3" class="card" style="display:none">
+    <div class="card-title"><span class="step" style="background:var(--danger)">3</span> 扣除余额</div>
+    <div style="background:#f8fafc;border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:14px">
+      <div style="font-size:12px;font-weight:600;color:#64748b;margin-bottom:8px">⚠ 流程：查询账户ID → 提交扣除（每条自动走两步）</div>
+      <div class="stat-row">
+        <span class="stat-item">选中: <b id="previewCount">0</b> 条</span>
+        <span class="stat-item">扣除总额: <b id="previewSum">0</b></span>
+      </div>
+    </div>
+    <div id="progressArea" style="display:none">
+      <div class="progress-text"><span>提交进度</span><span id="progressNum">0/0</span></div>
+      <div class="progress-bar"><div class="progress-fill" id="progressFill" style="width:0%"></div></div>
+    </div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      <button id="oneByOneBtn" class="btn btn-danger" onclick="submitOneByOne()">🚀 开始扣除（逐条查询ID+提交）</button>
+      <button id="stopBtn" class="btn btn-warn" onclick="stopSubmit()" style="display:none">⏹ 停止</button>
+    </div>
+    <div id="logArea" class="log-area" style="display:none"></div>
+    <p class="tip">💡 每条记录会先查询账户ID，再提交扣除，自动两步完成</p>
+  </div>
+</div>
+
+<script>
+let filtered = [];   // 只保留过滤后的数据
+let rawCount = 0;    // 原始条数
+let selected = {};
+let totalCount = 0;
+let stopFlag = false;
+
+function parseToken() {
+  const raw = document.getElementById('tokenArea').value.trim();
+  const lines = raw.split(/\r?\n/);
+  if (lines.length < 3 || !lines[0].trim() || !lines[1].trim() || !lines[2].trim()) {
+    alert('认证信息格式错误！需要3行：\n第1行: Cookie (SESSION=xxx)\n第2行: User-Agent\n第3行: 操作密码');
+    return null;
+  }
+  return { cookie: lines[0].trim(), userAgent: lines[1].trim(), password: lines[2].trim() };
+}
+
+// 过滤：余额=0 或 备注含关键词 → 排除
+function shouldExclude(row) {
+  const money = parseFloat(row.money) || 0;
+  if (money <= 0) return true;
+  const remark = (row.remark || '').toString();
+  if (remark.includes('超过60天未登陆') || remark.includes('系统自动禁用')) return true;
+  return false;
+}
+
+// ====== 查询会员 ======
+async function fetchMembers() {
+  const token = parseToken();
+  if (!token) return;
+  const btn = document.getElementById('fetchBtn');
+  btn.disabled = true; btn.innerHTML = '⏳ 查询中...';
+
+  try {
+    const res = await fetch('/api/list', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        cookie: token.cookie,
+        userAgent: token.userAgent,
+        sortOrder: 'asc',
+        pageSize: document.getElementById('pageSize').value || '10',
+        pageNumber: document.getElementById('pageNumber').value || '1',
+        userName: '',
+        startDate: '',
+        account: '',
+        account2: '',
+        levelGroupList: '',
+        keyName: 'userName',
+        keyword: '',
+        recommendName: '',
+        promoInfo: '',
+        endDate: '',
+        agentName: '',
+        account3: '',
+        depositStatus: '',
+        status: document.getElementById('statusFilter').value || '1',
+        moneyMin: '',
+        moneyMax: '',
+        hisMoneyMin: '',
+        hisMoneyMax: '',
+        unDepositDay: '',
+        unloginDay: '',
+        depositStartDate: '',
+        depositEndDate: '',
+        drawStartDate: '',
+        drawEndDate: '',
+        hadloginDay: '',
+        overUnloginDay: '',
+        remark: '',
+        remarkStatus: '',
+        betAlarmStatus: '0',
+      })
+    });
+    const data = await res.json();
+
+    if (data.error && data.code === 302) {
+      alert('❌ 会话已过期！请重新获取 Cookie');
+    } else if (data.rows && Array.isArray(data.rows)) {
+      rawCount = data.rows.length;
+      totalCount = data.total || 0;
+      // 直接过滤，只保留有效数据
+      filtered = data.rows.filter(r => !shouldExclude(r));
+      selected = {};
+      renderTable();
+      document.getElementById('step2').style.display = '';
+      document.getElementById('fetchInfo').style.display = '';
+      document.getElementById('fetchInfo').innerHTML = `✅ 接口返回 <b>${rawCount}</b> 条，排除后显示 <b>${filtered.length}</b> 条（总记录 ${totalCount}）`;
+      document.getElementById('rawCount').textContent = rawCount;
+      document.getElementById('filteredCount').textContent = filtered.length;
+      updateStep3();
+    } else if (data.error) {
+      alert('错误: ' + data.error);
+    } else {
+      alert('返回异常: ' + JSON.stringify(data).substring(0, 300));
+    }
+  } catch(e) {
+    alert('请求失败: ' + e.message);
+  } finally {
+    btn.disabled = false; btn.innerHTML = '⬇ 查询会员';
+  }
+}
+
+// ====== 渲染表格（只显示过滤后的数据） ======
+function renderTable() {
+  const tbody = document.getElementById('tbody');
+  tbody.innerHTML = '';
+
+  filtered.forEach((u, i) => {
+    const sel = !!selected[u.account];
+    const money = parseFloat(u.money) || 0;
+    const remark = (u.remark || '').toString();
+    const tr = document.createElement('tr');
+    tr.className = sel ? 'selected' : '';
+    tr.innerHTML = `
+      <td><input type="checkbox" ${sel?'checked':''} onchange="toggleMember(${i})"></td>
+      <td style="color:#94a3b8">${i+1}</td>
+      <td><b class="mono">${u.account||'-'}</b></td>
+      <td>${u.userName||'-'}</td>
+      <td>${u.levelName||'-'}</td>
+      <td class="ellipsis" title="${u.agentName||''}">${u.agentName||'-'}</td>
+      <td class="ellipsis" title="${remark}">${remark||'<span style="color:#cbd5e1">-</span>'}</td>
+      <td style="text-align:right" class="mono green">${money.toFixed(2)}</td>
+      <td style="text-align:right">${sel
+        ? `<input class="amount-input" type="number" step="0.01" value="${selected[u.account].amount}" onchange="updateAmount('${u.account}',this.value)">`
+        : '<span style="color:#cbd5e1">—</span>'}</td>
+      <td style="text-align:center">${sel ? '<span class="badge badge-green">已选</span>' : '<span class="badge badge-gray">未选</span>'}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  updateBadges();
+  updateStep3();
+  const pageSize = +document.getElementById('pageSize').value || 10;
+  const currentPage = +document.getElementById('pageNumber').value || 1;
+  const totalPages = Math.ceil(totalCount / pageSize);
+  if (totalPages > 1) {
+    document.getElementById('pagination').style.display = '';
+    document.getElementById('pageInfo').textContent = `第 ${currentPage} / ${totalPages} 页 (共 ${totalCount} 条)`;
+  }
+}
+
+function toggleMember(i) {
+  const u = filtered[i];
+  const money = parseFloat(u.money) || 0;
+  if (selected[u.account]) delete selected[u.account];
+  else selected[u.account] = { account: u.account, userName: u.userName, money, amount: money, agentName: u.agentName||'', remark: u.remark||'' };
+  renderTable();
+}
+
+function toggleAll() {
+  if (Object.keys(selected).length === filtered.length && filtered.length > 0) selected = {};
+  else { selected = {}; filtered.forEach(u => { const m = parseFloat(u.money)||0; selected[u.account] = { account: u.account, userName: u.userName, money: m, amount: m, agentName: u.agentName||'', remark: u.remark||'' }; }); }
+  renderTable();
+}
+
+function updateAmount(account, val) {
+  if (selected[account]) { selected[account].amount = Number(val); updateBadges(); updateStep3(); }
+}
+
+function updateBadges() {
+  const count = Object.keys(selected).length;
+  document.getElementById('countBadge').textContent = `已选: ${count} / ${filtered.length}`;
+  const sum = Object.values(selected).reduce((s,u) => s + (u.amount||0), 0);
+  const sb = document.getElementById('sumBadge');
+  if (count > 0) { sb.style.display = ''; sb.textContent = `扣除总额: ${sum.toFixed(2)}`; } else sb.style.display = 'none';
+  document.getElementById('toggleAllBtn').textContent = count === filtered.length && filtered.length > 0 ? '☒ 取消全选' : '☑ 全选';
+}
+
+function updateStep3() {
+  const list = Object.values(selected);
+  if (!list.length) { document.getElementById('step3').style.display = 'none'; return; }
+  document.getElementById('step3').style.display = '';
+  document.getElementById('previewCount').textContent = list.length;
+  document.getElementById('previewSum').textContent = list.reduce((s,u) => s+(u.amount||0), 0).toFixed(2);
+}
+
+function changePage(delta) {
+  const el = document.getElementById('pageNumber');
+  const next = (+el.value||1) + delta;
+  if (next < 1) return;
+  el.value = next;
+  fetchMembers();
+}
+
+// ====== 查询账户详情 ======
+async function queryDetail(account, token) {
+  const res = await fetch('/api/detail', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ cookie: token.cookie, userAgent: token.userAgent, account })
+  });
+  const data = await res.json();
+  if (data.error && data.code === 302) throw new Error('会话已过期');
+  if (data.accountId) return data;
+  throw new Error(data.msg || data.error || '未找到账户ID');
+}
+
+// ====== 扣除余额 ======
+async function deductBalance(accountId, account, amount, token) {
+  const opType = document.getElementById('opType').value || '22';
+  const checkBetNum = document.getElementById('checkBetNum').value || '1';
+  const res = await fetch('/api/deduct', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      cookie: token.cookie, userAgent: token.userAgent,
+      searchText: account, id: String(accountId), type: opType,
+      money: String(amount), checkBetNum, betNumMultiple: '1',
+      minusBetNumMultiple: '0', remark: '', extra: '', rePassword: token.password
+    })
+  });
+  const data = await res.json();
+  if (data.error && data.code === 302) throw new Error('会话已过期');
+  if (data.success) return data;
+  throw new Error(data.msg || data.error || '扣除失败');
+}
+
+// ====== 逐条提交 ======
+async function submitOneByOne() {
+  const list = Object.values(selected);
+  if (!list.length) { alert('请至少选择一条记录'); return; }
+  if (!confirm(`确认对 ${list.length} 条记录执行扣除？`)) return;
+  const token = parseToken();
+  if (!token) return;
+
+  stopFlag = false;
+  document.getElementById('oneByOneBtn').disabled = true;
+  document.getElementById('stopBtn').style.display = '';
+  const log = document.getElementById('logArea');
+  log.style.display = ''; log.innerHTML = '';
+  document.getElementById('progressArea').style.display = '';
+  let success = 0, fail = 0;
+
+  appendLog('info', `开始处理 ${list.length} 条...`);
+
+  for (let i = 0; i < list.length; i++) {
+    if (stopFlag) { appendLog('warn', `⏹ 已停止，处理 ${i} 条`); break; }
+    document.getElementById('progressNum').textContent = `${i+1}/${list.length}`;
+    document.getElementById('progressFill').style.width = `${((i+1)/list.length*100).toFixed(1)}%`;
+    const item = list[i];
+    appendLog('info', `[${i+1}] 🔍 查询 ${item.account}...`);
+    try {
+      const detail = await queryDetail(item.account, token);
+      appendLog('info', `[${i+1}] ID: ${detail.accountId} (${detail.accountName||''})`);
+      await deductBalance(detail.accountId, item.account, item.amount, token);
+      success++;
+      appendLog('ok', `[${i+1}] ✅ ${item.account} 扣除 ${item.amount.toFixed(2)} 成功`);
+    } catch(e) {
+      fail++;
+      appendLog('fail', `[${i+1}] ❌ ${item.account}: ${e.message}`);
+    }
+    if (i < list.length - 1) await new Promise(r => setTimeout(r, 500));
+  }
+
+  appendLog('info', `━━━ 完成！成功 ${success}，失败 ${fail} ━━━`);
+  document.getElementById('oneByOneBtn').disabled = false;
+  document.getElementById('stopBtn').style.display = 'none';
+}
+
+function stopSubmit() { stopFlag = true; appendLog('warn', '⏳ 正在停止...'); }
+
+function appendLog(type, msg) {
+  const log = document.getElementById('logArea');
+  const cls = type==='ok'?'log-ok':type==='fail'?'log-fail':type==='warn'?'log-warn':'log-info';
+  log.innerHTML += `<div class="${cls}">${new Date().toLocaleTimeString()} ${msg}</div>`;
+  log.scrollTop = log.scrollHeight;
+}
+</script>
+</body>
+</html>

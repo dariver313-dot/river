@@ -1,0 +1,48 @@
+{
+    "urlRotationChars": ["a", "b", "c", "d", "e", "f"],
+    "urlRotationInterval": 1400,
+    "urlFlashDuration": 200,
+    "downloadPopupDelay": 5000,
+
+    "reminderTips": [
+        "建议使用手机自带浏览器访问，以获得最佳加载速度；iOS 用户推荐使用 Safari。",
+        "建议将本站 添加到主屏幕 或收藏书签，方便下次快速访问并分享给好友。",
+        "为保障您的隐私安全，请勿与「国家反诈中心APP」同设备使用。",
+        "苹果手机： 点击浏览器底部分享图标 → [ 添加到主屏幕 ]",
+        "安卓手机： 进入浏览器设置 → [ 添加到书签/主屏幕 ]"
+    ],
+
+    "channels": {
+        "kefu": [
+            "https://5beixs.com/chat/text/chat_1BhVx8.html"
+        ],
+        "jisu": [
+            "https://c2009c.com/"
+        ],
+        "guanfang": [
+            "https://aomen2009.com"
+        ],
+        "youxuan": [
+            "https://amylc2009.com"
+        ]
+    },
+
+    "downloads": {
+        "ios": [
+            "https://gheod.hlkyqq.cn:1443/api/c/jtsevi2o",
+            "https://pbqpa.ulwcaztx.com/api/c/jtsevi2o"
+        ],
+        "android": [
+            "https://gdkey.zjaffedj.com/ffapk/cll7iw",
+            "https://ndkde.psiylsux.com/ffapk/cll7iw"
+        ]
+    },
+
+    "banner": [
+        "https://2009001.com",
+        "https://m2009m.com",
+        "https://aomen2009.com",
+        "https://amylc2009.com",
+        "https://aaa2009.com"
+    ]
+}

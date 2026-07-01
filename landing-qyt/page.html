@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport"
+        content="width=device-width, initial-scale=1, maximum-scale=1, minimum-scale=1, user-scalable=no, viewport-fit=cover">
+    <title>企音通</title>
+    <meta name="theme-color" content="#1e5fd4">
+    <meta property="og:title" content="企音通">
+    <meta property="og:type" content="website">
+    <link rel="icon" href="./img/logo.png" type="image/png">
+    <link rel="apple-touch-icon" href="./img/logo.png">
+    <link rel="stylesheet" href="./css/style.css">
+</head>
+
+<body>
+    <div class="page">
+        <main class="page__body">
+            <div class="brand animate-in" style="--anim-delay: 0">
+                <div class="brand__logo">
+                    <img src="./img/logo.png" alt="企音通" />
+                </div>
+                <p class="brand__slogan">便捷沟通  及时畅聊</p>
+                <p class="brand__sub-slogan">多平台 · 多版本 · 自由选择</p>
+            </div>
+
+            <div class="action-bar animate-in" style="--anim-delay: 1">
+                <div class="action-bar__btn" data-action="channel" data-channel="android">
+                    <a>
+                        <div class="action-bar__icon">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                        </div>
+                        <div class="action-bar__text">安卓下载</div>
+                    </a>
+                </div>
+                <div class="action-bar__btn" data-action="channel" data-channel="other">
+                    <a>
+                        <div class="action-bar__icon">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+                        </div>
+                        <div class="action-bar__text">其他下载</div>
+                    </a>
+                </div>
+            </div>
+        </main>
+    </div>
+    <script src="./js/app.js"></script>
+    <script>
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('./sw.js');
+        }
+    </script>
+</body>
+
+</html>

@@ -1,0 +1,84 @@
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model MemberProfile {
+  memberName   String   @id
+  memberId     String   @default("")
+  evalCount    Int      @default(0)
+  highRiskCount Int     @default(0)
+  maxRiskLevel String   @default("")
+  lastEvalAt   DateTime?
+  lastEvalScore Int     @default(0)
+  topRules     String   @default("{}")
+  totalWithdrawAmount Float @default(0)
+  recentWithdrawTrend  String @default("[]")
+  lastWithdrawMethod   String @default("")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model AgentProfile {
+  proxyCode       String  @id
+  memberCount     Int     @default(0)
+  evalCount       Int     @default(0)
+  highRiskCount   Int     @default(0)
+  totalWithdrawAmount Float @default(0)
+  riskScore       Int     @default(0)
+  topRules        String  @default("{}")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model RiskEval {
+  id             String   @id @default(cuid())
+  orderId        String   @unique
+  memberId       String
+  memberName     String   @default("")
+  totalScore     Int      @default(0)
+  riskLevel      String   @default("LOW")
+  triggeredRules String   @default("[]")
+  detail         String   @default("{}")
+  notified       Boolean  @default(false)
+  finalStatus    String   @default("")
+  feedback       String   @default("")
+  notifyMsgId    Int?
+  notifiedAt     DateTime?
+  createdAt      DateTime @default(now())
+
+  @@index([memberId])
+  @@index([createdAt])
+  @@index([riskLevel])
+  @@index([finalStatus])
+  @@index([notified, finalStatus])
+}
+
+model RuleFeedback {
+  id         String   @id @default(cuid())
+  evalId     String
+  ruleId     String
+  feedback   String   @default("")
+  memberId   String   @default("")
+  periodInfo String   @default("")
+  createdAt  DateTime @default(now())
+
+  @@index([evalId])
+  @@index([memberId])
+  @@index([memberId, feedback, createdAt])
+  @@index([memberId, feedback, ruleId])
+  @@index([createdAt])
+  @@unique([evalId, ruleId])
+}
+
+model BotConfig {
+  id    String @id @default(cuid())
+  key   String @unique
+  value String @default("")
+
+  @@index([key])
+}

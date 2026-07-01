@@ -1,0 +1,7 @@
+node_modules/
+config/config.js
+config/sessions/*.json
+config/conversations/
+.env
+*.log
+.DS_Store

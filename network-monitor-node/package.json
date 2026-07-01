@@ -1,0 +1,14 @@
+{
+  "name": "network-monitor",
+  "version": "1.0.0",
+  "description": "网络连通性监控 - 三层混合检测",
+  "main": "monitor.js",
+  "scripts": {
+    "dev": "node bot.js"
+  },
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "node-fetch": "^2.7.0",
+    "node-telegram-bot-api": "^0.66.0"
+  }
+}

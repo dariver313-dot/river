@@ -1,0 +1,1525 @@
+<!doctype html>
+<html>
+  <head>
+    <title>持久化SQLite数据库</title>
+    <meta charset="utf-8" />
+    <style>
+      :root {
+        --primary: #4361ee;
+        --success: #06d6a0;
+        --warning: #ffd166;
+        --danger: #ef476f;
+        --dark: #212529;
+        --light: #f8f9fa;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: "Segoe UI", system-ui, sans-serif;
+        margin: 0;
+        padding: 20px;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        min-height: 100vh;
+      }
+
+      .container {
+        max-width: 1200px;
+        margin: 0 auto;
+        background: white;
+        border-radius: 16px;
+        box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+        overflow: hidden;
+      }
+
+      .header {
+        background: linear-gradient(135deg, var(--primary), #3a0ca3);
+        color: white;
+        padding: 30px 40px;
+        text-align: center;
+      }
+
+      .header h1 {
+        margin: 0;
+        font-size: 2.5em;
+        font-weight: 700;
+      }
+
+      .header .subtitle {
+        margin-top: 10px;
+        opacity: 0.9;
+        font-size: 1.1em;
+      }
+
+      .dashboard {
+        display: grid;
+        grid-template-columns: 300px 1fr;
+        min-height: 700px;
+      }
+
+      .sidebar {
+        background: var(--light);
+        padding: 30px 25px;
+        border-right: 1px solid #eaeaea;
+      }
+
+      .main-content {
+        padding: 30px 40px;
+      }
+
+      .card {
+        background: white;
+        border-radius: 12px;
+        padding: 25px;
+        margin-bottom: 25px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+        border: 1px solid #eaeaea;
+        transition:
+          transform 0.2s,
+          box-shadow 0.2s;
+      }
+
+      .card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
+      }
+
+      .card h3 {
+        margin-top: 0;
+        color: var(--primary);
+        font-size: 1.3em;
+        margin-bottom: 20px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .btn {
+        padding: 12px 24px;
+        border: none;
+        border-radius: 8px;
+        font-size: 16px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .btn-primary {
+        background: var(--primary);
+        color: white;
+      }
+
+      .btn-primary:hover {
+        background: #3a56d4;
+        transform: translateY(-2px);
+      }
+
+      .btn-success {
+        background: var(--success);
+        color: white;
+      }
+
+      .btn-danger {
+        background: var(--danger);
+        color: white;
+      }
+
+      .btn-outline {
+        background: transparent;
+        border: 2px solid var(--primary);
+        color: var(--primary);
+      }
+
+      .btn-group {
+        display: flex;
+        gap: 10px;
+        margin-top: 15px;
+        flex-wrap: wrap;
+      }
+
+      .input-group {
+        margin-bottom: 20px;
+      }
+
+      label {
+        display: block;
+        margin-bottom: 8px;
+        font-weight: 600;
+        color: var(--dark);
+      }
+
+      input,
+      select,
+      textarea {
+        width: 100%;
+        padding: 12px 16px;
+        border: 2px solid #e1e5e9;
+        border-radius: 8px;
+        font-size: 16px;
+        transition: border 0.2s;
+      }
+
+      input:focus,
+      select:focus,
+      textarea:focus {
+        outline: none;
+        border-color: var(--primary);
+      }
+
+      .status-bar {
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        max-width: 400px;
+        z-index: 1000;
+      }
+
+      .alert {
+        padding: 16px 20px;
+        border-radius: 10px;
+        margin-bottom: 10px;
+        animation: slideIn 0.3s ease-out;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+
+      .alert-success {
+        background: var(--success);
+        color: white;
+      }
+
+      .alert-error {
+        background: var(--danger);
+        color: white;
+      }
+
+      .alert-info {
+        background: var(--primary);
+        color: white;
+      }
+
+      .table-container {
+        overflow-x: auto;
+        border-radius: 10px;
+        border: 1px solid #eaeaea;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        min-width: 800px;
+      }
+
+      thead {
+        background: var(--primary);
+        color: white;
+      }
+
+      th {
+        padding: 18px 20px;
+        text-align: left;
+        font-weight: 600;
+        font-size: 0.95em;
+        letter-spacing: 0.5px;
+      }
+
+      tbody tr {
+        border-bottom: 1px solid #eaeaea;
+        transition: background 0.2s;
+      }
+
+      tbody tr:hover {
+        background: #f8f9ff;
+      }
+
+      td {
+        padding: 16px 20px;
+        color: #333;
+      }
+
+      .action-buttons {
+        display: flex;
+        gap: 8px;
+      }
+
+      .icon-btn {
+        width: 36px;
+        height: 36px;
+        border-radius: 6px;
+        border: none;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: all 0.2s;
+      }
+
+      .icon-btn-edit {
+        background: #e3f2fd;
+        color: var(--primary);
+      }
+
+      .icon-btn-delete {
+        background: #ffebee;
+        color: var(--danger);
+      }
+
+      .progress-bar {
+        height: 4px;
+        background: #e1e5e9;
+        border-radius: 2px;
+        margin-top: 10px;
+        overflow: hidden;
+      }
+
+      .progress {
+        height: 100%;
+        background: var(--success);
+        width: 0%;
+        transition: width 0.3s;
+      }
+
+      @keyframes slideIn {
+        from {
+          transform: translateX(100%);
+          opacity: 0;
+        }
+        to {
+          transform: translateX(0);
+          opacity: 1;
+        }
+      }
+
+      @keyframes pulse {
+        0% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.7;
+        }
+        100% {
+          opacity: 1;
+        }
+      }
+
+      .file-info {
+        background: #f8f9ff;
+        padding: 15px;
+        border-radius: 8px;
+        margin-top: 15px;
+        font-family: monospace;
+        font-size: 0.9em;
+      }
+
+      .connection-status {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 12px;
+        border-radius: 20px;
+        font-size: 0.85em;
+        font-weight: 600;
+      }
+
+      .status-connected {
+        background: rgba(6, 214, 160, 0.1);
+        color: var(--success);
+      }
+
+      .status-disconnected {
+        background: rgba(239, 71, 111, 0.1);
+        color: var(--danger);
+      }
+
+      .status-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+      }
+
+      .connected-dot {
+        background: var(--success);
+        animation: pulse 2s infinite;
+      }
+
+      .disconnected-dot {
+        background: var(--danger);
+      }
+
+      .stat-card {
+        background: linear-gradient(135deg, var(--primary), #3a0ca3);
+        color: white;
+        padding: 25px;
+        border-radius: 12px;
+        text-align: center;
+      }
+
+      .stat-number {
+        font-size: 2.5em;
+        font-weight: 700;
+        margin: 10px 0;
+      }
+
+      .stat-label {
+        font-size: 0.9em;
+        opacity: 0.9;
+      }
+
+      @media (max-width: 768px) {
+        .dashboard {
+          grid-template-columns: 1fr;
+        }
+
+        .sidebar {
+          border-right: none;
+          border-bottom: 1px solid #eaeaea;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="header">
+        <h1>💾 持久化SQLite数据库管理器</h1>
+        <div class="subtitle">浏览器内SQLite数据库，支持本地文件持久化存储</div>
+        <div class="connection-status" id="connectionStatus">
+          <span class="status-dot disconnected-dot"></span>
+          <span>未连接数据库</span>
+        </div>
+      </div>
+
+      <div class="dashboard">
+        <!-- 侧边栏：数据库操作 -->
+        <div class="sidebar">
+          <div class="card">
+            <h3>📂 数据库文件</h3>
+
+            <div class="input-group">
+              <label>数据库名称</label>
+              <input
+                type="text"
+                id="dbName"
+                value="lottery_data.db"
+                placeholder="输入数据库名称"
+              />
+            </div>
+
+            <div class="btn-group">
+              <button onclick="createNewDatabase()" class="btn btn-primary">
+                <span>🗃️</span> 创建新数据库
+              </button>
+              <button onclick="openDatabaseFile()" class="btn btn-outline">
+                <span>📁</span> 打开数据库文件
+              </button>
+            </div>
+
+            <div id="fileInfo" class="file-info" style="display: none">
+              未选择文件
+            </div>
+
+            <div class="progress-bar">
+              <div class="progress" id="progressBar"></div>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>⚙️ 数据库操作</h3>
+            <div class="btn-group">
+              <button onclick="backupDatabase()" class="btn btn-success">
+                <span>💾</span> 备份数据库
+              </button>
+              <button onclick="exportToSQL()" class="btn btn-outline">
+                <span>📄</span> 导出为SQL
+              </button>
+              <button onclick="compactDatabase()" class="btn">
+                <span>🧹</span> 优化数据库
+              </button>
+            </div>
+
+            <div
+              style="
+                margin-top: 25px;
+                padding-top: 20px;
+                border-top: 1px solid #eaeaea;
+              "
+            >
+              <h4>数据库统计</h4>
+              <div id="dbStats">
+                <p>请先打开数据库</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>📊 快速统计</h3>
+            <div class="stat-card">
+              <div class="stat-number" id="recordCount">0</div>
+              <div class="stat-label">总记录数</div>
+            </div>
+            <div style="margin-top: 15px">
+              <p>最后备份: <span id="lastBackup">从未备份</span></p>
+              <p>数据库大小: <span id="dbSize">0 KB</span></p>
+            </div>
+          </div>
+        </div>
+
+        <!-- 主内容区：数据操作 -->
+        <div class="main-content">
+          <div class="card">
+            <h3>👥 用户管理</h3>
+            <div
+              style="
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+                gap: 20px;
+                margin-bottom: 20px;
+              "
+            >
+              <div class="input-group">
+                <label>姓名</label>
+                <input type="text" id="userName" placeholder="输入姓名" />
+              </div>
+              <div class="input-group">
+                <label>年龄</label>
+                <input
+                  type="number"
+                  id="userAge"
+                  placeholder="输入年龄"
+                  min="1"
+                  max="120"
+                />
+              </div>
+              <div class="input-group">
+                <label>生肖</label>
+                <select id="userZodiac">
+                  <option value="">选择生肖</option>
+                  <option value="鼠">鼠</option>
+                  <option value="牛">牛</option>
+                  <option value="虎">虎</option>
+                  <option value="兔">兔</option>
+                  <option value="龙">龙</option>
+                  <option value="蛇">蛇</option>
+                  <option value="马">马</option>
+                  <option value="羊">羊</option>
+                  <option value="猴">猴</option>
+                  <option value="鸡">鸡</option>
+                  <option value="狗">狗</option>
+                  <option value="猪">猪</option>
+                </select>
+              </div>
+            </div>
+
+            <div
+              style="
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+                gap: 20px;
+              "
+            >
+              <div class="input-group">
+                <label>邮箱</label>
+                <input type="email" id="userEmail" placeholder="输入邮箱" />
+              </div>
+              <div class="input-group">
+                <label>电话号码</label>
+                <input type="tel" id="userPhone" placeholder="输入电话号码" />
+              </div>
+            </div>
+
+            <div class="btn-group">
+              <button onclick="addUser()" class="btn btn-primary">
+                <span>➕</span> 添加用户
+              </button>
+              <button onclick="clearForm()" class="btn btn-outline">
+                <span>🗑️</span> 清空表单
+              </button>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>📈 数据查询</h3>
+            <div
+              style="
+                display: flex;
+                gap: 15px;
+                margin-bottom: 20px;
+                flex-wrap: wrap;
+              "
+            >
+              <input
+                type="text"
+                id="searchQuery"
+                placeholder="搜索姓名或邮箱"
+                style="flex: 1; min-width: 200px"
+              />
+              <select id="searchZodiac" style="width: 150px">
+                <option value="">全部生肖</option>
+                <option value="鼠">鼠</option>
+                <option value="牛">牛</option>
+                <option value="虎">虎</option>
+                <option value="兔">兔</option>
+                <option value="龙">龙</option>
+                <option value="蛇">蛇</option>
+                <option value="马">马</option>
+                <option value="羊">羊</option>
+                <option value="猴">猴</option>
+                <option value="鸡">鸡</option>
+                <option value="狗">狗</option>
+                <option value="猪">猪</option>
+              </select>
+              <button onclick="searchUsers()" class="btn btn-primary">
+                <span>🔍</span> 搜索
+              </button>
+              <button onclick="getAllUsers()" class="btn btn-outline">
+                <span>🔄</span> 刷新
+              </button>
+            </div>
+
+            <div class="table-container">
+              <table id="userTable">
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>姓名</th>
+                    <th>年龄</th>
+                    <th>生肖</th>
+                    <th>邮箱</th>
+                    <th>创建时间</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody id="userTableBody">
+                  <tr>
+                    <td colspan="7" style="text-align: center; padding: 40px">
+                      <div style="color: #666; font-size: 1.1em">
+                        📊 请先打开或创建数据库
+                      </div>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div
+              style="
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                margin-top: 20px;
+              "
+            >
+              <div>
+                <span id="paginationInfo">第 0 页，共 0 条记录</span>
+              </div>
+              <div class="btn-group">
+                <button onclick="prevPage()" class="btn btn-outline">
+                  上一页
+                </button>
+                <button onclick="nextPage()" class="btn btn-outline">
+                  下一页
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>📝 SQL编辑器</h3>
+            <textarea
+              id="sqlEditor"
+              rows="4"
+              placeholder="输入SQL语句，例如：SELECT * FROM users WHERE age > 25"
+            >
+SELECT * FROM users ORDER BY id DESC LIMIT 10</textarea
+            >
+            <div class="btn-group">
+              <button onclick="executeSQL()" class="btn btn-primary">
+                <span>⚡</span> 执行SQL
+              </button>
+              <button onclick="saveQuery()" class="btn btn-outline">
+                <span>💾</span> 保存查询
+              </button>
+            </div>
+            <div
+              id="sqlResult"
+              style="margin-top: 20px; max-height: 300px; overflow-y: auto"
+            ></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 状态通知栏 -->
+    <div class="status-bar" id="statusBar"></div>
+
+    <!-- 引入SQL.js库 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/sql-wasm.js"></script>
+
+    <script>
+      // 全局变量
+      let SQL = null;
+      let db = null;
+      let dbFileHandle = null;
+      let currentPage = 1;
+      const pageSize = 10;
+      let totalRecords = 0;
+
+      // 初始化SQL.js
+      async function initSQLJS() {
+        try {
+          if (!window.SQL) {
+            showProgress(30, "正在加载SQL.js引擎...");
+            window.SQL = await initSqlJs({
+              locateFile: (file) =>
+                `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/${file}`,
+            });
+            showProgress(60, "SQL.js引擎加载完成");
+          }
+          SQL = window.SQL;
+          updateConnectionStatus(true, "SQL.js已就绪");
+          showProgress(100, "准备就绪");
+          setTimeout(
+            () => (document.getElementById("progressBar").style.width = "0%"),
+            1000,
+          );
+          return true;
+        } catch (error) {
+          showAlert("初始化失败: " + error.message, "error");
+          updateConnectionStatus(false, "初始化失败");
+          return false;
+        }
+      }
+
+      // 创建新数据库
+      async function createNewDatabase() {
+        if (!(await ensureSQLReady())) return;
+
+        const dbName =
+          document.getElementById("dbName").value || "lottery_data.db";
+
+        try {
+          // 创建新的数据库
+          db = new SQL.Database();
+
+          // 创建用户表
+          const createTableSQL = `
+                    CREATE TABLE IF NOT EXISTS users (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        name TEXT NOT NULL,
+                        age INTEGER,
+                        email TEXT UNIQUE,
+                        phone TEXT,
+                        zodiac TEXT,
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    );
+                    
+                    CREATE INDEX IF NOT EXISTS idx_users_name ON users(name);
+                    CREATE INDEX IF NOT EXISTS idx_users_zodiac ON users(zodiac);
+                    
+                    CREATE TABLE IF NOT EXISTS lottery_records (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        draw_date DATE NOT NULL,
+                        winning_numbers TEXT NOT NULL,
+                        zodiac TEXT NOT NULL,
+                        jackpot_amount INTEGER,
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    );
+                `;
+
+          db.exec(createTableSQL);
+
+          // 提示用户保存文件
+          await saveDatabaseToFile(dbName);
+
+          // 添加一些示例数据
+          addSampleData();
+
+          showAlert(`数据库 "${dbName}" 创建成功！`, "success");
+          updateDatabaseInfo();
+          getAllUsers();
+        } catch (error) {
+          showAlert("创建数据库失败: " + error.message, "error");
+        }
+      }
+
+      // 打开数据库文件
+      async function openDatabaseFile() {
+        if (!(await ensureSQLReady())) return;
+
+        try {
+          // 使用File System Access API选择文件
+          const [fileHandle] = await window.showOpenFilePicker({
+            types: [
+              {
+                description: "SQLite数据库文件",
+                accept: {
+                  "application/x-sqlite3": [".db", ".sqlite", ".sqlite3"],
+                },
+              },
+            ],
+            multiple: false,
+          });
+
+          const file = await fileHandle.getFile();
+          const arrayBuffer = await file.arrayBuffer();
+
+          // 打开数据库
+          db = new SQL.Database(new Uint8Array(arrayBuffer));
+          dbFileHandle = fileHandle;
+
+          // 更新文件信息
+          document.getElementById("fileInfo").style.display = "block";
+          document.getElementById("fileInfo").innerHTML = `
+                    <strong>文件:</strong> ${file.name}<br>
+                    <strong>大小:</strong> ${formatFileSize(file.size)}<br>
+                    <strong>最后修改:</strong> ${new Date(file.lastModified).toLocaleString()}
+                `;
+
+          updateConnectionStatus(true, `已连接: ${file.name}`);
+          showAlert(`数据库文件 "${file.name}" 打开成功！`, "success");
+          updateDatabaseInfo();
+          getAllUsers();
+
+          // 更新数据库统计
+          updateDatabaseStats();
+        } catch (error) {
+          if (error.name !== "AbortError") {
+            showAlert("打开文件失败: " + error.message, "error");
+          }
+        }
+      }
+
+      // 保存数据库到文件
+      async function saveDatabaseToFile(filename) {
+        try {
+          if (!db) {
+            showAlert("没有打开的数据库", "error");
+            return;
+          }
+
+          let fileHandle = dbFileHandle;
+
+          // 如果没有文件句柄，则创建新文件
+          if (!fileHandle) {
+            fileHandle = await window.showSaveFilePicker({
+              suggestedName: filename,
+              types: [
+                {
+                  description: "SQLite数据库文件",
+                  accept: {
+                    "application/x-sqlite3": [".db"],
+                  },
+                },
+              ],
+            });
+          }
+
+          // 导出数据库
+          const data = db.export();
+          const blob = new Blob([data], { type: "application/x-sqlite3" });
+
+          // 写入文件
+          const writable = await fileHandle.createWritable();
+          await writable.write(blob);
+          await writable.close();
+
+          dbFileHandle = fileHandle;
+
+          // 获取文件信息
+          const file = await fileHandle.getFile();
+          document.getElementById("fileInfo").style.display = "block";
+          document.getElementById("fileInfo").innerHTML = `
+                    <strong>文件:</strong> ${file.name}<br>
+                    <strong>大小:</strong> ${formatFileSize(file.size)}<br>
+                    <strong>保存时间:</strong> ${new Date().toLocaleString()}
+                `;
+
+          showAlert("数据库保存成功！", "success");
+          updateDatabaseStats();
+        } catch (error) {
+          if (error.name !== "AbortError") {
+            showAlert("保存失败: " + error.message, "error");
+          }
+        }
+      }
+
+      // 自动保存数据库
+      async function autoSaveDatabase() {
+        if (db && dbFileHandle) {
+          try {
+            const data = db.export();
+            const blob = new Blob([data], { type: "application/x-sqlite3" });
+            const writable = await dbFileHandle.createWritable();
+            await writable.write(blob);
+            await writable.close();
+
+            // 更新最后备份时间
+            document.getElementById("lastBackup").textContent =
+              new Date().toLocaleTimeString();
+          } catch (error) {
+            console.warn("自动保存失败:", error);
+          }
+        }
+      }
+
+      // 备份数据库
+      async function backupDatabase() {
+        const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+        const backupName = `backup_${timestamp}.db`;
+        await saveDatabaseToFile(backupName);
+      }
+
+      // 添加用户
+      async function addUser() {
+        if (!(await ensureDatabaseReady())) return;
+
+        const name = document.getElementById("userName").value.trim();
+        const age = document.getElementById("userAge").value;
+        const zodiac = document.getElementById("userZodiac").value;
+        const email = document.getElementById("userEmail").value.trim();
+        const phone = document.getElementById("userPhone").value.trim();
+
+        if (!name) {
+          showAlert("请输入姓名", "error");
+          return;
+        }
+
+        try {
+          const sql = `
+                    INSERT INTO users (name, age, email, phone, zodiac, updated_at) 
+                    VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                `;
+
+          db.run(sql, [name, age ? parseInt(age) : null, email, phone, zodiac]);
+
+          showAlert("用户添加成功！", "success");
+          clearForm();
+          getAllUsers();
+          updateDatabaseStats();
+
+          // 自动保存
+          await autoSaveDatabase();
+        } catch (error) {
+          if (error.message.includes("UNIQUE constraint")) {
+            showAlert("邮箱已存在", "error");
+          } else {
+            showAlert("添加失败: " + error.message, "error");
+          }
+        }
+      }
+
+      // 获取所有用户（分页）
+      function getAllUsers() {
+        if (!db) return;
+
+        try {
+          // 获取总记录数
+          const countResult = db.exec("SELECT COUNT(*) as count FROM users");
+          totalRecords = countResult[0]?.values[0][0] || 0;
+          document.getElementById("recordCount").textContent = totalRecords;
+
+          // 计算分页
+          const offset = (currentPage - 1) * pageSize;
+          const sql = `
+                    SELECT id, name, age, zodiac, email, 
+                           strftime('%Y-%m-%d %H:%M', created_at) as created_at 
+                    FROM users 
+                    ORDER BY id DESC 
+                    LIMIT ? OFFSET ?
+                `;
+
+          const result = db.exec(sql, [pageSize, offset]);
+          displayUsers(result);
+
+          // 更新分页信息
+          updatePaginationInfo();
+        } catch (error) {
+          showAlert("查询失败: " + error.message, "error");
+        }
+      }
+
+      // 搜索用户
+      function searchUsers() {
+        if (!db) return;
+
+        const query = document.getElementById("searchQuery").value.trim();
+        const zodiac = document.getElementById("searchZodiac").value;
+
+        try {
+          let sql = `SELECT id, name, age, zodiac, email, 
+                                  strftime('%Y-%m-%d %H:%M', created_at) as created_at 
+                           FROM users WHERE 1=1`;
+          let params = [];
+
+          if (query) {
+            sql += ` AND (name LIKE ? OR email LIKE ?)`;
+            params.push(`%${query}%`, `%${query}%`);
+          }
+
+          if (zodiac) {
+            sql += ` AND zodiac = ?`;
+            params.push(zodiac);
+          }
+
+          sql += ` ORDER BY id DESC`;
+
+          const result = db.exec(sql, params);
+          displayUsers(result);
+
+          // 显示搜索到的记录数
+          const count = result[0]?.values?.length || 0;
+          showAlert(`找到 ${count} 条记录`, "info");
+        } catch (error) {
+          showAlert("搜索失败: " + error.message, "error");
+        }
+      }
+
+      // 显示用户数据
+      function displayUsers(result) {
+        const tbody = document.getElementById("userTableBody");
+
+        if (!result || result.length === 0) {
+          tbody.innerHTML = `
+                    <tr>
+                        <td colspan="7" style="text-align: center; padding: 40px;">
+                            <div style="color: #666; font-size: 1.1em;">
+                                📭 暂无数据
+                            </div>
+                        </td>
+                    </tr>
+                `;
+          return;
+        }
+
+        const columns = result[0].columns;
+        const values = result[0].values;
+
+        let html = "";
+        values.forEach((row) => {
+          const id = row[columns.indexOf("id")];
+          html += `
+                    <tr>
+                        <td>${id}</td>
+                        <td>${row[columns.indexOf("name")]}</td>
+                        <td>${row[columns.indexOf("age")] || "-"}</td>
+                        <td>
+                            <span style="
+                                display: inline-block;
+                                padding: 4px 8px;
+                                background: #e3f2fd;
+                                color: #1976d2;
+                                border-radius: 12px;
+                                font-size: 0.85em;
+                                font-weight: 600;
+                            ">
+                                ${row[columns.indexOf("zodiac")] || "未设置"}
+                            </span>
+                        </td>
+                        <td>${row[columns.indexOf("email")] || "-"}</td>
+                        <td>${row[columns.indexOf("created_at")]}</td>
+                        <td>
+                            <div class="action-buttons">
+                                <button onclick="editUser(${id})" class="icon-btn icon-btn-edit" title="编辑">
+                                    ✏️
+                                </button>
+                                <button onclick="deleteUser(${id})" class="icon-btn icon-btn-delete" title="删除">
+                                    🗑️
+                                </button>
+                            </div>
+                        </td>
+                    </tr>
+                `;
+        });
+
+        tbody.innerHTML = html;
+      }
+
+      // 编辑用户
+      function editUser(id) {
+        if (!db) return;
+
+        try {
+          const result = db.exec("SELECT * FROM users WHERE id = ?", [id]);
+          if (result.length === 0) return;
+
+          const user = result[0].values[0];
+          const columns = result[0].columns;
+
+          // 填充表单
+          document.getElementById("userName").value =
+            user[columns.indexOf("name")];
+          document.getElementById("userAge").value =
+            user[columns.indexOf("age")] || "";
+          document.getElementById("userEmail").value =
+            user[columns.indexOf("email")] || "";
+          document.getElementById("userPhone").value =
+            user[columns.indexOf("phone")] || "";
+          document.getElementById("userZodiac").value =
+            user[columns.indexOf("zodiac")] || "";
+
+          // 修改添加按钮为更新按钮
+          const addBtn = document.querySelector('button[onclick="addUser()"]');
+          addBtn.innerHTML = "<span>💾</span> 更新用户";
+          addBtn.setAttribute("onclick", `updateUser(${id})`);
+
+          showAlert(`正在编辑用户 ID: ${id}`, "info");
+        } catch (error) {
+          showAlert("获取用户信息失败: " + error.message, "error");
+        }
+      }
+
+      // 更新用户
+      async function updateUser(id) {
+        if (!db) return;
+
+        const name = document.getElementById("userName").value.trim();
+        const age = document.getElementById("userAge").value;
+        const zodiac = document.getElementById("userZodiac").value;
+        const email = document.getElementById("userEmail").value.trim();
+        const phone = document.getElementById("userPhone").value.trim();
+
+        try {
+          const sql = `
+                    UPDATE users 
+                    SET name = ?, age = ?, email = ?, phone = ?, zodiac = ?, updated_at = CURRENT_TIMESTAMP 
+                    WHERE id = ?
+                `;
+
+          db.run(sql, [
+            name,
+            age ? parseInt(age) : null,
+            email,
+            phone,
+            zodiac,
+            id,
+          ]);
+
+          showAlert("用户更新成功！", "success");
+          clearForm();
+          getAllUsers();
+
+          // 恢复添加按钮
+          const addBtn = document.querySelector(
+            'button[onclick="updateUser(" + id + ")"]',
+          );
+          addBtn.innerHTML = "<span>➕</span> 添加用户";
+          addBtn.setAttribute("onclick", "addUser()");
+
+          // 自动保存
+          await autoSaveDatabase();
+        } catch (error) {
+          showAlert("更新失败: " + error.message, "error");
+        }
+      }
+
+      // 删除用户
+      async function deleteUser(id) {
+        if (!db) return;
+
+        if (!confirm("确定要删除这个用户吗？此操作不可恢复！")) return;
+
+        try {
+          db.run("DELETE FROM users WHERE id = ?", [id]);
+          showAlert("用户删除成功！", "success");
+          getAllUsers();
+          updateDatabaseStats();
+
+          // 自动保存
+          await autoSaveDatabase();
+        } catch (error) {
+          showAlert("删除失败: " + error.message, "error");
+        }
+      }
+
+      // 清空表单
+      function clearForm() {
+        document.getElementById("userName").value = "";
+        document.getElementById("userAge").value = "";
+        document.getElementById("userEmail").value = "";
+        document.getElementById("userPhone").value = "";
+        document.getElementById("userZodiac").value = "";
+      }
+
+      // 执行SQL
+      function executeSQL() {
+        if (!db) {
+          showAlert("请先打开数据库", "error");
+          return;
+        }
+
+        const sql = document.getElementById("sqlEditor").value.trim();
+        if (!sql) return;
+
+        try {
+          const result = db.exec(sql);
+          displaySQLResult(result);
+
+          // 如果是查询语句，显示行数
+          if (sql.trim().toUpperCase().startsWith("SELECT")) {
+            const rowCount = result.reduce(
+              (sum, r) => sum + (r.values?.length || 0),
+              0,
+            );
+            showAlert(`查询成功，返回 ${rowCount} 行数据`, "success");
+          } else {
+            showAlert("SQL执行成功", "success");
+            // 自动保存
+            autoSaveDatabase();
+            updateDatabaseStats();
+          }
+        } catch (error) {
+          showAlert("SQL执行错误: " + error.message, "error");
+          document.getElementById("sqlResult").innerHTML =
+            `<div style="color: #ef476f; padding: 15px; background: #ffebee; border-radius: 8px;">
+                        <strong>错误:</strong> ${error.message}
+                    </div>`;
+        }
+      }
+
+      // 显示SQL结果
+      function displaySQLResult(result) {
+        const container = document.getElementById("sqlResult");
+
+        if (!result || result.length === 0) {
+          container.innerHTML =
+            '<div style="color: #666; padding: 20px; text-align: center;">无返回数据</div>';
+          return;
+        }
+
+        let html = "";
+        result.forEach((queryResult, index) => {
+          if (queryResult.columns) {
+            html += `<div style="margin-bottom: 25px;">`;
+            html += `<h4 style="margin-bottom: 10px; color: #4361ee;">结果集 ${index + 1} (${queryResult.values?.length || 0} 行)</h4>`;
+
+            html += `<div style="overflow-x: auto;">`;
+            html += `<table style="width: 100%; border-collapse: collapse;">`;
+            html += `<thead><tr style="background: #f8f9ff;">`;
+            html += queryResult.columns
+              .map(
+                (col) =>
+                  `<th style="padding: 12px; border: 1px solid #eaeaea; text-align: left; font-weight: 600;">${col}</th>`,
+              )
+              .join("");
+            html += `</tr></thead><tbody>`;
+
+            if (queryResult.values && queryResult.values.length > 0) {
+              queryResult.values.forEach((row) => {
+                html += `<tr style="border-bottom: 1px solid #eaeaea;">`;
+                html += row
+                  .map(
+                    (cell) =>
+                      `<td style="padding: 12px; border: 1px solid #eaeaea;">${cell ?? '<span style="color: #999;">NULL</span>'}</td>`,
+                  )
+                  .join("");
+                html += `</tr>`;
+              });
+            }
+
+            html += `</tbody></table>`;
+            html += `</div></div>`;
+          }
+        });
+
+        container.innerHTML = html;
+      }
+
+      // 导出为SQL
+      async function exportToSQL() {
+        if (!db) {
+          showAlert("请先打开数据库", "error");
+          return;
+        }
+
+        try {
+          const tables = db.exec(
+            "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
+          );
+          let sqlDump = `-- SQLite数据库导出\n-- 导出时间: ${new Date().toISOString()}\n\n`;
+
+          for (const table of tables[0].values) {
+            const tableName = table[0];
+
+            // 导出表结构
+            const createTable = db.exec(
+              `SELECT sql FROM sqlite_master WHERE type='table' AND name=?`,
+              [tableName],
+            );
+            if (createTable[0]?.values?.[0]?.[0]) {
+              sqlDump += `${createTable[0].values[0][0]};\n\n`;
+            }
+
+            // 导出数据
+            const data = db.exec(`SELECT * FROM "${tableName}"`);
+            if (data[0]?.values?.length > 0) {
+              const columns = data[0].columns;
+              data[0].values.forEach((row) => {
+                const values = row
+                  .map((val) =>
+                    val === null
+                      ? "NULL"
+                      : typeof val === "number"
+                        ? val
+                        : `'${val.toString().replace(/'/g, "''")}'`,
+                  )
+                  .join(", ");
+                sqlDump += `INSERT INTO "${tableName}" (${columns.join(", ")}) VALUES (${values});\n`;
+              });
+              sqlDump += "\n";
+            }
+          }
+
+          // 创建下载
+          const blob = new Blob([sqlDump], { type: "text/plain" });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = `database_${new Date().toISOString().slice(0, 10)}.sql`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+
+          showAlert("SQL导出成功！", "success");
+        } catch (error) {
+          showAlert("导出失败: " + error.message, "error");
+        }
+      }
+
+      // 优化数据库
+      function compactDatabase() {
+        if (!db) return;
+
+        try {
+          db.exec("VACUUM;");
+          showAlert("数据库优化完成！", "success");
+          updateDatabaseStats();
+        } catch (error) {
+          showAlert("优化失败: " + error.message, "error");
+        }
+      }
+
+      // 添加示例数据
+      function addSampleData() {
+        if (!db) return;
+
+        const sampleUsers = [
+          ["张三", 25, "zhangsan@example.com", "13800138000", "龙"],
+          ["李四", 30, "lisi@example.com", "13900139000", "马"],
+          ["王五", 28, "wangwu@example.com", "13700137000", "猴"],
+          ["赵六", 35, "zhaoliu@example.com", "13600136000", "狗"],
+          ["孙七", 22, "sunqi@example.com", "13500135000", "兔"],
+          ["周八", 40, "zhouba@example.com", "13400134000", "蛇"],
+        ];
+
+        try {
+          sampleUsers.forEach((user) => {
+            db.run(
+              "INSERT INTO users (name, age, email, phone, zodiac) VALUES (?, ?, ?, ?, ?)",
+              user,
+            );
+          });
+
+          // 添加彩票记录示例
+          const lotteryRecords = [
+            ["2024-01-15", "3,15,22,29,36,42", "龙,狗,牛,兔,马,猪", 85000000],
+            ["2024-01-14", "1,8,17,24,33,45", "鼠,猴,鸡,狗,猪,羊", 72000000],
+            ["2024-01-13", "6,12,19,27,38,49", "蛇,马,羊,猴,鸡,狗", 68000000],
+          ];
+
+          lotteryRecords.forEach((record) => {
+            db.run(
+              "INSERT INTO lottery_records (draw_date, winning_numbers, zodiac, jackpot_amount) VALUES (?, ?, ?, ?)",
+              record,
+            );
+          });
+
+          showAlert("示例数据添加完成！", "success");
+        } catch (error) {
+          console.warn("添加示例数据时出错:", error);
+        }
+      }
+
+      // 更新数据库统计信息
+      function updateDatabaseStats() {
+        if (!db) return;
+
+        try {
+          // 获取用户数
+          const userCount =
+            db.exec("SELECT COUNT(*) FROM users")[0]?.values[0][0] || 0;
+          // 获取彩票记录数
+          const lotteryCount =
+            db.exec("SELECT COUNT(*) FROM lottery_records")[0]?.values[0][0] ||
+            0;
+          // 获取数据库大小（估算）
+          const dbSize = db.export().byteLength;
+
+          document.getElementById("dbStats").innerHTML = `
+                    <p>📊 用户记录: <strong>${userCount}</strong> 条</p>
+                    <p>🎰 彩票记录: <strong>${lotteryCount}</strong> 条</p>
+                    <p>💾 总记录数: <strong>${userCount + lotteryCount}</strong> 条</p>
+                `;
+
+          document.getElementById("recordCount").textContent =
+            userCount + lotteryCount;
+          document.getElementById("dbSize").textContent =
+            formatFileSize(dbSize);
+        } catch (error) {
+          console.warn("更新数据库统计失败:", error);
+        }
+      }
+
+      // 更新分页信息
+      function updatePaginationInfo() {
+        const totalPages = Math.ceil(totalRecords / pageSize);
+        document.getElementById("paginationInfo").textContent =
+          `第 ${currentPage} / ${totalPages} 页，共 ${totalRecords} 条记录`;
+      }
+
+      // 上一页
+      function prevPage() {
+        if (currentPage > 1) {
+          currentPage--;
+          getAllUsers();
+        }
+      }
+
+      // 下一页
+      function nextPage() {
+        const totalPages = Math.ceil(totalRecords / pageSize);
+        if (currentPage < totalPages) {
+          currentPage++;
+          getAllUsers();
+        }
+      }
+
+      // 确保SQL.js就绪
+      async function ensureSQLReady() {
+        if (!SQL) {
+          await initSQLJS();
+        }
+        return !!SQL;
+      }
+
+      // 确保数据库就绪
+      async function ensureDatabaseReady() {
+        if (!db) {
+          showAlert("请先创建或打开数据库", "error");
+          return false;
+        }
+        return true;
+      }
+
+      // 更新连接状态
+      function updateConnectionStatus(connected, message) {
+        const status = document.getElementById("connectionStatus");
+        if (connected) {
+          status.innerHTML = `
+                    <span class="status-dot connected-dot"></span>
+                    <span>${message}</span>
+                `;
+          status.className = "connection-status status-connected";
+        } else {
+          status.innerHTML = `
+                    <span class="status-dot disconnected-dot"></span>
+                    <span>${message}</span>
+                `;
+          status.className = "connection-status status-disconnected";
+        }
+      }
+
+      // 显示进度条
+      function showProgress(percent, message) {
+        const progressBar = document.getElementById("progressBar");
+        progressBar.style.width = percent + "%";
+        if (message) {
+          showAlert(message, "info");
+        }
+      }
+
+      // 显示通知
+      function showAlert(message, type) {
+        const statusBar = document.getElementById("statusBar");
+        const alert = document.createElement("div");
+        alert.className = `alert alert-${type}`;
+        alert.innerHTML = `
+                <span>${getIconForType(type)}</span>
+                <span>${message}</span>
+            `;
+
+        statusBar.appendChild(alert);
+
+        // 5秒后自动移除
+        setTimeout(() => {
+          if (alert.parentNode) {
+            alert.style.animation = "slideIn 0.3s ease-out reverse";
+            setTimeout(() => {
+              if (alert.parentNode) {
+                statusBar.removeChild(alert);
+              }
+            }, 300);
+          }
+        }, 5000);
+      }
+
+      function getIconForType(type) {
+        switch (type) {
+          case "success":
+            return "✅";
+          case "error":
+            return "❌";
+          case "info":
+            return "ℹ️";
+          default:
+            return "📢";
+        }
+      }
+
+      // 格式化文件大小
+      function formatFileSize(bytes) {
+        if (bytes === 0) return "0 Bytes";
+        const k = 1024;
+        const sizes = ["Bytes", "KB", "MB", "GB"];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
+      }
+
+      // 更新数据库信息
+      function updateDatabaseInfo() {
+        document.getElementById("lastBackup").textContent =
+          new Date().toLocaleTimeString();
+      }
+
+      // 页面加载时初始化
+      window.addEventListener("DOMContentLoaded", async function () {
+        showAlert("正在初始化SQLite数据库系统...", "info");
+        await initSQLJS();
+
+        // 设置自动保存（每5分钟）
+        setInterval(
+          async () => {
+            if (db && dbFileHandle) {
+              await autoSaveDatabase();
+            }
+          },
+          5 * 60 * 1000,
+        );
+
+        // 页面卸载前自动保存
+        window.addEventListener("beforeunload", async (event) => {
+          if (db && dbFileHandle) {
+            await autoSaveDatabase();
+          }
+        });
+      });
+    </script>
+  </body>
+</html>

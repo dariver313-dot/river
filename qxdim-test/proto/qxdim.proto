@@ -1,0 +1,275 @@
+syntax = "proto3";
+
+// 企讯达 (QXDIM) Protobuf 协议定义
+// 逆向自 app.1778823952009.js Module 8120 & Module 8584
+// 基于 WildFireChat 协议，共 129 个消息类型
+
+package qxdim;
+
+// ==================== 连接与路由 ====================
+
+message IMHttpWrapper {
+  string  token    = 1;  // 认证凭证
+  string  clientId = 2;  // 客户端标识
+  string  request  = 3;  // 请求类型 (如 "ROUTE")
+  bytes   data     = 4;  // 实际的 Protobuf 编码数据
+}
+
+message IMHttpWrapperV2 {
+  string  token     = 1;
+  string  clientId  = 2;
+  string  request   = 3;
+  bytes   data      = 4;
+  string  requestId = 5;  // V2 新增请求ID
+}
+
+message RouteRequest {
+  string  app           = 1;
+  int32   platform      = 2;
+  int32   pushType      = 3;
+  string  deviceName    = 4;
+  string  deviceVersion = 5;
+  string  phoneName     = 6;
+  string  language      = 7;
+  string  carrierName   = 8;
+  string  appVersion    = 9;
+  string  sdkVersion    = 10;
+  string  wxAppId       = 11;
+  string  wxAppKey      = 12;
+  string  webAppId      = 13;
+  string  webAppKey     = 14;
+  string  host          = 15;
+}
+
+message RouteRequestV2 {
+  string  app       = 1;
+  int32   platform  = 2;
+  int32   pushType  = 3;
+  string  deviceName    = 4;
+  string  deviceVersion = 5;
+  string  phoneName     = 6;
+  string  language      = 7;
+  string  carrierName   = 8;
+  string  appVersion    = 9;
+  string  sdkVersion    = 10;
+  string  wxAppId       = 11;
+  string  wxAppKey      = 12;
+  string  webAppId      = 13;
+  string  webAppKey     = 14;
+  string  host          = 15;
+  string  signature     = 16;  // V2 新增签名
+}
+
+message AddressTriple {
+  string  host      = 1;
+  int32   longPort  = 2;
+  int32   shortPort = 3;
+  int32   wssPort   = 4;
+}
+
+message RouteResponse {
+  string  host      = 1;
+  int32   longPort  = 2;
+  int32   shortPort = 3;
+  string  thumbPara = 4;
+  string  node      = 5;
+  int32   commercial = 6;
+  int32   wssPort   = 7;
+  repeated AddressTriple candidate = 8;
+}
+
+message RouteResponseV2 {
+  string  host      = 1;
+  int32   longPort  = 2;
+  int32   shortPort = 3;
+  string  thumbPara = 4;
+  string  node      = 5;
+  int32   commercial = 6;
+  int32   wssPort   = 7;
+  repeated AddressTriple candidate = 8;
+  int32   shortTcpPort = 9;  // V2 新增
+}
+
+message ConnectAckPayload {
+  int64   msgHead      = 1;
+  int64   friendHead   = 2;
+  int64   friendRqHead = 3;
+  int64   settingHead  = 4;
+  string  nodeAddr     = 5;
+  int32   nodePort     = 6;
+  int64   serverTime   = 7;
+  string  nodeId       = 8;
+  int64   recvHead     = 9;
+  int64   readHead     = 10;
+  int64   groupConvHead = 11;
+}
+
+// ==================== 会话与消息 ====================
+
+message Conversation {
+  int32   type   = 1;  // 0=单聊, 1=群聊, 2=频道, 3=聊天室
+  string  target = 2;  // 目标ID
+  int32   line   = 3;  // 消息线 (默认0)
+}
+
+message MessageContent {
+  int32   type              = 1;   // 内容类型编号
+  string  searchableContent = 2;   // 可搜索文本
+  string  pushContent       = 3;   // 推送文本
+  string  content           = 4;   // JSON 格式内容数据
+  bytes   data              = 5;   // 二进制内容 (base64编码)
+  int32   mediaType         = 6;   // 媒体类型
+  string  remoteMediaUrl    = 7;   // 远程媒体地址
+  int32   persistFlag       = 8;   // 持久化标志
+  int32   expireDuration    = 9;   // 过期时间(秒)
+  int32   mentionedType     = 10;  // @类型
+  repeated string mentionedTarget = 11;  // @目标列表
+  string  extra             = 12;  // 扩展数据(JSON)
+  string  pushData          = 13;  // 推送附加数据
+}
+
+message Message {
+  Conversation conversation    = 1;
+  string       fromUser        = 2;
+  MessageContent content       = 3;
+  int64        messageId       = 4;
+  int64        serverTimestamp = 5;
+  string       toUser          = 6;
+  repeated string to           = 7;
+  int32        fromId          = 8;
+}
+
+message NotifyMessage {
+  int32  type = 1;
+  int64  head = 2;
+}
+
+message NotifyGroupMessage {
+  int64  head   = 1;
+  string target = 2;
+  int32  line   = 3;
+  int32  type   = 4;
+}
+
+message NotifyRecallMessage {
+  string fromUser = 1;
+  int64  id       = 2;
+  int32  status   = 3;
+  string uid      = 4;
+}
+
+message PullMessageRequest {
+  int64  id    = 1;
+  int32  type  = 2;
+  int64  delay = 3;
+}
+
+message PullMessageResult {
+  repeated Message message  = 1;
+  int64            current  = 2;
+  int64            head     = 3;
+}
+
+// ==================== 用户 ====================
+
+message User {
+  string  uid        = 1;
+  string  name       = 2;
+  string  displayName = 3;
+  int32   gender     = 4;
+  string  portrait   = 5;
+  string  mobile     = 6;
+  string  email      = 7;
+  string  address    = 8;
+  string  company    = 9;
+  string  social     = 10;
+  string  extra      = 11;
+  int64   updateDt   = 12;
+  int32   type       = 13;
+  bool    deleted    = 14;
+}
+
+// ==================== 好友 ====================
+
+message Friend {
+  string  alias     = 1;
+  bool    blacked   = 2;
+  string  extra     = 3;
+  string  fid       = 4;
+  int32   state     = 5;
+  string  uid       = 6;
+  int64   updateDt  = 7;
+}
+
+message AddFriendRequest {
+  string  targetUid = 1;
+  string  reason    = 2;
+  string  extra     = 3;
+}
+
+// ==================== 群组 ====================
+
+message GroupInfo {
+  string  targetId       = 1;
+  string  name           = 2;
+  string  portrait       = 3;
+  string  owner          = 4;
+  int32   type           = 5;
+  int32   memberCount    = 6;
+  string  extra          = 7;
+  int64   updateDt       = 8;
+  int64   memberUpdateDt = 9;
+  int32   mute           = 10;
+  int32   privateChat    = 11;
+  int32   joinType       = 12;
+  int32   searchable     = 13;
+  int32   maxMemberCount = 14;
+  int32   historyMessage = 15;
+  int32   superGroup     = 16;
+  bool    deleted        = 17;
+}
+
+message GroupMember {
+  string  memberId  = 1;
+  string  alias     = 2;
+  int32   type      = 3;
+  int64   updateDt  = 4;
+  int64   createDt  = 5;
+  string  extra     = 6;
+}
+
+// ==================== 频道 ====================
+
+message ChannelInfo {
+  string  targetId  = 1;
+  string  name      = 2;
+  string  portrait  = 3;
+  string  desc      = 4;
+  string  owner     = 5;
+  string  secret    = 6;
+  string  callback  = 7;
+  int32   status    = 8;
+  int32   automatic = 9;
+  string  extra     = 10;
+  string  menu      = 11;
+  int64   updateDt  = 12;
+}
+
+// ==================== 通用 ====================
+
+message GeneralResult {
+  int32  contentType = 1;
+  int32  errorCode   = 2;
+  string mediaPath   = 3;
+  int32  mediaType   = 4;
+  int64  messageId   = 5;
+}
+
+message IDBuf {
+  bytes   content         = 1;
+  Conversation conversation = 2;
+  string  fromUser        = 3;
+  int64   id              = 4;
+  int64   messageId       = 5;
+  int64   serverTimestamp = 6;
+}

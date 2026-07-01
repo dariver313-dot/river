@@ -1,0 +1,87 @@
+{
+  "name": "qxdim",
+  "version": "0.1.1",
+  "description": "企讯达(QXDIM) IM 协议 Node.js SDK - 基于逆向工程实现完整登录、消息收发、断线重连",
+  "keywords": [
+    "qxdim",
+    "企讯达",
+    "wildfirechat",
+    "im",
+    "mqtt",
+    "protobuf",
+    "chat",
+    "instant-messaging"
+  ],
+  "license": "MIT",
+  "author": "",
+  "homepage": "https://github.com/example/qxdim",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/example/qxdim.git"
+  },
+  "bugs": {
+    "url": "https://github.com/example/qxdim/issues"
+  },
+  "main": "src/index.js",
+  "types": "types/index.d.ts",
+  "type": "module",
+  "exports": {
+    ".": {
+      "import": "./src/index.js",
+      "types": "./types/index.d.ts"
+    },
+    "./crypto": {
+      "import": "./src/crypto/index.js",
+      "types": "./types/index.d.ts"
+    },
+    "./proto": {
+      "import": "./src/proto/index.js",
+      "types": "./types/index.d.ts"
+    },
+    "./utils": {
+      "import": "./src/utils/index.js",
+      "types": "./types/index.d.ts"
+    },
+    "./proto/qxdim.proto": "./proto/qxdim.proto",
+    "./scripts/patch-mqtt.js": "./scripts/patch-mqtt.js"
+  },
+  "files": [
+    "src/",
+    "proto/qxdim.proto",
+    "types/",
+    "scripts/patch-mqtt.js",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "patch": "node scripts/patch-mqtt.js",
+    "predev": "node scripts/patch-mqtt.js --quiet",
+    "dev": "node examples/auto-reply-bot.js",
+    "test": "node tests/all.test.js",
+    "test:crypto": "node tests/crypto.test.js",
+    "test:proto": "node tests/proto.test.js",
+    "test:integration": "TS_NODE_TRANSPILE_ONLY=true TS_NODE_ESM=true node --loader ts-node/esm tests/integration/run-all.ts",
+    "test:integration:sdk": "TS_NODE_TRANSPILE_ONLY=true TS_NODE_ESM=true node --loader ts-node/esm tests/integration/01-sdk-login.test.ts",
+    "test:integration:session": "TS_NODE_TRANSPILE_ONLY=true TS_NODE_ESM=true node --loader ts-node/esm tests/integration/02-session-cache.test.ts",
+    "test:integration:reconnect": "TS_NODE_TRANSPILE_ONLY=true TS_NODE_ESM=true node --loader ts-node/esm tests/integration/03-reconnect.test.ts",
+    "test:integration:auto-relogin": "TS_NODE_TRANSPILE_ONLY=true TS_NODE_ESM=true node --loader ts-node/esm tests/integration/05-auto-relogin.test.ts",
+    "typecheck": "tsc --noEmit",
+    "bot": "node examples/auto-reply-bot.js",
+    "prepublishOnly": "npm run typecheck && npm test"
+  },
+  "dependencies": {
+    "long": "^5.2.3",
+    "mqtt": "^5.10.1",
+    "protobufjs": "^7.4.0",
+    "sm-crypto": "^0.3.13"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.0"
+  }
+}

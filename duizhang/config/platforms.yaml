@@ -1,0 +1,281 @@
+# ============================================================
+# 三平台配置 — 天游 / 澳博国际 / 澳门娱乐城
+# ============================================================
+
+platforms:
+
+  # ======================== 天游 ========================
+  tianyou:
+    name: "天游"
+    title: "天游出入款报表"
+    template: "excel/2026天游.xlsx"
+
+    template_cells:
+      sheet: "总汇"
+      total_row: 3
+      header_row: 4
+      data_start_row: 5
+      data_end_row: 32
+      col_account: "C"
+      col_login: "D"
+      col_charge_online: "F"
+      col_unsubmitted: "G"
+      col_charge_manual: "H"
+      col_transfer_out: "I"
+      col_withdrawal: "J"
+      col_fee: "K"
+      col_balance: "L"
+      col_yesterday: "M"
+      col_remark: "N"
+
+    # 后台 sheet 模式（人工已汇总的数据）
+    backend_sheet:
+      sheet: "后台"
+      wallet_header_row: 2
+      summary_row: 4
+      columns_per_wallet: 10
+      col_offsets:
+        charge_online: 1
+        unsubmitted: 2
+        charge_manual: 3
+        transfer_out: 4
+        withdrawal: 5
+        fee: 6
+        balance: 7
+
+    wallet_account_map:
+      "GoPAY": "GoPay"
+      "OK钱包": "OKpay"
+      "K豆": "KDpay"
+      "盛联-博仁数字": "盛联博仁支付"
+      "免提充值": "免提直充"
+
+    # ★ 冲提表模式（直接读原始CSV聚合）
+    raw_data:
+      deposit:
+        file_pattern: "天游充值记录-*.csv"
+        encoding: "gbk"
+        status_field: "状态"
+        status_value: "充值成功"
+        channel_field: "支付平台"
+        amount_field: "付款金额(/元)"
+        # 当 channel_field 为空时，查此字段判断钱包
+        fallback_field: "备注"
+        fallback_map:
+          "免提直充": "免提直充"
+        channel_map:
+          "ABpay支付": "ABpay"
+          "234钱包支付": "234pay"
+          "K豆支付": "K豆"
+          "okpay支付": "OK钱包"
+          "C币支付": "C币"
+          "988支付V2": "988Pay"
+          "星宇支付": "星宇支付"
+          "星座支付": "星座支付"
+          "AB闪付支付": "AB闪付"
+          "808币支付": "8080钱包"
+          "博仁支付": "盛联-博仁数字"
+          "金利汇支付": "金利汇支付"
+          "Gopayv2支付": "GoPAY"
+          "OBPay支付": "OB钱包"
+          "澳洲国际支付": "盛联-博仁数字"
+      withdraw:
+        file_pattern: "天游会员提款记录-*.csv"
+        encoding: "gbk"
+        status_field: "状态"
+        status_value: "提款成功"
+        channel_field: "收款方式"
+        amount_field: "提款金额(/元)"
+        channel_map:
+          "免提直充": "免提充值"
+          "ABPAY": "ABpay"
+          "234钱包": "234pay"
+          "OKPAY": "OK钱包"
+          "KDPAY": "K豆"
+          "C币钱包": "C币"
+          "988PAY": "988Pay"
+          "808钱包": "8080钱包"
+          "GOPAY": "GoPAY"
+
+  # ======================== 澳博国际 ========================
+  aobo:
+    name: "澳博国际"
+    title: "澳博国际出入款报表"
+    template: "excel/2026澳博国际.xlsx"
+
+    template_cells:
+      sheet: "总汇"
+      total_row: 3
+      header_row: 4
+      data_start_row: 5
+      data_end_row: 70     # 覆盖USDT账户(Row66-69)
+      col_account: "C"
+      col_login: "D"
+      col_charge_online: "F"
+      col_unsubmitted: "G"
+      col_charge_manual: "H"
+      col_transfer_out: "I"
+      col_withdrawal: "J"
+      col_fee: "K"
+      col_balance: "L"
+      col_yesterday: "M"
+      col_remark: "N"
+
+    backend_sheet:
+      sheet: "后台"
+      wallet_header_row: 2
+      summary_row: 4
+      columns_per_wallet: 10
+      col_offsets:
+        charge_online: 1
+        unsubmitted: 2
+        charge_manual: 3
+        transfer_out: 4
+        withdrawal: 5
+        fee: 6
+        balance: 7
+
+    wallet_account_map:
+      "万富快付": "万富代付"
+
+    raw_data:
+      deposit:
+        file_pattern: "澳博充值入款记录-*.xlsx"
+        status_field: "充值状态"
+        status_value: "已入款"
+        channel_field: "三方支付名称"
+        amount_field: "充值金额"
+        channel_map:
+          "ABPay支付(中国)": "AB钱包"
+          "234钱包支付(中国)": "234钱包"
+          "溢源支付": "益源支付"
+          "宏威国际(中国)": "宏威支付"
+          "988钱包(中国)": "988钱包"
+          "K豆钱包支付(中国)": "K豆钱包"
+          "星座支付(中国)": "星座支付"
+          "金利汇支付(中国)": "金利汇支付"
+          "OkPay支付(中国)": "OK钱包"
+          "臻选支付": "臻选支付"
+          "365钱包支付(中国)": "365钱包"
+          "808钱包支付(中国)": "808钱包"
+          "JD钱包支付(中国)": "JD钱包"
+          "C币钱包支付(中国)": "C币钱包"
+          "红豆钱包支付(中国)": "红豆钱包"
+      withdraw:
+        file_pattern: "澳博提现出款记录-*.xlsx"
+        status_field: "申请状态"
+        status_value: "已出款"
+        channel_field: "第三方接口名称"   # 非"申请人银行名称"! 第三方接口名称才是钱包渠道
+        amount_field: "申请提现金额"
+        channel_map:
+          "234钱包代付(中国)": "234钱包"
+          "ABPay代付(中国)": "AB钱包"
+          "天顺代付(中国)": "天顺代付"
+          "988钱包代付(中国)": "988钱包"
+          "安顺代付(中国)": "安顺代付"
+          "红豆钱包代付(中国)": "红豆钱包"
+          "C币钱包代付(中国)": "C币钱包"
+          "K豆钱包代付(中国)": "K豆钱包"
+          "365钱包代付(中国)": "365钱包"
+          "OkPay代付(中国)": "OK钱包"
+          "808钱包代付(中国)": "808钱包"
+          "JD钱包代付(中国)": "JD钱包"
+          "华中代付(中国)": "华中代付"
+
+  # ======================== 澳门娱乐城 ========================
+  aomen:
+    name: "澳门娱乐城"
+    title: "澳门娱乐城出入款报表"
+    template: "excel/2026澳门娱乐城.xlsx"
+    api:
+      base_url: "https://bm1.5vlk0.com"     # 澳门管理后台
+      # proxy: "http://127.0.0.1:7890"      # 如需代理, 取消注释; 留空=自动检测
+
+    template_cells:
+      sheet: "总汇"
+      total_row: 3
+      header_row: 4
+      data_start_row: 5
+      data_end_row: 70     # 覆盖USDT账户(Row66-69)
+      col_account: "C"
+      col_login: "D"
+      col_charge_online: "F"
+      col_unsubmitted: "G"
+      col_charge_manual: "H"
+      col_transfer_out: "I"
+      col_withdrawal: "J"
+      col_fee: "K"
+      col_balance: "L"
+      col_yesterday: "M"
+      col_remark: "N"
+
+    backend_sheet:
+      sheet: "后台"
+      wallet_header_row: 2
+      summary_row: 4
+      columns_per_wallet: 10
+      col_offsets:
+        charge_online: 1
+        unsubmitted: 2
+        charge_manual: 3
+        transfer_out: 4
+        withdrawal: 5
+        fee: 6
+        balance: 7
+
+    wallet_account_map: {}
+
+    # ★ 澳门三表: 第三方充值 + 手动微信扫码 + 提现
+    raw_data:
+      # 1. 第三方充值 → F(会员充值)
+      deposit:
+        file_pattern: "澳门第三方充值*.xlsx"
+        status_field: "订单状态"
+        status_value: "充值成功"
+        channel_field: "支付平台"
+        amount_field: "充值金额"
+        channel_map:
+          "ABpay": "AB钱包"
+          "ABpay内嵌划转": "AB钱包"
+          "ABpay内嵌下单": "AB钱包"
+          "234钱包": "234钱包"
+          "K豆支付": "K豆钱包"
+          "C币支付": "C币钱包"
+          "988PAY": "988钱包"
+          "宏威支付": "宏威支付"
+          "OKPAY": "OK钱包"
+          "JD钱包": "JD钱包"
+          "臻选支付": "臻选支付"
+          "盛联支付1": "盛联支付"
+          "365钱包": "365钱包"
+          "金利汇支付": "金利汇支付"
+          "ET支付": "ET支付"
+          "GOpay": "GO钱包"
+      # 2. 手动微信扫码 → H(人工充值)
+      manual_deposit:
+        file_pattern: "澳门会员账变记录*.xlsx"
+        type_field: "变动类型"
+        type_value: "手动微信扫码"
+        amount_field: "变动金额"
+        group_field: "操作员备注"     # 按操作员分组
+        group_code_map:
+          "如意": "如意群码"
+          "村长": "村长群码"
+          "顺利": "顺利群码"
+          "发财": "发财群码"
+      # 3. 提现 → J(会员取款)
+      withdraw:
+        file_pattern: "澳门提现订单*.xlsx"
+        status_field: "订单状态"
+        status_value: "代付成功"
+        channel_field: "操作说明"
+        amount_field: "申请金额"
+        channel_map:
+          "ABpay": "AB钱包"
+          "C币代付": "C币钱包"
+          "234币代付": "234钱包"
+          "365钱包": "365钱包"
+          "JDPAY": "JD钱包"
+          "K豆代付": "K豆钱包"
+          "988钱包代付": "988钱包"
+          "OK代付": "OK钱包"

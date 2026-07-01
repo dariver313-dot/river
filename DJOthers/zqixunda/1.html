@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/opencc-js@1.0.5/dist/umd/full.js"></script>
+    <title>Document</title>
+  </head>
+  <body></body>
+  <script>
+    const zodiacList = [
+      "鼠",
+      "牛",
+      "虎",
+      "兔",
+      "龙",
+      "蛇",
+      "马",
+      "羊",
+      "猴",
+      "鸡",
+      "狗",
+      "猪",
+    ];
+    const numbers1To49 = [
+      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
+      22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39,
+      40, 41, 42, 43, 44, 45, 46, 47, 48, 49,
+    ];
+    // 生成特定个数的数字
+    function generateRandomNumbers(count) {
+      const shuffled = [...numbers1To49];
+      for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+      }
+      return shuffled.slice(0, count).join(" ");
+    }
+    // 生成特定个数的生肖
+    function generateRandomZodiac(count, withSpace = true) {
+      const shuffled = [...zodiacList];
+      for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+      }
+      // 取前count个并连接
+      const resultArray = shuffled.slice(0, count);
+      return withSpace ? resultArray.join(" ") : resultArray.join("");
+    }
+    const converter = OpenCC.Converter({ from: "tw", to: "cn" });
+    let LotteryResult = null;
+    async function getLotteryData() {
+      try {
+        const response = await axios.get(
+          "https://macaumarksix.com/api/macaujc2.com",
+        );
+        const data = response.data[0];
+        data.zodiac = converter(data.zodiac);
+        return data;
+      } catch (error) {
+        console.error("获取失败:", error);
+        return null;
+      }
+    }
+    async function main() {
+      LotteryResult = await getLotteryData();
+      console.log(LotteryResult, "===");
+    }
+    // 执行
+    main();
+    const num1 = generateRandomNumbers(3);
+    const num2 = generateRandomZodiac(3, (withSpace = true));
+    console.log(num1, num2);
+  </script>
+</html>

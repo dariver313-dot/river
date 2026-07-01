@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport"
+        content="width=device-width, initial-scale=1, maximum-scale=1, minimum-scale=1, user-scalable=no, viewport-fit=cover">
+    <title>Loading</title>
+    <meta name="theme-color" content="#1e5fd4">
+    <meta property="og:title" content="AM Online">
+    <meta property="og:type" content="website">
+    <meta property="og:image" content="./img/amylc-logo.png">
+    <link rel="icon" href="./img/amylc-logo.png" type="image/png">
+    <link rel="apple-touch-icon" href="./img/amylc-logo.png">
+    <link rel="stylesheet" href="./css/style.css">
+</head>
+
+<body>
+    <div class="page">
+        <main class="page__body">
+            <div class="action-bar animate-in" style="--anim-delay: 0">
+                <div class="action-bar__btn" data-action="download">
+                    <a>
+                        <div class="action-bar__icon">
+                            <img src="./img/a-xiazai2.webp" loading="lazy" />
+                        </div>
+                        <div class="action-bar__text">立即下载</div>
+                    </a>
+                </div>
+                <div class="action-bar__btn" data-action="channel" data-channel="kefu">
+                    <a>
+                        <div class="action-bar__icon">
+                            <img src="./img/kefu.webp" loading="lazy" />
+                        </div>
+                        <div class="action-bar__text">在线客服</div>
+                    </a>
+                </div>
+            </div>
+
+            <a class="channel-row animate-in" style="--anim-delay: 1" data-action="channel" data-channel="jisu">
+                <div class="channel-row__icon">
+                    <img src="./img/11.png" loading="lazy" />
+                </div>
+                <div class="channel-row__name">极速通道</div>
+                <div class="channel-row__cta"><span>进入游戏</span></div>
+            </a>
+
+            <a class="channel-row animate-in" style="--anim-delay: 2" data-action="channel" data-channel="guanfang">
+                <div class="channel-row__icon">
+                    <img src="./img/22.png" loading="lazy" />
+                </div>
+                <div class="channel-row__name">官方通道</div>
+                <div class="channel-row__cta"><span>进入游戏</span></div>
+            </a>
+
+            <a class="channel-row animate-in" style="--anim-delay: 3" data-action="channel" data-channel="youxuan">
+                <div class="channel-row__icon">
+                    <img src="./img/33.png" loading="lazy" />
+                </div>
+                <div class="channel-row__name">优选通道</div>
+                <div class="channel-row__cta"><span>进入游戏</span></div>
+            </a>
+
+            <div class="url-banner animate-in" style="--anim-delay: 4" data-action="banner">
+                <div class="url-banner__logo">
+                    <div><picture><source srcset="./img/amylc-logo.webp" type="image/webp"><img src="./img/amylc-logo.png" alt="" loading="lazy"></picture></div>
+                </div>
+                <div class="url-banner__link">
+                    <span class="url-banner__char"></span>2009<span class="url-banner__char"></span>.com
+                </div>
+                <div class="url-banner__arrow"><img src="./img/click.svg" alt="" loading="lazy"></div>
+            </div>
+
+            <div class="reminder animate-in" style="--anim-delay: 5">
+                <div class="reminder__card">
+                    <div class="reminder__header">
+                        <span class="reminder__line reminder__line--left"></span>
+                        <h2 class="reminder__title">温馨提示</h2>
+                        <span class="reminder__line reminder__line--right"></span>
+                    </div>
+                    <div class="reminder__body" id="reminder-container">
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+    <div id="fullbg"></div>
+    <div id="popup">
+        <div class="popup__header">
+            <div class="popup__title">教程</div>
+            <div class="popup__close">
+                <img src="./img/return.png" loading="lazy" />
+            </div>
+        </div>
+        <div class="popup__content">
+            <img src="./img/tutorialnew.png" loading="lazy" />
+        </div>
+    </div>
+    <script src="./js/app.js"></script>
+    <script>
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('./sw.js');
+        }
+    </script>
+</body>
+
+</html>

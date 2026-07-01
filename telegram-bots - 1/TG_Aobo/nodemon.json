@@ -1,0 +1,9 @@
+{
+  "watch": ["app.js", ".env"],
+  "ignore": ["node_modules", ".git", "*.db", "*.db-wal", "*.db-shm"],
+  "ext": "js,json,env",
+  "exec": "node -r dotenv/config app.js",
+  "env": {
+    "NODE_ENV": "development"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "name": "deduct-tool",
+  "version": "1.0.0",
+  "description": "余额扣除工具 - 本地代理服务",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.0"
+  }
+}

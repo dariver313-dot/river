@@ -1,0 +1,101 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Bot {
+  id            String   @id @default(cuid())
+  name          String
+  description   String
+  emoji         String   @default("🤖")
+  customIcon    String   @default("")
+  /// Bot status: "inactive" | "active" | "deploying" | "error" (validated at app layer)
+  status        String   @default("inactive")
+  /// Bot health: "unknown" | "healthy" | "warning" | "critical" (validated at app layer)
+  health        String   @default("unknown")
+  /// Bot language: "javascript" | "typescript" | "python" (validated at app layer)
+  language      String   @default("typescript")
+  template      String   @default("custom")
+  version       String   @default("1.0.0")
+  code          String   @default("")
+  /// JSON-encoded CodeBlock[] — SQLite has no native JSON type
+  codeBlocks    String   @default("[]")
+  /// JSON-encoded string[] — SQLite has no native JSON type
+  dependencies  String   @default("[]")
+  /// JSON-encoded EnvVar[] — SQLite has no native JSON type
+  envVars       String   @default("[]")
+  /// JSON-encoded BotConfig — SQLite has no native JSON type
+  config        String   @default("{}")
+  /// JSON-encoded BotStats — SQLite has no native JSON type
+  stats         String   @default("{}")
+  /// JSON-encoded ProjectFile[] — SQLite has no native JSON type
+  projectFiles  String   @default("[]")
+  entryPoint      String   @default("")
+  lastRunnerStatus String   @default("")
+  lastDeployedAt   DateTime?
+  webhookSecret  String   @default("")
+  createdAt       DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  ownerId       String
+  owner         Account  @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+
+  logEntries    BotLog[]
+  messages      BotMessage[]
+
+  @@index([status])
+  @@index([updatedAt])
+  @@index([createdAt])
+  @@index([name])
+  @@index([ownerId])
+  // FIX: Added composite index for the main list query (WHERE ownerId=? ORDER BY updatedAt DESC)
+  @@index([ownerId, updatedAt(sort: Desc)])
+  @@unique([ownerId, name])
+}
+
+model BotLog {
+  id        String   @id @default(cuid())
+  botId     String
+  bot       Bot      @relation(fields: [botId], references: [id], onDelete: Cascade)
+  timestamp DateTime @default(now())
+  /// Log level: "info" | "warn" | "error" | "debug" | "critical" (validated at app layer)
+  level     String   @default("info")
+  message   String
+  source    String   @default("")
+
+  // FIX: Removed redundant @@index([botId, timestamp]) — it's a prefix of
+  // the @@index([botId, timestamp, level]) below, which can serve the same queries.
+  @@index([botId, level])
+  @@index([timestamp])
+  @@index([botId, timestamp, level])
+}
+
+model BotMessage {
+  id        String    @id @default(cuid())
+  botId     String
+  bot       Bot       @relation(fields: [botId], references: [id], onDelete: Cascade)
+  userId    String
+  userName  String    @default("")
+  text      String    @default("")
+  command   String?
+  timestamp DateTime  @default(now())
+
+  @@index([botId, timestamp])
+  @@index([botId, userId])
+  @@index([botId, command])
+  @@index([timestamp])
+}
+
+model Account {
+  id           String   @id @default(cuid())
+  username     String   @unique
+  password     String
+  tokenVersion Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  bots         Bot[]
+}

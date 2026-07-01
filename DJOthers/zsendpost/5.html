@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+    <title>链接可用性测试工具（浏览器端）</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background: #f5f5f5;
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.1);
+            padding: 20px;
+        }
+        h1 {
+            font-size: 1.5rem;
+            margin-top: 0;
+            color: #333;
+        }
+        .note {
+            background: #e8f0fe;
+            padding: 12px;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            margin-bottom: 20px;
+            color: #0056b3;
+        }
+        textarea {
+            width: 100%;
+            height: 200px;
+            padding: 12px;
+            font-family: monospace;
+            font-size: 14px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            margin-bottom: 16px;
+            resize: vertical;
+        }
+        .controls {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        button {
+            background: #007aff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+        button:hover { background: #005bb5; }
+        button:active { transform: scale(0.98); }
+        .ua-switch {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: #f0f0f0;
+            padding: 6px 12px;
+            border-radius: 20px;
+        }
+        .ua-switch label {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 14px;
+        }
+        .loading {
+            text-align: center;
+            padding: 20px;
+            display: none;
+            color: #666;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 14px;
+            word-break: break-all;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 10px 8px;
+            text-align: left;
+            vertical-align: top;
+        }
+        th {
+            background: #f2f2f2;
+            font-weight: 600;
+        }
+        .status-ok { color: #28a745; font-weight: bold; }
+        .status-fail { color: #dc3545; font-weight: bold; }
+        .error-detail { font-size: 12px; color: #dc3545; margin-top: 4px; }
+        .cors-warning { font-size: 11px; color: #856404; background: #fff3cd; margin-top: 4px; padding: 2px 4px; border-radius: 4px; }
+        .url-cell { max-width: 300px; overflow-x: auto; white-space: pre-wrap; }
+        @media (max-width: 600px) {
+            .container { padding: 12px; }
+            th, td { padding: 8px 5px; font-size: 12px; }
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>🔗 链接可用性测试工具</h1>
+    <div class="note">
+        💡 本工具从你当前的网络环境发起请求，<strong>真实反映你能否打开链接</strong>。<br>
+        📱 可选模拟 iPhone/Android 的 User-Agent，使测试更贴近真实设备。<br>
+        ⚠️ 注意：由于浏览器跨域限制，某些链接可能显示“CORS 错误”，但手动打开可能正常，请结合实际情况判断。
+    </div>
+
+    <textarea id="urlsInput" placeholder="每行一个 URL，支持 http/https，也可直接输入域名（自动添加 https://）&#10;例如：&#10;https://www.example.com&#10;2009100.com&#10;https://apps.apple.com/app/id123456789&#10;play.google.com/store/apps/details?id=com.example"></textarea>
+
+    <div class="controls">
+        <button id="testBtn">▶ 开始测试</button>
+        <div class="ua-switch">
+            <span>📱 模拟手机UA：</span>
+            <label><input type="radio" name="ua" value="iphone"> iPhone</label>
+            <label><input type="radio" name="ua" value="android"> Android</label>
+            <label><input type="radio" name="ua" value="none" checked> 不模拟</label>
+        </div>
+    </div>
+
+    <div id="loading" class="loading">⏳ 正在检测中，请稍候...</div>
+
+    <div id="resultArea" style="display: none;">
+        <h3>测试结果</h3>
+        <table id="resultTable">
+            <thead>
+                <tr><th>原始输入</th><th>实际请求URL</th><th>状态</th><th>详细信息</th></tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+    const testBtn = document.getElementById('testBtn');
+    const urlsInput = document.getElementById('urlsInput');
+    const loadingDiv = document.getElementById('loading');
+    const resultArea = document.getElementById('resultArea');
+    const tbody = document.querySelector('#resultTable tbody');
+
+    // 模拟的 User-Agent
+    const uaMap = {
+        iphone: 'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1',
+        android: 'Mozilla/5.0 (Linux; Android 12; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.127 Mobile Safari/537.36',
+        none: ''
+    };
+
+    // 获取选中的 UA
+    function getSelectedUA() {
+        const radios = document.getElementsByName('ua');
+        for (let radio of radios) {
+            if (radio.checked) return uaMap[radio.value];
+        }
+        return '';
+    }
+
+    // 规范化 URL：自动添加 https:// 如果缺少协议
+    function normalizeUrl(url) {
+        url = url.trim();
+        if (!url) return '';
+        // 如果已经有协议，直接返回
+        if (url.startsWith('http://') || url.startsWith('https://')) {
+            return url;
+        }
+        // 否则添加 https://
+        return 'https://' + url;
+    }
+
+    // 检测单个 URL
+    async function checkUrl(url, ua) {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10秒超时
+
+        try {
+            const headers = {};
+            if (ua) headers['User-Agent'] = ua;
+
+            const response = await fetch(url, {
+                method: 'GET',
+                headers: headers,
+                signal: controller.signal,
+                mode: 'cors',          // 尝试跨域
+                cache: 'no-cache'
+            });
+
+            clearTimeout(timeoutId);
+
+            // 如果响应成功（状态码 200-399）
+            if (response.ok) {
+                return { ok: true, status: response.status, error: null };
+            } else {
+                // 状态码 4xx, 5xx 等
+                return { ok: false, status: response.status, error: `HTTP ${response.status}` };
+            }
+        } catch (error) {
+            clearTimeout(timeoutId);
+            // 捕获各种错误：网络错误、超时、CORS 等
+            let errorMsg = error.message;
+            if (error.name === 'AbortError') {
+                errorMsg = '请求超时（10秒）';
+            } else if (error.message.includes('Failed to fetch')) {
+                errorMsg = '网络错误或 CORS 限制（目标服务器未允许跨域）';
+            }
+            return { ok: false, status: null, error: errorMsg };
+        }
+    }
+
+    // 批量测试（顺序执行，避免浏览器限制并发数）
+    async function runTests(urls, ua) {
+        const results = [];
+        for (let i = 0; i < urls.length; i++) {
+            const rawUrl = urls[i];
+            const normalizedUrl = normalizeUrl(rawUrl);
+            if (!normalizedUrl) {
+                results.push({ rawUrl, normalizedUrl, ok: false, status: null, error: '无效 URL' });
+                continue;
+            }
+            // 更新加载提示
+            loadingDiv.innerHTML = `⏳ 正在检测 (${i+1}/${urls.length})：${rawUrl}`;
+            const result = await checkUrl(normalizedUrl, ua);
+            results.push({
+                rawUrl: rawUrl,
+                normalizedUrl: normalizedUrl,
+                ...result
+            });
+        }
+        loadingDiv.innerHTML = '⏳ 正在检测中，请稍候...';
+        return results;
+    }
+
+    // 渲染结果表格
+    function renderResults(results) {
+        tbody.innerHTML = '';
+        results.forEach(r => {
+            const row = tbody.insertRow();
+            const rawCell = row.insertCell(0);
+            const actualCell = row.insertCell(1);
+            const statusCell = row.insertCell(2);
+            const detailCell = row.insertCell(3);
+
+            rawCell.className = 'url-cell';
+            rawCell.textContent = r.rawUrl;
+            actualCell.className = 'url-cell';
+            actualCell.textContent = r.normalizedUrl;
+
+            if (r.ok) {
+                statusCell.innerHTML = '<span class="status-ok">✅ 可访问</span>';
+                detailCell.textContent = `状态码: ${r.status}`;
+            } else {
+                statusCell.innerHTML = '<span class="status-fail">❌ 不可访问</span>';
+                let detailText = r.error || '未知错误';
+                if (r.status) detailText = `HTTP ${r.status} - ${r.error}`;
+                detailCell.innerHTML = `<span class="error-detail">${detailText}</span>`;
+                // 如果是 CORS 相关错误，给出提示
+                if (r.error && (r.error.includes('CORS') || r.error.includes('Failed to fetch'))) {
+                    detailCell.innerHTML += '<div class="cors-warning">⚠️ 此错误可能是由于跨域限制导致，如果手动打开链接正常，可忽略此结果。</div>';
+                }
+            }
+        });
+        resultArea.style.display = 'block';
+    }
+
+    testBtn.addEventListener('click', async () => {
+        // 获取 URL 列表（按行分割，过滤空行）
+        const raw = urlsInput.value;
+        const urls = raw.split(/\r?\n/).filter(line => line.trim() !== '');
+        if (urls.length === 0) {
+            alert('请在文本框中输入至少一个 URL');
+            return;
+        }
+
+        // 隐藏之前的结果，显示加载动画
+        resultArea.style.display = 'none';
+        loadingDiv.style.display = 'block';
+        tbody.innerHTML = '';
+
+        const ua = getSelectedUA();
+
+        try {
+            const results = await runTests(urls, ua);
+            renderResults(results);
+        } catch (err) {
+            alert('测试过程出错：' + err.message);
+        } finally {
+            loadingDiv.style.display = 'none';
+        }
+    });
+</script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+{
+    "name": "landing-qyt",
+    "version": "1.0.0",
+    "private": true,
+    "scripts": {
+        "start": "node server.js"
+    },
+    "dependencies": {
+        "compression": "^1.8.1",
+        "express": "^4.22.1"
+    }
+}

@@ -1,0 +1,2100 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>香港六合彩预测中心</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link
+      href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --bg-main: #fef7f0;
+        --bg-card: #ffffff;
+        --bg-header: linear-gradient(135deg, #e74c3c 0%, #c0392b 100%);
+        --accent-primary: #e74c3c;
+        --accent-secondary: #c0392b;
+        --accent-success: #27ae60;
+        --accent-danger: #e74c3c;
+        --accent-warning: #f39c12;
+        --text-primary: #2c3e50;
+        --text-secondary: #7f8c8d;
+        --text-muted: #bdc3c7;
+        --border-light: #ecf0f1;
+        --shadow-soft: 0 4px 20px rgba(0, 0, 0, 0.06);
+        --shadow-card: 0 8px 30px rgba(0, 0, 0, 0.08);
+      }
+
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: "Noto Sans SC", sans-serif;
+        background: var(--bg-main);
+        color: var(--text-primary);
+        min-height: 100vh;
+        line-height: 1.6;
+      }
+
+      .bg-decoration {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        z-index: 0;
+        overflow: hidden;
+      }
+
+      .bg-blob {
+        position: absolute;
+        border-radius: 50%;
+        filter: blur(80px);
+        opacity: 0.4;
+      }
+
+      .bg-blob-1 {
+        width: 500px;
+        height: 500px;
+        background: linear-gradient(135deg, #fadbd8 0%, #f5b7b1 100%);
+        top: -150px;
+        right: -150px;
+      }
+
+      .bg-blob-2 {
+        width: 400px;
+        height: 400px;
+        background: linear-gradient(135deg, #fdebd0 0%, #f9e79f 100%);
+        bottom: 15%;
+        left: -100px;
+      }
+
+      .bg-blob-3 {
+        width: 350px;
+        height: 350px;
+        background: linear-gradient(135deg, #d5f5e3 0%, #abebc6 100%);
+        bottom: 25%;
+        right: 3%;
+      }
+
+      .header {
+        position: relative;
+        z-index: 10;
+        background: var(--bg-header);
+        padding: 2.5rem 1.5rem;
+        text-align: center;
+        color: white;
+        border-radius: 0 0 40px 40px;
+        margin-bottom: 2rem;
+      }
+
+      .header-title {
+        font-size: 1.75rem;
+        font-weight: 700;
+        letter-spacing: 0.05em;
+        margin-bottom: 0.5rem;
+      }
+
+      .header-subtitle {
+        font-size: 0.875rem;
+        opacity: 0.85;
+        letter-spacing: 0.1em;
+        margin-bottom: 1.5rem;
+      }
+
+      .period-pills {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        gap: 1rem;
+        flex-wrap: wrap;
+      }
+
+      .period-pill {
+        background: rgba(255, 255, 255, 0.2);
+        backdrop-filter: blur(10px);
+        padding: 0.625rem 1.25rem;
+        border-radius: 100px;
+        font-size: 0.875rem;
+        border: 1px solid rgba(255, 255, 255, 0.3);
+      }
+
+      .period-pill span {
+        opacity: 0.8;
+        font-size: 0.75rem;
+      }
+      .period-pill strong {
+        margin-left: 0.5rem;
+        font-weight: 600;
+      }
+
+      .zodiac-select-wrapper {
+        position: relative;
+        display: inline-block;
+      }
+
+      .zodiac-select {
+        padding: 0.5rem 2.25rem 0.5rem 1rem;
+        border-radius: 100px;
+        border: 1px solid rgba(255, 255, 255, 0.3);
+        background: rgba(255, 255, 255, 0.15);
+        color: white;
+        font-size: 0.875rem;
+        cursor: pointer;
+        font-family: inherit;
+        font-weight: 500;
+        appearance: none;
+        outline: none;
+        transition: all 0.2s ease;
+      }
+
+      .zodiac-select:hover {
+        background: rgba(255, 255, 255, 0.25);
+        border-color: rgba(255, 255, 255, 0.5);
+      }
+
+      .zodiac-select:focus {
+        border-color: rgba(255, 255, 255, 0.6);
+        background: rgba(255, 255, 255, 0.2);
+      }
+
+      .zodiac-select option {
+        background: #c0392b;
+        color: white;
+        padding: 8px;
+      }
+
+      .select-arrow {
+        position: absolute;
+        right: 0.875rem;
+        top: 50%;
+        transform: translateY(-50%);
+        pointer-events: none;
+        color: white;
+        opacity: 0.7;
+      }
+
+      .result-section {
+        position: relative;
+        z-index: 10;
+        max-width: 600px;
+        margin: 0 auto 2rem;
+        padding: 0 1rem;
+      }
+
+      .result-card {
+        background: var(--bg-card);
+        border-radius: 24px;
+        padding: 1.5rem;
+        box-shadow: var(--shadow-card);
+        border: 1px solid var(--border-light);
+      }
+
+      .result-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 1.25rem;
+        padding-bottom: 1rem;
+        border-bottom: 1px solid var(--border-light);
+      }
+
+      .result-label {
+        font-size: 0.8125rem;
+        color: var(--text-secondary);
+        font-weight: 500;
+      }
+
+      .result-period {
+        background: linear-gradient(
+          135deg,
+          var(--accent-primary) 0%,
+          var(--accent-secondary) 100%
+        );
+        color: white;
+        padding: 0.375rem 1rem;
+        border-radius: 100px;
+        font-size: 0.8125rem;
+        font-weight: 600;
+      }
+
+      .numbers-row {
+        display: flex;
+        justify-content: center;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+        margin-bottom: 1rem;
+      }
+
+      .number-ball {
+        width: 44px;
+        height: 44px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 700;
+        font-size: 1rem;
+        color: white;
+        transition: transform 0.2s ease;
+      }
+
+      .number-ball:hover {
+        transform: scale(1.1);
+      }
+
+      .number-ball.red {
+        background: linear-gradient(135deg, #e74c3c 0%, #c0392b 100%);
+        box-shadow: 0 4px 12px rgba(231, 76, 60, 0.3);
+      }
+
+      .number-ball.blue {
+        background: linear-gradient(135deg, #3498db 0%, #2980b9 100%);
+        box-shadow: 0 4px 12px rgba(52, 152, 219, 0.3);
+      }
+
+      .number-ball.green {
+        background: linear-gradient(135deg, #27ae60 0%, #1e8449 100%);
+        box-shadow: 0 4px 12px rgba(39, 174, 96, 0.3);
+      }
+
+      .zodiacs-row {
+        display: flex;
+        justify-content: center;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+      }
+
+      .zodiac-tag {
+        background: #fef5f3;
+        color: var(--accent-primary);
+        padding: 0.375rem 0.875rem;
+        border-radius: 8px;
+        font-size: 0.8125rem;
+        font-weight: 500;
+        border: 1px solid #fadbd8;
+        transition: all 0.2s ease;
+      }
+
+      .zodiac-tag:hover {
+        background: #fdeaea;
+      }
+
+      .predict-section {
+        position: relative;
+        z-index: 10;
+        max-width: 600px;
+        margin: 0 auto;
+        padding: 0 1rem 7rem;
+      }
+
+      .section-title {
+        font-size: 1.125rem;
+        font-weight: 600;
+        color: var(--text-primary);
+        margin-bottom: 1.25rem;
+        display: flex;
+        align-items: center;
+        gap: 0.625rem;
+      }
+
+      .section-title::before {
+        content: "";
+        width: 4px;
+        height: 20px;
+        background: linear-gradient(
+          180deg,
+          var(--accent-primary) 0%,
+          var(--accent-secondary) 100%
+        );
+        border-radius: 2px;
+      }
+
+      .predict-card {
+        background: var(--bg-card);
+        border-radius: 20px;
+        margin-bottom: 1rem;
+        box-shadow: var(--shadow-soft);
+        border: 1px solid var(--border-light);
+        overflow: hidden;
+        opacity: 0;
+        transform: translateY(20px);
+        transition: all 0.4s ease;
+      }
+
+      .predict-card.visible {
+        opacity: 1;
+        transform: translateY(0);
+      }
+
+      .predict-card:hover {
+        box-shadow: var(--shadow-card);
+        transform: translateY(-2px);
+      }
+
+      .card-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 1rem 1.25rem;
+        background: linear-gradient(135deg, #fef9f7 0%, #fdf2ef 100%);
+        border-bottom: 1px solid var(--border-light);
+      }
+
+      .author-info {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+      }
+
+      .author-avatar {
+        width: 40px;
+        height: 40px;
+        border-radius: 12px;
+        background: linear-gradient(
+          135deg,
+          var(--accent-primary) 0%,
+          var(--accent-secondary) 100%
+        );
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: white;
+        font-weight: 700;
+        font-size: 0.75rem;
+      }
+
+      .author-name {
+        font-weight: 600;
+        font-size: 0.9375rem;
+        color: var(--text-primary);
+      }
+
+      .verified-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.25rem;
+        background: linear-gradient(135deg, #d5f5e3 0%, #abebc6 100%);
+        color: #1e8449;
+        padding: 0.25rem 0.625rem;
+        border-radius: 6px;
+        font-size: 0.6875rem;
+        font-weight: 600;
+      }
+
+      .card-title {
+        padding: 1rem 1.25rem 0.75rem;
+        font-weight: 600;
+        font-size: 0.9375rem;
+        color: var(--accent-primary);
+      }
+
+      .card-content {
+        padding: 0 1.25rem 1.25rem;
+        font-size: 0.8125rem;
+        line-height: 1.9;
+        color: var(--text-muted);
+        /* max-height: 320px; */
+        overflow-y: auto;
+      }
+
+      .card-content::-webkit-scrollbar {
+        width: 3px;
+      }
+      .card-content::-webkit-scrollbar-thumb {
+        background: var(--accent-primary);
+        border-radius: 3px;
+      }
+
+      .record-item {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.5rem 0;
+        border-bottom: 1px dashed #ecf0f1;
+      }
+
+      .record-item:last-child {
+        border-bottom: none;
+      }
+
+      .record-left {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+      }
+
+      .record-period {
+        font-size: 0.75rem;
+        color: var(--text-muted);
+        min-width: 50px;
+      }
+
+      .record-value {
+        font-weight: 500;
+        color: var(--text-primary);
+        font-size: 0.875rem;
+      }
+
+      .record-status {
+        font-size: 0.6875rem;
+        padding: 0.2rem 0.5rem;
+        border-radius: 6px;
+        font-weight: 600;
+      }
+
+      .status-hit {
+        background: linear-gradient(135deg, #d5f5e3 0%, #abebc6 100%);
+        color: #1e8449;
+      }
+
+      .status-miss {
+        background: linear-gradient(135deg, #fadbd8 0%, #f5b7b1 100%);
+        color: #c0392b;
+      }
+
+      .status-pending {
+        background: linear-gradient(135deg, #fdebd0 0%, #f9e79f 100%);
+        color: #b7950b;
+      }
+
+      .zodiac-badge {
+        display: inline-block;
+        background: linear-gradient(135deg, #fef5f3 0%, #fdeaea 100%);
+        color: #c0392b;
+        padding: 0.2rem 0.5rem;
+        margin: 0.1rem;
+        border-radius: 6px;
+        font-size: 0.75rem;
+        font-weight: 500;
+        border: 1px solid #fadbd8;
+      }
+
+      .number-badge {
+        display: inline-block;
+        background: linear-gradient(135deg, #fdebd0 0%, #f9e79f 100%);
+        color: #b7950b;
+        padding: 0.2rem 0.4rem;
+        margin: 0.08rem;
+        border-radius: 6px;
+        font-size: 0.75rem;
+        font-weight: 600;
+        min-width: 26px;
+        text-align: center;
+      }
+
+      .big-badge {
+        background: linear-gradient(135deg, #fadbd8 0%, #f5b7b1 100%);
+        color: #c0392b;
+        padding: 0.2rem 0.5rem;
+        border-radius: 6px;
+        font-size: 0.75rem;
+        font-weight: 600;
+      }
+
+      .small-badge {
+        background: linear-gradient(135deg, #d6eaf8 0%, #aed6f1 100%);
+        color: #2471a3;
+        padding: 0.2rem 0.5rem;
+        border-radius: 6px;
+        font-size: 0.75rem;
+        font-weight: 600;
+      }
+
+      .tail-badge {
+        display: inline-block;
+        background: linear-gradient(135deg, #e8f5e9 0%, #c8e6c9 100%);
+        color: #2e7d32;
+        padding: 0.2rem 0.5rem;
+        border-radius: 6px;
+        font-size: 0.75rem;
+        font-weight: 600;
+      }
+
+      .plain-text {
+        font-size: 0.8125rem;
+        color: var(--text-secondary);
+        line-height: 1.8;
+        white-space: pre-line;
+      }
+
+      .loader-overlay {
+        position: fixed;
+        inset: 0;
+        background: var(--bg-main);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        z-index: 200;
+        transition:
+          opacity 0.5s ease,
+          visibility 0.5s ease;
+      }
+
+      .loader-overlay.done {
+        opacity: 0;
+        visibility: hidden;
+      }
+
+      .loader-spinner {
+        width: 48px;
+        height: 48px;
+        border: 3px solid var(--border-light);
+        border-top-color: var(--accent-primary);
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+      }
+
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      .loader-text {
+        margin-top: 1rem;
+        color: var(--text-secondary);
+        font-size: 0.875rem;
+      }
+
+      .action-bar {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        background: rgba(255, 255, 255, 0.95);
+        backdrop-filter: blur(10px);
+        padding: 1rem;
+        display: flex;
+        justify-content: center;
+        gap: 0.6rem;
+        z-index: 50;
+        border-top: 1px solid var(--border-light);
+        flex-wrap: wrap;
+      }
+
+      .action-btn {
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+        padding: 0.65rem 1rem;
+        border: none;
+        border-radius: 12px;
+        font-size: 0.8125rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s ease;
+      }
+
+      .action-btn:active {
+        transform: scale(0.96);
+      }
+      .action-btn svg {
+        width: 16px;
+        height: 16px;
+      }
+
+      .refresh-btn {
+        background: linear-gradient(
+          135deg,
+          var(--accent-primary) 0%,
+          var(--accent-secondary) 100%
+        );
+        color: white;
+        box-shadow: 0 4px 14px rgba(231, 76, 60, 0.3);
+      }
+
+      .export-btn {
+        background: linear-gradient(135deg, #27ae60 0%, #1e8449 100%);
+        color: white;
+        box-shadow: 0 4px 14px rgba(39, 174, 96, 0.3);
+      }
+
+      .export-txt-btn {
+        background: linear-gradient(135deg, #f39c12 0%, #d68910 100%);
+        color: white;
+        box-shadow: 0 4px 14px rgba(243, 156, 18, 0.3);
+      }
+
+      .import-btn {
+        background: linear-gradient(135deg, #3498db 0%, #2471a3 100%);
+        color: white;
+        box-shadow: 0 4px 14px rgba(52, 152, 219, 0.3);
+      }
+
+      .progress-bar {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 3px;
+        background: var(--border-light);
+        z-index: 100;
+      }
+
+      .progress-fill {
+        height: 100%;
+        background: linear-gradient(
+          90deg,
+          var(--accent-primary),
+          var(--accent-success)
+        );
+        width: 0%;
+        transition: width 0.3s ease;
+      }
+
+      .file-input-hidden {
+        display: none;
+      }
+
+      .toast {
+        position: fixed;
+        top: 20px;
+        left: 50%;
+        transform: translateX(-50%) translateY(-100px);
+        background: var(--accent-success);
+        color: white;
+        padding: 0.75rem 1.5rem;
+        border-radius: 12px;
+        font-size: 0.875rem;
+        font-weight: 500;
+        z-index: 300;
+        transition: transform 0.3s ease;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+      }
+
+      .toast.show {
+        transform: translateX(-50%) translateY(0);
+      }
+      .toast.error {
+        background: var(--accent-danger);
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          animation-duration: 0.01ms !important;
+          transition-duration: 0.01ms !important;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="bg-decoration">
+      <div class="bg-blob bg-blob-1"></div>
+      <div class="bg-blob bg-blob-2"></div>
+      <div class="bg-blob bg-blob-3"></div>
+    </div>
+
+    <div class="progress-bar">
+      <div class="progress-fill" id="progressFill"></div>
+    </div>
+
+    <div class="loader-overlay" id="loader">
+      <div class="loader-spinner"></div>
+      <div class="loader-text">正在获取最新开奖数据...</div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+
+    <header class="header">
+      <h1 class="header-title">香港六合彩预测中心</h1>
+      <p class="header-subtitle">数据分析 走势预测</p>
+      <div class="period-pills">
+        <div class="zodiac-select-wrapper">
+          <select class="zodiac-select" id="zodiacYearSelect">
+            <option value="0">鼠年</option>
+            <option value="1">牛年</option>
+            <option value="2">虎年</option>
+            <option value="3">兔年</option>
+            <option value="4">龙年</option>
+            <option value="5" selected>蛇年</option>
+            <option value="6">马年</option>
+            <option value="7">羊年</option>
+            <option value="8">猴年</option>
+            <option value="9">鸡年</option>
+            <option value="10">狗年</option>
+            <option value="11">猪年</option>
+          </select>
+          <svg
+            class="select-arrow"
+            width="12"
+            height="12"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+          >
+            <path d="M6 9l6 6 6-6" />
+          </svg>
+        </div>
+        <div class="period-pill">
+          <span>当前期号</span>
+          <strong id="currentPeriod">--</strong>
+        </div>
+        <div class="period-pill">
+          <span>预测期号</span>
+          <strong id="nextPeriod">--</strong>
+        </div>
+      </div>
+    </header>
+
+    <section class="result-section">
+      <div class="result-card">
+        <div class="result-header">
+          <span class="result-label">最新开奖结果</span>
+          <span class="result-period" id="resultPeriod">--</span>
+        </div>
+        <div class="numbers-row" id="numbersRow"></div>
+        <div class="zodiacs-row" id="zodiacsRow"></div>
+      </div>
+    </section>
+
+    <section class="predict-section">
+      <h2 class="section-title">
+        第 <span id="predictPeriod">--</span> 期预测推荐
+      </h2>
+      <div id="cardsContainer"></div>
+    </section>
+
+    <div class="action-bar">
+      <input
+        type="file"
+        id="fileInput"
+        class="file-input-hidden"
+        accept=".json"
+      />
+      <button class="action-btn import-btn" id="importBtn">
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          stroke-width="2"
+        >
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"
+          />
+        </svg>
+        导入
+      </button>
+      <button class="action-btn export-btn" id="exportBtn">
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          stroke-width="2"
+        >
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4"
+          />
+        </svg>
+        导出
+      </button>
+      <button class="action-btn export-txt-btn" id="exportTxtBtn">
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          stroke-width="2"
+        >
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+          />
+        </svg>
+        TXT
+      </button>
+      <button class="action-btn refresh-btn" id="refreshBtn">
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          stroke-width="2"
+        >
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+          />
+        </svg>
+        刷新
+      </button>
+    </div>
+
+    <script>
+      // ==================== 核心配置 ====================
+
+      var ZODIACS = [
+        "鼠",
+        "牛",
+        "虎",
+        "兔",
+        "龙",
+        "蛇",
+        "马",
+        "羊",
+        "猴",
+        "鸡",
+        "狗",
+        "猪",
+      ];
+
+      // var API_URL = "https://ty202601.com/lotteryV3/lotOp.do";
+      var MAX_RECORDS = 9;
+
+      var RED_NUMBERS = [
+        1, 2, 7, 8, 12, 13, 18, 19, 23, 24, 29, 30, 34, 35, 40, 45, 46,
+      ];
+      var BLUE_NUMBERS = [
+        3, 4, 9, 10, 14, 15, 20, 25, 26, 31, 36, 37, 41, 42, 47, 48,
+      ];
+      var GREEN_NUMBERS = [
+        5, 6, 11, 16, 17, 21, 22, 27, 28, 32, 33, 38, 39, 43, 44, 49,
+      ];
+
+      // ==================== 生肖计算 ====================
+
+      var currentZodiacIndex = 5;
+
+      function getZodiacByNumber(num) {
+        var zodiacIndex = (((currentZodiacIndex - (num - 1)) % 12) + 12) % 12;
+        return ZODIACS[zodiacIndex];
+      }
+
+      function getWaveByNumber(num) {
+        if (RED_NUMBERS.indexOf(num) !== -1) return "red";
+        if (BLUE_NUMBERS.indexOf(num) !== -1) return "blue";
+        if (GREEN_NUMBERS.indexOf(num) !== -1) return "green";
+        return "red";
+      }
+
+      // ==================== 模板数据 ====================
+
+      var defaultTemplates = [
+        {
+          account: "xh2001",
+          title: "好人资料必中香港{period}期",
+          type: "zodiac_single",
+          records: [
+            { period: "011", zodiac: "蛇", hit: false },
+            { period: "012", zodiac: "龙", hit: false },
+            { period: "013", zodiac: "虎", hit: false },
+            { period: "014", zodiac: "蛇", hit: false },
+            { period: "015", zodiac: "虎", hit: false },
+            { period: "016", zodiac: "狗", hit: true },
+            { period: "017", zodiac: "牛", hit: false },
+            { period: "018", zodiac: "猴", hit: true },
+            { period: "019", zodiac: "鸡", hit: null },
+          ],
+        },
+        {
+          account: "xh2002",
+          title: "香港看我分析{period}期",
+          type: "big_random",
+          content: "香港{last_period}期特码{last_type}开始了，这期买{new_type}",
+        },
+        {
+          account: "xh2003",
+          title: "香港{period}不看错过1个亿",
+          type: "tail",
+          records: [
+            { period: "010", tail: "2", hit: false },
+            { period: "011", tail: "3", hit: false },
+            { period: "012", tail: "5", hit: false },
+            { period: "013", tail: "7", hit: false },
+            { period: "014", tail: "3", hit: false },
+            { period: "015", tail: "6", hit: false },
+            { period: "016", tail: "9", hit: false },
+            { period: "017", tail: "3", hit: false },
+            { period: "018", tail: "1", hit: false },
+            { period: "019", tail: "2", hit: null },
+          ],
+        },
+        {
+          account: "xh2004",
+          title: "香港赌侠{period}期心水推荐",
+          type: "zodiac_double",
+          content: "今日平肖 {zodiac1} {zodiac2} 中1不亏中2血赚\n上期 0 中",
+        },
+        {
+          account: "xh2005",
+          title: "财神托梦香港{period}",
+          type: "zodiac_four",
+          content: "四肖中特\n{zodiacs}\n跟上回血",
+        },
+        {
+          account: "xh2006",
+          title: "香港{period}期小飞棍来咯",
+          type: "zodiac_single_text",
+          content:
+            "香港这期{zodiac}很热，今天闭眼买{zodiac}，平特一肖{zodiac}走起 必中",
+        },
+        {
+          account: "xh2007",
+          title: "香港第{period}期心水推荐",
+          type: "big_small",
+          records: [
+            { period: "010", value: "大", hit: true },
+            { period: "011", value: "大", hit: false },
+            { period: "012", value: "小", hit: true },
+            { period: "013", value: "大", hit: true },
+            { period: "014", value: "小", hit: true },
+            { period: "015", value: "大", hit: true },
+            { period: "016", value: "大", hit: false },
+            { period: "017", value: "大", hit: true },
+            { period: "018", value: "大", hit: false },
+            { period: "019", value: "小", hit: null },
+          ],
+        },
+        {
+          account: "xh2008",
+          title: "香港电报{period}期",
+          type: "zodiac_single_text",
+          content: "香港本期一肖{zodiac} 大吉大利 今晚买{zodiac}  必中",
+        },
+        {
+          account: "xh2009",
+          title: "{period}期小明心水大放送",
+          type: "zodiac_single_text",
+          content: "本期平特一肖绝对有{zodiac}，这期买{zodiac}，必中",
+        },
+        {
+          account: "xh2010",
+          title: "香港{period}期长跟必赚",
+          type: "zodiac_six",
+          records: [
+            {
+              period: "010",
+              zodiacs: ["虎", "鸡", "鼠", "马", "牛", "龙"],
+              hit: true,
+            },
+            {
+              period: "011",
+              zodiacs: ["狗", "猪", "鸡", "猴", "兔", "马"],
+              hit: true,
+            },
+            {
+              period: "012",
+              zodiacs: ["蛇", "龙", "虎", "兔", "狗", "牛"],
+              hit: false,
+            },
+            {
+              period: "013",
+              zodiacs: ["牛", "龙", "马", "猪", "兔", "虎"],
+              hit: false,
+            },
+            {
+              period: "014",
+              zodiacs: ["马", "羊", "龙", "狗", "兔", "鼠"],
+              hit: false,
+            },
+            {
+              period: "015",
+              zodiacs: ["猪", "马", "牛", "龙", "猴", "羊"],
+              hit: false,
+            },
+            {
+              period: "016",
+              zodiacs: ["兔", "猪", "鼠", "蛇", "羊", "猴"],
+              hit: true,
+            },
+            {
+              period: "017",
+              zodiacs: ["龙", "猪", "鼠", "兔", "蛇", "牛"],
+              hit: false,
+            },
+            {
+              period: "018",
+              zodiacs: ["羊", "猴", "蛇", "马", "鼠", "狗"],
+              hit: true,
+            },
+            {
+              period: "019",
+              zodiacs: ["猪", "马", "鼠", "兔", "猴", "鸡"],
+              hit: null,
+            },
+          ],
+        },
+        {
+          account: "xh2011",
+          title: "{period}期香港内幕来了",
+          type: "zodiac_bet",
+          content: "本期平肖{zodiac}×800\n霞姐带你买飞机",
+        },
+        {
+          account: "xh2012",
+          title: "{period}期香港一肖",
+          type: "zodiac_single",
+          records: [
+            { period: "010", zodiac: "马", hit: false },
+            { period: "011", zodiac: "牛", hit: false },
+            { period: "012", zodiac: "猴", hit: false },
+            { period: "013", zodiac: "虎", hit: false },
+            { period: "014", zodiac: "羊", hit: false },
+            { period: "015", zodiac: "猴", hit: false },
+            { period: "016", zodiac: "马", hit: false },
+            { period: "017", zodiac: "虎", hit: true },
+            { period: "018", zodiac: "马", hit: false },
+            { period: "019", zodiac: "鸡", hit: null },
+          ],
+        },
+        {
+          account: "xh2013",
+          title: "香港{period}期买了就中",
+          type: "zodiac_single_text",
+          content: "今日黄历宜祭祀，那就平特一肖买{zodiac}",
+        },
+        {
+          account: "xh2014",
+          title: "香港{period}期湿滑小连肖",
+          type: "zodiac_triple",
+          content: "三连肖\n{zodiacs}\n复式三连肖",
+        },
+        {
+          account: "xh2015",
+          title: "香港心水{period}期",
+          type: "tail_single",
+          records: [
+            { period: "010", tail: "2", hit: false },
+            { period: "011", tail: "7", hit: false },
+            { period: "012", tail: "5", hit: false },
+            { period: "013", tail: "8", hit: false },
+            { period: "014", tail: "4", hit: false },
+            { period: "015", tail: "5", hit: false },
+            { period: "016", tail: "9", hit: false },
+            { period: "017", tail: "6", hit: false },
+            { period: "018", tail: "5", hit: false },
+            { period: "019", tail: "1", hit: null },
+          ],
+        },
+        {
+          account: "xh2016",
+          title: "走过路过不要错过香港{period}",
+          type: "special_numbers",
+          content: "精准24码\n{numbers}",
+        },
+        {
+          account: "xh2017",
+          title: "香港每期推荐一肖{period}期",
+          type: "zodiac_single_text",
+          content: "今日推荐平特一肖-{zodiac}\n走势无常\n理性参考",
+        },
+        {
+          account: "xh2018",
+          title: "香港{period}期老司机发车了",
+          type: "zodiac_single_text",
+          content: "今天香港买一肖{zodiac}",
+        },
+        {
+          account: "xh2019",
+          title: "买马致富{period}期",
+          type: "exclude_numbers",
+          content: "香港{period}期继续买五不中{numbers}梭哈必中",
+        },
+        {
+          account: "xh2020",
+          title: "香港{period}期李白发来贺诗",
+          type: "poem",
+          poems: [
+            "霜枫如火映山溪，雁过南天一字齐\n欲问秋光何处好，半坡黄叶半坡题",
+            "半窗斜月照空床，一枕清风引梦长\n欲问此时身何处，云山烟水两茫茫",
+            "春风一夜到衡阳，楚水燕山万里长\n莫道春来便归去，江南虽好是他乡",
+            "黄河远上白云间，一片孤城万仞山\n羌笛何须怨杨柳，春风不度玉门关",
+          ],
+        },
+      ];
+
+      // ==================== 状态变量 ====================
+
+      var templates = null;
+      var currentData = null;
+      var actualZodiacs = [];
+      var actualNumbers = [];
+      var actualTails = [];
+      var actualSpecialNumber = 0;
+      var generatedData = [];
+      var lastOpenedPeriodShort = "";
+
+      // ==================== 工具函数 ====================
+
+      function randomInt(min, max) {
+        return Math.floor(Math.random() * (max - min + 1)) + min;
+      }
+
+      function randomZodiac() {
+        return ZODIACS[randomInt(0, 11)];
+      }
+
+      function randomZodiacs(count) {
+        var result = [];
+        var used = {};
+        while (result.length < count) {
+          var z = randomZodiac();
+          if (!used[z]) {
+            used[z] = true;
+            result.push(z);
+          }
+        }
+        return result;
+      }
+
+      function randomTail() {
+        return randomInt(0, 9).toString();
+      }
+
+      function randomBigSmall() {
+        return Math.random() > 0.5 ? "大" : "小";
+      }
+
+      function randomNumbers(count, sort) {
+        var result = [];
+        var used = {};
+        while (result.length < count) {
+          var n = randomInt(1, 49);
+          if (!used[n]) {
+            used[n] = true;
+            result.push(n);
+          }
+        }
+        if (sort) {
+          result.sort(function (a, b) {
+            return a - b;
+          });
+        }
+        return result;
+      }
+
+      function getShortPeriod(period) {
+        return period.slice(-3);
+      }
+
+      function formatPeriodForDisplay(period) {
+        return period.slice(0, 4) + "-" + period.slice(4);
+      }
+
+      function showToast(message, isError) {
+        var toast = document.getElementById("toast");
+        toast.textContent = message;
+        toast.className = "toast" + (isError ? " error" : "");
+        setTimeout(function () {
+          toast.classList.add("show");
+        }, 10);
+        setTimeout(function () {
+          toast.classList.remove("show");
+        }, 3000);
+      }
+
+      // ==================== 判断函数 ====================
+
+      function checkZodiacHit(predictedZodiac) {
+        return actualZodiacs.indexOf(predictedZodiac) !== -1;
+      }
+
+      function checkZodiacsHit(predictedZodiacs) {
+        for (var i = 0; i < predictedZodiacs.length; i++) {
+          if (actualZodiacs.indexOf(predictedZodiacs[i]) !== -1) return true;
+        }
+        return false;
+      }
+
+      function checkBigSmallHit(predictedValue) {
+        var isBig = actualSpecialNumber >= 25;
+        return predictedValue === "大" ? isBig : !isBig;
+      }
+
+      function checkTailHit(predictedTail) {
+        return actualTails.indexOf(predictedTail) !== -1;
+      }
+
+      // ==================== 数据获取 ====================
+
+      async function fetchLotteryData() {
+        try {
+          document.getElementById("progressFill").style.width = "30%";
+
+          // GraphQL 请求参数
+          const graphqlQuery = {
+            operationName: "marksixDraw",
+            query: `fragment lotteryDrawsFragment on LotteryDraw {
+  id
+  year
+  no
+  openDate
+  closeDate
+  drawDate
+  status
+  snowballCode
+  snowballName_en
+  snowballName_ch
+  lotteryPool {
+    sell
+    status
+    totalInvestment
+    jackpot
+    unitBet
+    estimatedPrize
+    derivedFirstPrizeDiv
+    lotteryPrizes {
+      type
+      winningUnit
+      dividend
+    }
+  }
+  drawResult {
+    drawnNo
+    xDrawnNo
+  }
+}
+
+query marksixDraw {
+  timeOffset {
+    m6
+    ts
+  }
+  lotteryDraws {
+    ...lotteryDrawsFragment
+  }
+}`,
+            variables: {},
+          };
+
+          const response = await fetch(
+            "https://info.cld.hkjc.com/graphql/base/",
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify(graphqlQuery),
+            },
+          );
+
+          if (!response.ok) {
+            throw new Error(`HTTP 错误！状态码: ${response.status}`);
+          }
+
+          const data = await response.json();
+          document.getElementById("progressFill").style.width = "70%";
+
+          // 从返回数据中提取最近一期已开奖的结果
+          if (data?.data?.lotteryDraws) {
+            // 筛选出状态为 "Result" 的已开奖项，并取第一个（最新的）
+            const resultDraw = data.data.lotteryDraws.find(
+              (draw) => draw.status === "Result",
+            );
+
+            if (resultDraw?.drawResult?.drawnNo?.length > 0) {
+              // 格式化期号
+              const expect =
+                resultDraw.year + "0" + String(resultDraw.no).padStart(2, "0");
+
+              // 获取号码
+              const drawnNo = resultDraw.drawResult.drawnNo; // [8,28,33,36,37,46]
+              const xDrawnNo = resultDraw.drawResult.xDrawnNo; // 4
+
+              // 组合所有号码（按您的格式用逗号连接）
+              const allNumbers = [...drawnNo, xDrawnNo];
+              const openCode = allNumbers.join(",");
+
+              // 更新进度条完成
+              document.getElementById("progressFill").style.width = "100%";
+              console.log(expect);
+
+              return {
+                expect: expect, // "202619"
+                openCode: openCode, // "8,28,33,36,37,46,4"
+              };
+            }
+          }
+
+          throw new Error("未找到已开奖数据");
+        } catch (error) {
+          console.error("获取数据失败:", error);
+          // 出错也完成进度条
+          if (document.getElementById("progressFill")) {
+            document.getElementById("progressFill").style.width = "100%";
+          }
+          return {}; // 返回空对象
+        }
+        // try {
+        //   document.getElementById("progressFill").style.width = "30%";
+        //   var response = await fetch(API_URL, {
+        //     method: "POST",
+        //     headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        //     body: "lotCode=LHC",
+        //   });
+        //   var data = await response.json();
+        //   document.getElementById("progressFill").style.width = "70%";
+        //   if (data && data.success && data.last) {
+        //     return {
+        //       expect: data.last.qiHao,
+        //       openCode: data.last.haoMa,
+        //     };
+        //   }
+        //   throw new Error("数据格式错误");
+        // } catch (error) {
+        //   console.error("获取数据失败:", error);
+        //   return {
+        //     // expect: "2026019",
+        //     // openCode: "08,28,46,37,36,33,04",
+        //   };
+        // }
+      }
+
+      // ==================== 渲染函数 ====================
+
+      function renderResult(data) {
+        var nums = data.openCode.split(",");
+        actualNumbers = nums.map(function (n) {
+          return parseInt(n);
+        });
+        actualSpecialNumber = actualNumbers[0];
+        actualTails = actualNumbers.map(function (n) {
+          return (n % 10).toString();
+        });
+        actualZodiacs = actualNumbers.map(function (n) {
+          return getZodiacByNumber(n);
+        });
+        var waves = actualNumbers.map(function (n) {
+          return getWaveByNumber(n);
+        });
+
+        lastOpenedPeriodShort = getShortPeriod(data.expect);
+
+        var numbersRow = document.getElementById("numbersRow");
+        numbersRow.innerHTML = actualNumbers
+          .map(function (num, i) {
+            var wave = waves[i] || "red";
+            return (
+              '<div class="number-ball ' +
+              wave +
+              '">' +
+              (num < 10 ? "0" + num : num) +
+              "</div>"
+            );
+          })
+          .join("");
+
+        var zodiacsRow = document.getElementById("zodiacsRow");
+        zodiacsRow.innerHTML = actualZodiacs
+          .map(function (z) {
+            return '<span class="zodiac-tag">' + z + "</span>";
+          })
+          .join("");
+
+        document.getElementById("currentPeriod").textContent =
+          formatPeriodForDisplay(data.expect);
+        document.getElementById("resultPeriod").textContent =
+          "第 " + data.expect + " 期";
+
+        var nextPeriod = (parseInt(data.expect) + 1).toString();
+        document.getElementById("nextPeriod").textContent =
+          formatPeriodForDisplay(nextPeriod);
+        document.getElementById("predictPeriod").textContent = nextPeriod;
+      }
+
+      // ==================== 核心处理函数 ====================
+
+      function checkRecordHit(template, record) {
+        if (template.type === "zodiac_single") {
+          return checkZodiacHit(record.zodiac);
+        } else if (template.type === "zodiac_six") {
+          return checkZodiacsHit(record.zodiacs);
+        } else if (template.type === "big_small") {
+          return checkBigSmallHit(record.value);
+        } else if (
+          template.type === "tail" ||
+          template.type === "tail_single"
+        ) {
+          return checkTailHit(record.tail);
+        }
+        return false;
+      }
+
+      function recheckRecordsByPeriod(template) {
+        if (!template.records) return;
+
+        var records = template.records;
+
+        for (var i = 0; i < records.length; i++) {
+          var record = records[i];
+
+          if (record.period === lastOpenedPeriodShort) {
+            record.hit = checkRecordHit(template, record);
+          } else if (record.period > lastOpenedPeriodShort) {
+            record.hit = null;
+          }
+        }
+      }
+
+      function processTemplate(template, newPeriodShort) {
+        if (!template.records) return;
+
+        var records = template.records;
+        var lastRecord = records[records.length - 1];
+
+        if (lastRecord.period === lastOpenedPeriodShort) {
+          lastRecord.hit = checkRecordHit(template, lastRecord);
+
+          records.shift();
+
+          var newRecord = createNewRecord(template, newPeriodShort);
+          if (newRecord) {
+            records.push(newRecord);
+          }
+        }
+
+        while (records.length > MAX_RECORDS) {
+          records.shift();
+        }
+      }
+
+      function createNewRecord(template, period) {
+        if (template.type === "zodiac_single") {
+          return { period: period, zodiac: randomZodiac(), hit: null };
+        } else if (template.type === "zodiac_six") {
+          return { period: period, zodiacs: randomZodiacs(6), hit: null };
+        } else if (template.type === "big_small") {
+          return { period: period, value: randomBigSmall(), hit: null };
+        } else if (
+          template.type === "tail" ||
+          template.type === "tail_single"
+        ) {
+          return { period: period, tail: randomTail(), hit: null };
+        }
+        return null;
+      }
+
+      function getStatusText(hit) {
+        if (hit === true) return "中";
+        if (hit === false) return "没中";
+        return "必中";
+      }
+
+      function getStatusSymbol(hit) {
+        if (hit === true) return "√";
+        if (hit === false) return "×";
+        return "???";
+      }
+
+      function getStatusClass(hit) {
+        if (hit === true) return "status-hit";
+        if (hit === false) return "status-miss";
+        return "status-pending";
+      }
+
+      // ==================== 预测生成 ====================
+
+      function generatePrediction(template, nextPeriod) {
+        var shortPeriod = getShortPeriod(nextPeriod);
+        var lastPeriod = getShortPeriod(currentData.expect);
+        var title = template.title.replace("{period}", shortPeriod);
+        var contentHtml = "";
+        var textContent = "";
+
+        switch (template.type) {
+          case "zodiac_single": {
+            var records = template.records;
+            contentHtml =
+              "加精 加精 加精" +
+              records
+                .map(function (r) {
+                  return (
+                    '<div class="record-item">' +
+                    '<div class="record-left">' +
+                    '<span class="record-period">' +
+                    r.period +
+                    "期一肖</span>" +
+                    '<span class="record-value">' +
+                    r.zodiac +
+                    "</span>" +
+                    "</div>" +
+                    '<span class="record-status ' +
+                    getStatusClass(r.hit) +
+                    '">' +
+                    getStatusText(r.hit) +
+                    "</span>" +
+                    "</div>"
+                  );
+                })
+                .join("");
+            textContent =
+              "加精 加精 加精\n" +
+              records
+                .map(function (r) {
+                  return (
+                    r.period + "期一肖" + r.zodiac + " " + getStatusText(r.hit)
+                  );
+                })
+                .join("\n");
+            break;
+          }
+
+          case "big_random": {
+            var lastType = actualSpecialNumber >= 25 ? "大" : "小";
+            var newType = randomBigSmall();
+            var text = template.content
+              .replace("{last_period}", lastPeriod)
+              .replace("{last_type}", lastType)
+              .replace("{new_type}", newType);
+            contentHtml = '<div class="plain-text">' + text + "</div>";
+            textContent = text;
+            break;
+          }
+
+          case "tail": {
+            var records = template.records;
+            contentHtml =
+              "加精 加精 加精" +
+              records
+                .map(function (r) {
+                  return (
+                    '<div class="record-item">' +
+                    '<div class="record-left">' +
+                    '<span class="record-period">' +
+                    r.period +
+                    "期平特尾数 </span>" +
+                    '<span class="record-value">' +
+                    r.tail +
+                    "</span>" +
+                    "</div>" +
+                    '<span class="record-status ' +
+                    getStatusClass(r.hit) +
+                    '">' +
+                    getStatusSymbol(r.hit) +
+                    "</span>" +
+                    "</div>"
+                  );
+                })
+                .join("");
+            textContent =
+              "加精 加精 加精\n" +
+              records
+                .map(function (r) {
+                  return (
+                    r.period + "期平特尾数 " + r.tail + getStatusSymbol(r.hit)
+                  );
+                })
+                .join("\n");
+            break;
+          }
+
+          case "zodiac_double": {
+            var z1 = randomZodiac();
+            var z2 = randomZodiac();
+            while (z2 === z1) z2 = randomZodiac();
+            var text = template.content
+              .replace("{zodiac1}", z1)
+              .replace("{zodiac2}", z2);
+            contentHtml = '<div class="plain-text">' + text + "</div>";
+            textContent = text;
+            break;
+          }
+
+          case "zodiac_four": {
+            var zodiacs = randomZodiacs(4);
+            contentHtml =
+              '<div class="plain-text">四肖中特</div>' +
+              '<div style="margin:0.5rem 0">' +
+              zodiacs
+                .map(function (z) {
+                  return '<span class="zodiac-badge">' + z + "</span>";
+                })
+                .join(" ") +
+              "</div>" +
+              '<div class="plain-text">跟上回血</div>';
+            textContent = "四肖中特\n" + zodiacs.join(" ") + "\n跟上回血";
+            break;
+          }
+
+          case "zodiac_single_text": {
+            var zodiac = randomZodiac();
+            var text = template.content.replace(/{zodiac}/g, zodiac);
+            contentHtml = '<div class="plain-text">' + text + "</div>";
+            textContent = text;
+            break;
+          }
+
+          case "big_small": {
+            var records = template.records;
+            contentHtml =
+              "七期必中特码" +
+              records
+                .map(function (r) {
+                  var badgeClass =
+                    r.value === "大" ? "big-badge" : "small-badge";
+                  var statusText =
+                    r.hit === null ? "必中" : r.hit ? "中中中" : "不中";
+                  return (
+                    '<div class="record-item">' +
+                    '<div class="record-left">' +
+                    '<span class="record-period">' +
+                    r.period +
+                    "期特码买</span>" +
+                    '<span class="' +
+                    badgeClass +
+                    '">' +
+                    r.value +
+                    "</span>" +
+                    "</div>" +
+                    '<span class="record-status ' +
+                    getStatusClass(r.hit) +
+                    '">' +
+                    statusText +
+                    "</span>" +
+                    "</div>"
+                  );
+                })
+                .join("");
+            textContent =
+              "七期必中特码\n" +
+              records
+                .map(function (r) {
+                  var statusText =
+                    r.hit === null ? "必中" : r.hit ? "中中中" : "不中";
+                  return r.period + "期特码买" + r.value + "  " + statusText;
+                })
+                .join("\n");
+            break;
+          }
+
+          case "zodiac_six": {
+            var records = template.records;
+            contentHtml =
+              "六肖中特" +
+              records
+                .map(function (r) {
+                  var statusText =
+                    r.hit === null ? "必中" : r.hit ? "中" : "挂";
+                  return (
+                    '<div class="record-item">' +
+                    '<div class="record-left">' +
+                    '<span class="record-period">' +
+                    r.period +
+                    "期:六肖:</span>" +
+                    "<span>" +
+                    r.zodiacs
+                      .map(function (z) {
+                        return '<span class="zodiac-badge">' + z + "</span>";
+                      })
+                      .join("") +
+                    "</span>" +
+                    "</div>" +
+                    '<span class="record-status ' +
+                    getStatusClass(r.hit) +
+                    '">' +
+                    statusText +
+                    "</span>" +
+                    "</div>"
+                  );
+                })
+                .join("");
+            textContent =
+              "六肖中特\n" +
+              records
+                .map(function (r) {
+                  var statusText =
+                    r.hit === null ? "必中" : r.hit ? "中" : "挂";
+                  return (
+                    r.period +
+                    "期:六肖: " +
+                    r.zodiacs.join(" ") +
+                    " " +
+                    statusText
+                  );
+                })
+                .join("\n");
+            break;
+          }
+
+          case "zodiac_bet": {
+            var zodiac = randomZodiac();
+            var text = template.content.replace("{zodiac}", zodiac);
+            contentHtml = '<div class="plain-text">' + text + "</div>";
+            textContent = text;
+            break;
+          }
+
+          case "zodiac_triple": {
+            var zodiacs = randomZodiacs(3);
+            contentHtml =
+              '<div class="plain-text">三连肖</div>' +
+              '<div style="margin:0.5rem 0">' +
+              zodiacs
+                .map(function (z) {
+                  return '<span class="zodiac-badge">' + z + "</span>";
+                })
+                .join(" ") +
+              "</div>" +
+              '<div class="plain-text">复式三连肖</div>';
+            textContent = "三连肖\n" + zodiacs.join(" ") + "\n复式三连肖";
+            break;
+          }
+
+          // 新增：tail_single 类型，显示历史记录
+          case "tail_single": {
+            var records = template.records;
+            // 找到最后一条（预测期）和倒数第二条（上期）
+            var lastRecord = records[records.length - 1];
+            var prevRecord =
+              records.length > 1 ? records[records.length - 2] : null;
+
+            // 显示：上期推荐X尾没中，今天推荐Y尾，连中开始
+            var prevTail = prevRecord ? prevRecord.tail : "?";
+            var prevHit = prevRecord ? prevRecord.hit : false;
+            var prevStatus = prevHit ? "中" : "没中";
+            var newTail = lastRecord.tail;
+
+            contentHtml =
+              '<div class="record-item">' +
+              '<div class="record-left">' +
+              '<span class="record-period">上期推荐</span>' +
+              '<span class="tail-badge">' +
+              prevTail +
+              "尾</span>" +
+              "</div>" +
+              '<span class="record-status ' +
+              getStatusClass(prevHit) +
+              '">' +
+              prevStatus +
+              "</span>" +
+              "</div>" +
+              '<div class="record-item">' +
+              '<div class="record-left">' +
+              '<span class="record-period">今天推荐</span>' +
+              '<span class="tail-badge">' +
+              newTail +
+              "尾</span>" +
+              "</div>" +
+              '<span class="record-status ' +
+              getStatusClass(null) +
+              '">必中</span>' +
+              "</div>" +
+              '<div class="plain-text" style="margin-top:0.5rem">连中开始</div>';
+
+            textContent =
+              "上期推荐" +
+              prevTail +
+              "尾" +
+              prevStatus +
+              "，今天推荐" +
+              newTail +
+              "尾，连中开始";
+            break;
+          }
+
+          case "special_numbers": {
+            var nums = randomNumbers(24, false);
+            contentHtml =
+              '<div class="plain-text">精准24码</div>' +
+              '<div style="margin-top:0.5rem">' +
+              nums
+                .map(function (n) {
+                  return '<span class="number-badge">' + n + "</span>";
+                })
+                .join(" ") +
+              "</div>";
+            textContent = "精准24码\n" + nums.join(" ");
+            break;
+          }
+
+          case "exclude_numbers": {
+            var nums = randomNumbers(5, true);
+            var text = template.content
+              .replace("{period}", shortPeriod)
+              .replace("{numbers}", nums.join(", "));
+            contentHtml = '<div class="plain-text">' + text + "</div>";
+            textContent = text;
+            break;
+          }
+
+          case "poem": {
+            var poems = template.poems;
+            var poem = poems[randomInt(0, poems.length - 1)];
+            contentHtml = '<div class="plain-text">' + poem + "</div>";
+            textContent = poem;
+            break;
+          }
+        }
+
+        return {
+          title: title,
+          contentHtml: contentHtml,
+          textContent: textContent,
+        };
+      }
+
+      // ==================== 卡片渲染 ====================
+
+      function renderCards(nextPeriod) {
+        var container = document.getElementById("cardsContainer");
+        container.innerHTML = "";
+        generatedData = [];
+
+        templates.forEach(function (template, index) {
+          var prediction = generatePrediction(template, nextPeriod);
+
+          generatedData.push({
+            account: template.account,
+            title: prediction.title,
+            content: prediction.textContent,
+          });
+
+          var card = document.createElement("div");
+          card.className = "predict-card";
+
+          card.innerHTML =
+            '<div class="card-header">' +
+            '<div class="author-info">' +
+            '<div class="author-avatar">' +
+            template.account.slice(-4) +
+            "</div>" +
+            '<span class="author-name">' +
+            template.account +
+            "</span>" +
+            "</div>" +
+            '<span class="verified-badge">' +
+            '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">' +
+            '<path d="M20 6L9 17l-5-5"/>' +
+            "</svg>" +
+            "已验证" +
+            "</span>" +
+            "</div>" +
+            '<div class="card-title">' +
+            prediction.title +
+            "</div>" +
+            '<div class="card-content">' +
+            prediction.contentHtml +
+            "</div>";
+
+          container.appendChild(card);
+
+          setTimeout(function () {
+            card.classList.add("visible");
+          }, index * 50);
+        });
+      }
+
+      // ==================== 导入导出 ====================
+
+      function exportData() {
+        var dataToSave = {
+          version: 1,
+          type: "hk",
+          savedAt: new Date().toISOString(),
+          currentZodiacIndex: currentZodiacIndex,
+          lastOpenedPeriodShort: lastOpenedPeriodShort,
+          templates: templates,
+        };
+
+        var jsonStr = JSON.stringify(dataToSave, null, 2);
+        var blob = new Blob([jsonStr], { type: "application/json" });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement("a");
+        a.href = url;
+        a.download = "hk_predict_data.json";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+        showToast("数据已导出");
+      }
+
+      function importData(file) {
+        var reader = new FileReader();
+        reader.onload = function (e) {
+          try {
+            var data = JSON.parse(e.target.result);
+            if (data.templates && Array.isArray(data.templates)) {
+              templates = data.templates;
+              if (data.currentZodiacIndex !== undefined) {
+                currentZodiacIndex = data.currentZodiacIndex;
+                document.getElementById("zodiacYearSelect").value =
+                  currentZodiacIndex;
+              }
+              if (data.lastOpenedPeriodShort) {
+                lastOpenedPeriodShort = data.lastOpenedPeriodShort;
+              }
+              showToast("数据导入成功");
+            } else {
+              showToast("文件格式错误", true);
+            }
+          } catch (err) {
+            showToast("文件解析失败", true);
+          }
+        };
+        reader.readAsText(file);
+      }
+
+      function exportTxtFile() {
+        if (generatedData.length === 0) {
+          showToast("请先生成预测数据", true);
+          return;
+        }
+
+        var nextPeriod = (parseInt(currentData.expect) + 1).toString();
+        var shortPeriod = getShortPeriod(nextPeriod);
+
+        var txtContent = generatedData
+          .map(function (item) {
+            return (
+              "账号   " +
+              item.account +
+              "\n" +
+              "标题   " +
+              item.title +
+              "\n" +
+              "内容   \n" +
+              item.content +
+              "\n"
+            );
+          })
+          .join("\n");
+
+        var blob = new Blob([txtContent], { type: "text/plain;charset=utf-8" });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement("a");
+        a.href = url;
+        a.download = "香港" + shortPeriod + "期预测.txt";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+        showToast("已导出 香港" + shortPeriod + "期预测.txt");
+      }
+
+      // ==================== 初始化 ====================
+
+      async function init() {
+        var loader = document.getElementById("loader");
+        var progressFill = document.getElementById("progressFill");
+
+        try {
+          progressFill.style.width = "10%";
+
+          if (!templates) {
+            templates = JSON.parse(JSON.stringify(defaultTemplates));
+          }
+
+          var data = await fetchLotteryData();
+          currentData = data;
+          progressFill.style.width = "80%";
+
+          renderResult(data);
+
+          var newPeriodShort = getShortPeriod(
+            (parseInt(data.expect) + 1).toString(),
+          );
+
+          templates.forEach(function (template) {
+            if (template.records) {
+              processTemplate(template, newPeriodShort);
+            }
+          });
+
+          var nextPeriod = (parseInt(data.expect) + 1).toString();
+          renderCards(nextPeriod);
+
+          progressFill.style.width = "100%";
+
+          setTimeout(function () {
+            loader.classList.add("done");
+          }, 300);
+        } catch (error) {
+          console.error("初始化失败:", error);
+          loader.classList.add("done");
+        }
+      }
+
+      // ==================== 事件绑定 ====================
+
+      document
+        .getElementById("zodiacYearSelect")
+        .addEventListener("change", function () {
+          currentZodiacIndex = parseInt(this.value);
+
+          if (currentData) {
+            renderResult(currentData);
+
+            templates.forEach(function (template) {
+              recheckRecordsByPeriod(template);
+            });
+
+            var nextPeriod = (parseInt(currentData.expect) + 1).toString();
+            renderCards(nextPeriod);
+          }
+        });
+
+      document
+        .getElementById("refreshBtn")
+        .addEventListener("click", async function () {
+          var cards = document.querySelectorAll(".predict-card");
+          cards.forEach(function (card) {
+            card.classList.remove("visible");
+          });
+
+          setTimeout(async function () {
+            var data = await fetchLotteryData();
+            currentData = data;
+            renderResult(data);
+
+            var newPeriodShort = getShortPeriod(
+              (parseInt(data.expect) + 1).toString(),
+            );
+
+            templates.forEach(function (template) {
+              if (template.records) {
+                processTemplate(template, newPeriodShort);
+              }
+            });
+
+            var nextPeriod = (parseInt(data.expect) + 1).toString();
+            renderCards(nextPeriod);
+          }, 400);
+        });
+
+      document
+        .getElementById("exportBtn")
+        .addEventListener("click", exportData);
+      document
+        .getElementById("exportTxtBtn")
+        .addEventListener("click", exportTxtFile);
+
+      document
+        .getElementById("importBtn")
+        .addEventListener("click", function () {
+          document.getElementById("fileInput").click();
+        });
+
+      document
+        .getElementById("fileInput")
+        .addEventListener("change", function (e) {
+          if (e.target.files && e.target.files[0]) {
+            importData(e.target.files[0]);
+            e.target.value = "";
+          }
+        });
+
+      document.addEventListener("DOMContentLoaded", init);
+    </script>
+  </body>
+</html>

@@ -1,0 +1,4 @@
+# Session 文件含敏感信息（token、tokenKey、privateSecret）
+# 必须排除，不能提交到 git
+*
+!.gitignore

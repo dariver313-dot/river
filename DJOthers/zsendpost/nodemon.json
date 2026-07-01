@@ -1,0 +1,9 @@
+{
+  "watch": ["bot.js", ".env", "*.js"],
+  "ignore": ["node_modules", ".git"],
+  "ext": "js,json,env",
+  "exec": "node -r dotenv/config bot.js",
+  "env": {
+    "NODE_ENV": "development"
+  }
+}

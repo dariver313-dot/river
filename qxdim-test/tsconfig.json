@@ -1,0 +1,50 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022"],
+    "types": ["node"],
+
+    /* Type checking */
+    "strict": true,
+    "noImplicitAny": true,
+    "strictNullChecks": true,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitReturns": true,
+    "exactOptionalPropertyTypes": false,
+
+    /* Emit */
+    "noEmit": true,
+    "declaration": false,
+    "sourceMap": false,
+
+    /* Interop */
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+
+    /* Path mapping: 把 src/index.js 的类型映射到 types/index.d.ts */
+    "paths": {
+      "qxdim": ["./types/index.d.ts"],
+      "../src/index.js": ["./types/index.d.ts"],
+      "./src/index.js": ["./types/index.d.ts"]
+    },
+    "baseUrl": "."
+  },
+  "include": [
+    "types/**/*.d.ts",
+    "examples/ts-usage-example.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "src/**/*",
+    "tests/**/*",
+    "tools/**/*",
+    "scripts/**/*"
+  ]
+}

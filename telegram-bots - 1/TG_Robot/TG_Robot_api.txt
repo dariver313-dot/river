@@ -1,0 +1,641 @@
+查询某个会员的详细信息：
+https://bm1.5vlk0.com/livepro/userCenter/getUserDetails?memberId=1961036596666818619
+GET请求
+
+返回数据：
+{
+    "success": true, // 接口调用是否成功
+    "code": "200", // 响应状态码
+    "msg": "success", // 响应消息
+    "retry": false, // 是否重试
+    "history": false, // 是否历史数据
+    "data": {
+        "memberName": "CTQ198081", // 登录账号
+        "agencyMemberName": "kele555", // 所属上级（代理账号）
+        "nickname": "22609196", // 会员昵称
+        "memberType": 3, // 会员类型（3=普通会员）
+        "vipLevel": 4, // VIP等级
+        "balance": "38.028", // 会员余额（元）
+        "withdrawRolling": "48.026", // 出款所需打码量（元）
+        "sumRolling": "1256070.387", // 总打码量（元）
+        "realName": "崔天奇", // 真实姓名
+        "bankList": [ // 绑定的银行卡列表
+            {
+                "id": "2065678846537248800", // 银行卡绑定记录ID
+                "memberId": "1961036596666818619", // 会员ID
+                "username": "CTQ198081", // 用户名
+                "realName": "崔天奇", // 开户人真实姓名
+                "icon": "https://d1amlg258182v0.cloudfront.net/bank-icon/3184bec07ef64327b00dc41afdac4a1b.jpg", // 银行图标URL
+                "bank": "招商银行", // 银行名称
+                "cardNumber": "6217212715000438557", // 银行卡号（加密显示）
+                "withdrawDepositTimes": 0, // 提现/充值次数
+                "bindTime": 1781331190000, // 绑定时间（时间戳）
+                "tenantCode": "AMYLC", // 租户代码
+                "status": 0, // 状态（0=正常）
+                "deleted": 0, // 删除标记（0=未删除）
+                "updateTime": 1781331190000, // 更新时间（时间戳）
+                "tenantName": null, // 租户名称（未返回）
+                "rateType": 2, // 费率类型
+                "bankAddress": null, // 银行地址（未返回）
+                "operatorId": null, // 操作员ID（未返回）
+                "operatorName": null // 操作员姓名（未返回）
+            },
+            {
+                "id": "1961331942870892627", // 银行卡绑定记录ID
+                "memberId": "1961036596666818619", // 会员ID
+                "username": "CTQ198081", // 用户名
+                "realName": "崔天奇", // 开户人真实姓名
+                "icon": "https://d1amlg258182v0.cloudfront.net/bank-icon/7b822e017b0a4f63995c1270fe7c084c.png", // 银行图标URL
+                "bank": "建设银行", // 银行名称
+                "cardNumber": "6217004210000894456", // 银行卡号（加密显示）
+                "withdrawDepositTimes": 0, // 提现/充值次数
+                "bindTime": 1756452949000, // 绑定时间（时间戳）
+                "tenantCode": "AMYLC", // 租户代码
+                "status": 0, // 状态（0=正常）
+                "deleted": 0, // 删除标记（0=未删除）
+                "updateTime": 1758170989000, // 更新时间（时间戳）
+                "tenantName": null, // 租户名称（未返回）
+                "rateType": null, // 费率类型（未返回）
+                "bankAddress": null, // 银行地址（未返回）
+                "operatorId": null, // 操作员ID（未返回）
+                "operatorName": null // 操作员姓名（未返回）
+            }
+        ],
+        "registerResource": "H5", // 注册来源
+        "registerIp": "42.88.64.39", // 注册IP地址
+        "registerAddress": "兰州市|甘肃|中国;Lanzhou|Gansu|China", // 注册地理位置（中英文）
+        "registerDevice": "H5-7f78e6aa-7232-40fd-b1b4-a396d4075200", // 注册设备标识
+        "remark": "988 KD", // 备注信息
+        "latestLoginDevice": "android:2fa33b69120383b8c82e9bac5b35b46de", // 最后登录设备标识
+        "latestLoginIp": "36.142.184.86", // 最后登录IP
+        "latestLoginAddress": "甘肃|中国;Gansu|China", // 最后登录地理位置
+        "latestLoginTime": 1782654199000, // 最后登录时间（时间戳）
+        "latestRechargeTime": 1781414880000, // 最近一次充值时间（时间戳）
+        "latestRechargeOrder": [ // 最近充值订单列表
+            {
+                "orderNo": "2066029786696003635", // 订单号
+                "orderType": 0, // 订单类型（0=充值）
+                "requestSeq": "ccb43f6a-21ae-3620-97e0-8d7ba9cc4945", // 请求序列号
+                "batchNumber": "2066029786696003635", // 批次号（同订单号）
+                "memberId": "1961036596666818619", // 会员ID
+                "memberName": "CTQ198081", // 登录账号
+                "realName": "崔天奇", // 真实姓名
+                "vipLevel": 4, // 当前VIP等级
+                "amount": "656.000", // 充值金额
+                "giveAmount": "0.000", // 赠送金额
+                "source": "ANDROID", // 来源（安卓）
+                "status": "0000", // 订单状态（0000=成功）
+                "receivingName": null, // 收款方姓名（未返回）
+                "receivingBank": null, // 收款银行（未返回）
+                "receivingCardNo": null, // 收款卡号（未返回）
+                "payingName": null, // 付款方姓名（未返回）
+                "payingBank": null, // 付款银行（未返回）
+                "payingCardNo": null, // 付款卡号（未返回）
+                "payPlatformName": null, // 支付平台名称（未返回）
+                "payPlatformCode": "10073", // 支付平台代码
+                "paywayId": "517", // 支付方式ID
+                "paywayName": "K豆支付", // 支付方式名称
+                "notifyUrl": "https://pay-lj.l887329hb.com/LIVE-PAYMENT/noauth/kd/pay/notify", // 回调通知URL
+                "md5Key": "QJABFGEb6pXnsr7DTuzg0yDsc2JFS481", // 加密密钥
+                "publicKey": "", // 公钥
+                "privateKey": "", // 私钥
+                "thirdNo": null, // 第三方流水号（未返回）
+                "operatorId": null, // 操作员ID（未返回）
+                "operatorName": null, // 操作员姓名（未返回）
+                "operationTime": null, // 操作时间（未返回）
+                "postscript": 414116, // 附言/随机数
+                "remark": "线上充值订单-充值转入 2066029786696003635 线上充值加款成功", // 备注信息
+                "tenantCode": "AMYLC", // 租户代码
+                "createTime": 1781414861000, // 订单创建时间（时间戳）
+                "updateTime": 1781414880000, // 订单更新时间（时间戳）
+                "payAmount": "0.000", // 支付金额（实际支付）
+                "exchangeRate": "1.000", // 汇率
+                "exchangeAmount": "656.000", // 兑换后金额
+                "type": null, // 类型（未返回）
+                "proxyCode": "kele555", // 代理代码
+                "sumRechargeTimes": 65, // 累计充值次数
+                "abpayUrl": null, // AB支付URL（未返回）
+                "rechargeUrl": null, // 充值URL（未返回）
+                "couponId": null, // 抵用券ID（未返回）
+                "couponName": null, // 抵用券名称（未返回）
+                "couponAmount": null // 抵用券金额（未返回）
+            },
+            {
+                "orderNo": "2066029457761906780", // 订单号
+                "orderType": 0, // 订单类型（0=充值）
+                "requestSeq": "8d433be4-0724-3860-bb43-5515bafac5fd", // 请求序列号
+                "batchNumber": "2066029457761906780", // 批次号（同订单号）
+                "memberId": "1961036596666818619", // 会员ID
+                "memberName": "CTQ198081", // 登录账号
+                "realName": "崔天奇", // 真实姓名
+                "vipLevel": 4, // 当前VIP等级
+                "amount": "656.000", // 充值金额
+                "giveAmount": "0.000", // 赠送金额
+                "source": "ANDROID", // 来源（安卓）
+                "status": "1111", // 订单状态（1111=处理中/失败等）
+                "receivingName": null, // 收款方姓名（未返回）
+                "receivingBank": null, // 收款银行（未返回）
+                "receivingCardNo": null, // 收款卡号（未返回）
+                "payingName": null, // 付款方姓名（未返回）
+                "payingBank": null, // 付款银行（未返回）
+                "payingCardNo": null, // 付款卡号（未返回）
+                "payPlatformName": null, // 支付平台名称（未返回）
+                "payPlatformCode": "10073", // 支付平台代码
+                "paywayId": "517", // 支付方式ID
+                "paywayName": "K豆支付", // 支付方式名称
+                "notifyUrl": "https://pay-lj.l887329hb.com/LIVE-PAYMENT/noauth/kd/pay/notify", // 回调通知URL
+                "md5Key": "QJABFGEb6pXnsr7DTuzg0yDsc2JFS481", // 加密密钥
+                "publicKey": "", // 公钥
+                "privateKey": "", // 私钥
+                "thirdNo": null, // 第三方流水号（未返回）
+                "operatorId": null, // 操作员ID（未返回）
+                "operatorName": null, // 操作员姓名（未返回）
+                "operationTime": null, // 操作时间（未返回）
+                "postscript": 515563, // 附言/随机数
+                "remark": null, // 备注信息（未返回）
+                "tenantCode": "AMYLC", // 租户代码
+                "createTime": 1781414782000, // 订单创建时间（时间戳）
+                "updateTime": 1781414782000, // 订单更新时间（时间戳）
+                "payAmount": "0.000", // 支付金额（实际支付）
+                "exchangeRate": "1.000", // 汇率
+                "exchangeAmount": "656.000", // 兑换后金额
+                "type": null, // 类型（未返回）
+                "proxyCode": "kele555", // 代理代码
+                "sumRechargeTimes": 65, // 累计充值次数
+                "abpayUrl": null, // AB支付URL（未返回）
+                "rechargeUrl": null, // 充值URL（未返回）
+                "couponId": null, // 抵用券ID（未返回）
+                "couponName": null, // 抵用券名称（未返回）
+                "couponAmount": null // 抵用券金额（未返回）
+            }
+        ],
+        "latestWithdrawOrder": [ // 最近提现订单列表
+            {
+                "requestSeq": "7b34928d-c683-3d36-997c-205aba6b4199", // 请求序列号
+                "orderNo": "2065698715278258203", // 订单号
+                "batchNumber": null, // 批次号（未返回）
+                "memberId": "1961036596666818619", // 会员ID
+                "memberName": "CTQ198081", // 登录账号
+                "vipLevel": 4, // VIP等级
+                "amount": "2656.000", // 提现金额
+                "source": "ANDROID", // 来源（安卓）
+                "status": 8, // 提现状态（8=已处理）
+                "recievingBindId": "2065692450196918308", // 收款绑定记录ID
+                "receivingName": "崔天奇", // 收款人姓名
+                "receivingBank": "KDpay", // 收款银行（代付名称）
+                "receivingCardNo": "TwguG+mf8XKLAL6KUaw6niBxlSCjoTQ10LIcw02iJcJOQaiJh1Z4Ro7ViJPfjviB", // 收款卡号（加密）
+                "payingName": null, // 付款方姓名（未返回）
+                "payingBank": null, // 付款银行（未返回）
+                "payingCardNo": null, // 付款卡号（未返回）
+                "operatorId": "2017", // 操作员ID
+                "operatorName": "jinxuan777", // 操作员姓名
+                "operationTime": null, // 操作时间（未返回）
+                "remark": "K豆代付订单:null", // 备注信息
+                "tenantCode": "AMYLC", // 租户代码
+                "createTime": 1781335927000, // 订单创建时间（时间戳）
+                "updateTime": 1781336043000, // 订单更新时间（时间戳）
+                "memberRemark": null, // 会员备注（未返回）
+                "sumRecharge": null, // 累计充值（未返回）
+                "sumWithdraw": null, // 累计提现（未返回）
+                "rateType": 2, // 费率类型
+                "paymentRate": "1.000", // 支付汇率
+                "paymentAmount": "2656.000", // 实际支付金额
+                "ifsc": null, // IFSC代码（未返回）
+                "notes": null, // 审核说明（未返回）
+                "abpayType": null, // AB支付类型（未返回）
+                "proxyCode": "kele555", // 代理代码
+                "walletUrl": null, // 钱包URL（未返回）
+                "paymentAgentId": "242", // 支付代理ID
+                "paymentAgentName": null, // 支付代理名称（未返回）
+                "labelName": null, // 标签名称（未返回）
+                "loginIp": "42.88.32.22", // 下单时的登录IP
+                "paymentType": 1 // 支付类型（1=代付）
+            },
+            {
+                "requestSeq": "978cc9cd-3ce4-3a9f-9125-d588ec406ec5", // 请求序列号
+                "orderNo": "2065678950973685792", // 订单号
+                "batchNumber": null, // 批次号（未返回）
+                "memberId": "1961036596666818619", // 会员ID
+                "memberName": "CTQ198081", // 登录账号
+                "vipLevel": 4, // VIP等级
+                "amount": "2600.000", // 提现金额
+                "source": "ANDROID", // 来源（安卓）
+                "status": 3, // 提现状态（3=审核不通过）
+                "recievingBindId": "2065678846537248800", // 收款绑定记录ID
+                "receivingName": "崔天奇", // 收款人姓名
+                "receivingBank": "招商银行", // 收款银行
+                "receivingCardNo": "O2TnN6FRj93QbFyqcPLnbLqPPtxXbd/NIln1mWU8Q6s=", // 收款卡号（加密）
+                "payingName": null, // 付款方姓名（未返回）
+                "payingBank": null, // 付款银行（未返回）
+                "payingCardNo": null, // 付款卡号（未返回）
+                "operatorId": "1991", // 操作员ID
+                "operatorName": "xiaotong222", // 操作员姓名
+                "operationTime": null, // 操作时间（未返回）
+                "remark": "提现订单审核不通过-退款", // 备注信息
+                "tenantCode": "AMYLC", // 租户代码
+                "createTime": 1781331215000, // 订单创建时间（时间戳）
+                "updateTime": 1781331252000, // 订单更新时间（时间戳）
+                "memberRemark": null, // 会员备注（未返回）
+                "sumRecharge": null, // 累计充值（未返回）
+                "sumWithdraw": null, // 累计提现（未返回）
+                "rateType": 2, // 费率类型
+                "paymentRate": "1.000", // 支付汇率
+                "paymentAmount": "2600.000", // 实际支付金额
+                "ifsc": null, // IFSC代码（未返回）
+                "notes": "您好，由于近期银行卡风控严重，建议您注册钱包使用钱包进行提款，以免银行卡风控", // 审核不通过说明
+                "abpayType": null, // AB支付类型（未返回）
+                "proxyCode": "kele555", // 代理代码
+                "walletUrl": null, // 钱包URL（未返回）
+                "paymentAgentId": null, // 支付代理ID（未返回）
+                "paymentAgentName": null, // 支付代理名称（未返回）
+                "labelName": null, // 标签名称（未返回）
+                "loginIp": "42.88.35.155", // 下单时的登录IP
+                "paymentType": 0 // 支付类型（0=普通）
+            }
+        ],
+        "createTime": 1756382533000, // 注册时间（时间戳）
+        "updateTime": 1782654199000, // 资料更新时间（时间戳）
+        "sumWithdraw": "-76256.000", // 总提款金额（负值表示支出）
+        "sumWithdrawTimes": 36, // 总提款次数
+        "firstWithdrawAmount": "-200.000", // 首次提款金额
+        "maxWithdrawAmount": "-12000.000", // 最高单次提款金额
+        "sumRecharge": "84960.000", // 总充值金额
+        "profitAndLoss": "-8665.972", // 盈亏（正盈利，负亏损）
+        "sumRechargeTimes": 65, // 总充值次数
+        "firstRechargeAmount": "500.000", // 首次充值金额
+        "maxRechargeAmount": "10000.000", // 最高单次充值金额
+        "dailyRecharge": "0.000", // 当日充值金额
+        "dailyRechargeTimes": 0, // 当日充值次数
+        "dailyWithdraw": "0.000", // 当日提款金额
+        "dailyWithdrawTimes": 0, // 当日提款次数
+        "agAmount": null, // 开元棋牌余额
+        "kyAmount": null, // 开元（另一游戏）余额
+        "aeAmount": null, // AE（亚博）余额
+        "ecAmount": null, // EC（欧博）余额
+        "mgAmount": null, // MG（Microgaming）余额
+        "jdbAmount": null, // JDB电子余额
+        "tyAmount": null, // 体育（TY）余额
+        "awcAmount": null, // AWC（亚洲娱乐）余额
+        "obAmount": null, // OB（欧宝）余额
+        "obDjAmount": null, // OB电竞余额
+        "obZrAmount": null, // OB真人余额
+        "sodeAmount": null, // Sode（索德）余额
+        "kmAmount": null, // KM棋牌余额
+        "pokerAmount": null, // 扑克（Poker）余额
+        "pgAmount": null, // PG电子余额
+        "ppAmount": null, // PP（Pragmatic Play）余额
+        "cqAmount": null, // CQ9电子余额
+        "lyAmount": null, // 乐游（LY）余额
+        "sbAmount": null, // 沙巴（SB）体育余额
+        "sgAmount": null, // SG（Skywind）余额
+        "imAmount": null, // IM体育余额
+        "bgAmount": null, // BG（Big Gaming）真人余额
+        "fbAmount": null, // FB（Funbet）余额
+        "mtAmount": null, // MT（Mega Theatre）余额
+        "bbinAmount": null, // BBIN（波音）余额
+        "fgAmount": null, // FG电子余额
+        "psAmount": null, // PS（PlayStar）余额
+        "phone": null, // 手机号（未返回）
+        "sumPromotion": "13323.357", // 活动领取总金额
+        "sumRecvTips": "0.000", // 被打赏总金额
+        "sumTips": "0.000", // 打赏总金额
+        "sumRecvRedPackage": "335.703", // 收取红包总金额
+        "sumRedPackage": "0.000", // 发送红包总金额
+        "sumRecommendBouns": "0.000", // 推单分红总金额
+        "sumRebate": "8871.654", // 返水总金额
+        "totalRebate": "0", // 返水总计（额外字段）
+        "onlineStatus": 1, // 在线状态（1=在线）
+        "freezeStatus": 0, // 冻结状态（0=未冻结）
+        "couponAmountTotal": "0.000", // 抵用券总额
+        "couponNumTotal": "0", // 抵用券数量
+        "sumOperatorQtAdd": null, // 人工加款总额（未返回）
+        "sumOperatorQtTimes": 0, // 人工加款次数
+        "sumOperatorAdd": "0.000", // 人工加款金额
+        "sumOperatorSubtract": "0.000", // 人工减款金额
+        "upgradeLevelTime": 1756961614000, // 等级升级时间（时间戳）
+        "levelName": null, // 等级名称（未返回）
+        "levelId": null, // 等级ID（未返回）
+        "labelId": "275", // 用户标签ID
+        "labelName": "全部用户", // 用户标签名称
+        "labelCount": 1, // 标签计数
+        "labelIds": "275", // 标签ID串
+        "pointsAmount": "0.00", // 积分金额
+        "channelCode": "155814570014123" // 注册渠道代码
+    },
+    "args": null // 额外参数（未返回）
+}
+
+
+        "sumPromotion": "13323.357", // 活动领取总金额
+        "sumRecvTips": "0.000", // 被打赏总金额
+        "sumTips": "0.000", // 打赏总金额
+        "sumRecvRedPackage": "335.703", // 收取红包总金额
+        "sumRedPackage": "0.000", // 发送红包总金额
+        "sumRecommendBouns": "0.000", // 推单分红总金额
+        "sumRebate": "8871.654", // 返水总金额
+
+根据这些：sumPromotion、sumRecvTips、sumRecvRedPackage、sumRedPackage、sumRecommendBouns、sumRebate字段的总金额+刚刚发送到群内的彩金的金额/总充值金额    "sumRecharge": "84960.000"  超过15% 需要人工审核
+
+
+
+查询近7天彩金加款数据：
+https://bm1.5vlk0.com/livepro/accountChange/List
+POST
+{"currentPage":1,"pageSize":50,"startTime":1782144000000,"endTime":1782748799000,"memberName":"dj88888","transTypeList":[174],"memberTypeList":[]}
+
+
+返回数据：
+{
+    "success": true, // 接口调用是否成功
+    "code": "200", // 响应状态码
+    "msg": "success", // 响应消息
+    "retry": false, // 是否重试
+    "history": false, // 是否历史数据
+    "currentPage": 1, // 当前页码
+    "pageSize": 50, // 每页条数
+    "totalNum": "2", // 总记录数（字符串类型）
+    "totalPage": 1, // 总页数
+    "items": [ // 流水记录列表
+        {
+            "id": "2071241487503417401", // 记录ID
+            "accountId": null, // 账户ID（未使用）
+            "memberId": "1999004709574258727", // 会员ID
+            "transType": 174, // 变动类型编码（174=活动加款）
+            "amount": "100.000", // 变动金额（正数=增加，负数=减少）
+            "totalAmount": null, // 总金额（未使用）
+            "oldBalance": "1282.509", // 变动前余额
+            "newBalance": "1382.509", // 变动后余额
+            "oldWithdrawRolling": null, // 变动前出款打码量（未返回）
+            "newWithdrawRolling": null, // 变动后出款打码量（未返回）
+            "remark": null, // 系统备注（未返回）
+            "operatorRemark": "神秘", // 操作员备注（对应表格“操作员备注”列）
+            "operatorName": "azu999", // 操作员账号
+            "tenantCode": "AMYLC", // 租户代码
+            "createTime": 1782657427000, // 变动时间（时间戳）
+            "memberName": "dj88888", // 会员账号（对应表格“会员账号”）
+            "realName": "大江", // 真实姓名
+            "memberType": 1, // 会员类型（1=内部账号，对应表格“用户类型”）
+            "transSeq": "1742071241487369199699", // 流水序列号（订单号，对应表格“订单号”）
+            "transDesc": "活动加款", // 变动类型描述（对应表格“变动类型”）
+            "transDetail": "活动加款", // 变动详情（与描述相同）
+            "requestEcho": null // 请求回显信息（未使用）
+        },
+        {
+            "id": "2070193963646189610", // 记录ID
+            "accountId": null, // 账户ID（未使用）
+            "memberId": "1999004709574258727", // 会员ID
+            "transType": 174, // 变动类型编码（174=活动加款）
+            "amount": "1.000", // 变动金额
+            "totalAmount": null, // 总金额（未使用）
+            "oldBalance": "1281.509", // 变动前余额
+            "newBalance": "1282.509", // 变动后余额
+            "oldWithdrawRolling": null, // 变动前出款打码量（未返回）
+            "newWithdrawRolling": null, // 变动后出款打码量（未返回）
+            "remark": null, // 系统备注（未返回）
+            "operatorRemark": "神秘", // 操作员备注
+            "operatorName": "dajiang888", // 操作员账号
+            "tenantCode": "AMYLC", // 租户代码
+            "createTime": 1782407677000, // 变动时间（时间戳）
+            "memberName": "dj88888", // 会员账号
+            "realName": "大江", // 真实姓名
+            "memberType": 1, // 会员类型（1=内部账号）
+            "transSeq": "1742070193963449057294", // 流水序列号（订单号）
+            "transDesc": "活动加款", // 变动类型描述
+            "transDetail": "活动加款", // 变动详情
+            "requestEcho": null // 请求回显信息（未使用）
+        }
+    ],
+    "args": null // 额外参数（未返回）
+}
+
+会员彩票游戏投注详情API：
+https://bm1.5vlk0.com/livepro/tenantMemberCpReport
+POST
+{"currentPage":1,"pageSize":500,"startTime":"2026-06-23","endTime":"2026-06-29","memberName":"134xcv632eop"}
+
+返回数据：
+{
+    "success": true, // 接口调用是否成功
+    "code": "200", // 响应状态码
+    "msg": "success", // 响应消息
+    "retry": false, // 是否重试
+    "history": false, // 是否历史数据
+    "currentPage": 1, // 当前页码
+    "pageSize": 500, // 每页条数
+    "totalNum": "10", // 总记录数
+    "totalPage": 1, // 总页数
+    "items": [ // 报表数据列表
+        {
+            "dataTime": "2026-06-28", // 统计日期（对应表格“时间”）
+            "memberName": "134xcv632eop", // 会员账号（对应表格“会员账号”）
+            "memberType": 3, // 账号类型（3=充值账户，对应表格“账号类型”）
+            "lotteryId": "588", // 游戏ID（对应表格“游戏类型”的内部编码）
+            "num": 1, // 注单数/注册数（对应表格“注册数”）
+            "lotteryName": "一分快三", // 游戏名称（对应表格“游戏类型”）
+            "betAmount": "5.430", // 有效投注/有效玩法金额（对应表格“有效玩法”）
+            "winAmount": "0.000", // 中奖金额（对应表格“中奖金额”）
+            "profit": "-5.430" // 盈亏（对应表格“盈亏”）
+        },
+        {
+            "dataTime": "2026-06-27",
+            "memberName": "134xcv632eop",
+            "memberType": 3,
+            "lotteryId": "588",
+            "num": 45,
+            "lotteryName": "一分快三",
+            "betAmount": "516.450",
+            "winAmount": "472.566",
+            "profit": "-43.884"
+        },
+        {
+            "dataTime": "2026-06-27",
+            "memberName": "134xcv632eop",
+            "memberType": 3,
+            "lotteryId": "37",
+            "num": 10,
+            "lotteryName": "一分六合彩",
+            "betAmount": "81.000",
+            "winAmount": "73.500",
+            "profit": "-7.500"
+        },
+        {
+            "dataTime": "2026-06-25",
+            "memberName": "134xcv632eop",
+            "memberType": 3,
+            "lotteryId": "588",
+            "num": 2,
+            "lotteryName": "一分快三",
+            "betAmount": "2.030",
+            "winAmount": "0.000",
+            "profit": "-2.030"
+        },
+        {
+            "dataTime": "2026-06-24",
+            "memberName": "134xcv632eop",
+            "memberType": 3,
+            "lotteryId": "1336",
+            "num": 10,
+            "lotteryName": "大发快三",
+            "betAmount": "120.970",
+            "winAmount": "173.071",
+            "profit": "52.101"
+        },
+        {
+            "dataTime": "2026-06-24",
+            "memberName": "134xcv632eop",
+            "memberType": 3,
+            "lotteryId": "588",
+            "num": 10,
+            "lotteryName": "一分快三",
+            "betAmount": "105.260",
+            "winAmount": "66.706",
+            "profit": "-38.554"
+        },
+        {
+            "dataTime": "2026-06-24",
+            "memberName": "134xcv632eop",
+            "memberType": 3,
+            "lotteryId": "37",
+            "num": 5,
+            "lotteryName": "一分六合彩",
+            "betAmount": "59.000",
+            "winAmount": "0.000",
+            "profit": "-59.000"
+        },
+        {
+            "dataTime": "2026-06-23",
+            "memberName": "134xcv632eop",
+            "memberType": 3,
+            "lotteryId": "1336",
+            "num": 2,
+            "lotteryName": "大发快三",
+            "betAmount": "21.010",
+            "winAmount": "0.000",
+            "profit": "-21.010"
+        },
+        {
+            "dataTime": "2026-06-23",
+            "memberName": "134xcv632eop",
+            "memberType": 3,
+            "lotteryId": "588",
+            "num": 11,
+            "lotteryName": "一分快三",
+            "betAmount": "401.460",
+            "winAmount": "390.099",
+            "profit": "-11.361"
+        },
+        {
+            "dataTime": "2026-06-23",
+            "memberName": "134xcv632eop",
+            "memberType": 3,
+            "lotteryId": "37",
+            "num": 15,
+            "lotteryName": "一分六合彩",
+            "betAmount": "350.760",
+            "winAmount": "398.160",
+            "profit": "47.400"
+        }
+    ],
+    "args": null // 额外参数（未返回）
+}
+
+会员三方游戏投注详情API：
+
+https://bm1.5vlk0.com/livepro/tenantMemberThirdReport
+PSOT
+{"currentPage":1,"pageSize":500,"startTime":"2026-06-23","endTime":"2026-06-29","memberName":"134xcv632eop"}
+
+返回数据：
+{
+    "success": true, // 接口调用是否成功
+    "code": "200", // 响应状态码
+    "msg": "success", // 响应消息
+    "retry": false, // 是否重试
+    "history": false, // 是否历史数据
+    "currentPage": 1, // 当前页码
+    "pageSize": 50, // 每页条数
+    "totalNum": "5", // 总记录数
+    "totalPage": 1, // 总页数
+    "items": [ // 报表数据列表
+        {
+            "dataTime": "2026-06-27", // 统计日期（对应表格“时间”）
+            "gameType": 3, // 游戏类型（3=老虎机，对应表格“游戏类型”）
+            "thirdgameType": 18, // 三方游戏类型（18=P2U电子，对应表格“三方游戏类型”）
+            "memberName": "134xcv632eop", // 会员账号（对应表格“会员账号”）
+            "memberType": 3, // 账号类型（3=充值账户，对应表格“账号类型”）
+            "betAmount": "111.200000", // 投注金额（对应表格“投注金额”）
+            "winAmount": "60.300000", // 中奖金额（对应表格“中奖金额”）
+            "profit": "-50.900000", // 盈亏（对应表格“盈亏”）
+            "num": 253 // 注单数（对应表格“注单数”）
+        },
+        {
+            "dataTime": "2026-06-27", // 统计日期
+            "gameType": 1, // 游戏类型（1=真人房管，对应表格“游戏类型”）
+            "thirdgameType": 34, // 三方游戏类型（34=BGM视讯，对应表格“三方游戏类型”）
+            "memberName": "134xcv632eop", // 会员账号
+            "memberType": 3, // 账号类型（3=充值账户）
+            "betAmount": "20.000000", // 投注金额
+            "winAmount": "0.000000", // 中奖金额
+            "profit": "-20.000000", // 盈亏
+            "num": 1 // 注单数
+        },
+        {
+            "dataTime": "2026-06-24", // 统计日期
+            "gameType": 3, // 游戏类型（3=老虎机）
+            "thirdgameType": 18, // 三方游戏类型（18=P2U电子）
+            "memberName": "134xcv632eop", // 会员账号
+            "memberType": 3, // 账号类型（3=充值账户）
+            "betAmount": "43.200000", // 投注金额
+            "winAmount": "23.200000", // 中奖金额
+            "profit": "-20.000000", // 盈亏
+            "num": 64 // 注单数
+        },
+        {
+            "dataTime": "2026-06-23", // 统计日期
+            "gameType": 3, // 游戏类型（3=老虎机）
+            "thirdgameType": 18, // 三方游戏类型（18=P2U电子）
+            "memberName": "134xcv632eop", // 会员账号
+            "memberType": 3, // 账号类型（3=充值账户）
+            "betAmount": "171.600000", // 投注金额
+            "winAmount": "96.560000", // 中奖金额
+            "profit": "-75.040000", // 盈亏
+            "num": 305 // 注单数
+        },
+        {
+            "dataTime": "2026-06-23", // 统计日期
+            "gameType": 1, // 游戏类型（1=真人房管）
+            "thirdgameType": 34, // 三方游戏类型（34=BGM视讯）
+            "memberName": "134xcv632eop", // 会员账号
+            "memberType": 3, // 账号类型（3=充值账户）
+            "betAmount": "270.000000", // 投注金额
+            "winAmount": "230.000000", // 中奖金额
+            "profit": "-40.000000", // 盈亏
+            "num": 13 // 注单数
+        }
+    ],
+    "args": null // 额外参数（未返回）
+}
+会员投注：
+澳门六合彩
+香港六合彩
+新澳门六合彩
+快乐6合彩
+大发六合彩
+新香港六合彩
+ 澳洲时时彩
+宾果时时彩
+ 加州时时彩
+幸运时时彩
+腾讯分分彩
+重庆时时彩
+加拿大3.5分彩
+澳洲快三
+宾果快三
+加州快三
+幸运快三
+大发快三
+澳门快三
+香港快三
+江苏快三
+
+以上游戏的投注金额总额+三方游戏的投注金额与两个接口投注金额总额占比超过20%是需要人工审核加款  即官彩投注占比超过20%需要人工确认

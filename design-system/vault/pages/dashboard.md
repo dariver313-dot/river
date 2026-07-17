@@ -1,0 +1,29 @@
+# Dashboard Override — 守钥 Vault
+
+This file intentionally overrides the mobile/dark recommendation in `../MASTER.md` for the first desktop web password-vault screen.
+
+## Direction
+
+- Product surface: signed-in desktop web vault, not a marketing landing page.
+- Style: restrained security utility; light, high-contrast, dense but calm.
+- Layout: fixed desktop navigation, risk summary strip, credential table/list, contextual detail panel. Collapse to an off-canvas menu and single column on smaller screens.
+- Primary: deep navy `#102437`; accent and positive state: secure teal `#0A7A67`; canvas: cool gray `#F2F5F7`; surfaces: white.
+- Typography: Geist with Chinese system-font fallbacks. Use compact hierarchy and tabular numerals for scores and dates.
+- Radius: 7–14px with a controlled scale. Prefer separators and tonal surfaces over card shadows.
+- Motion: 180–220ms state transitions only; no ambient blobs, parallax, glow, spring choreography, or decorative reveal.
+
+## Password-manager anti-patterns
+
+- No excessive decoration.
+- Never communicate security status with color alone; pair every status with icon and text.
+- No purple/pink gradients, glass effects, neon glow, generic bento tiles, or stock security imagery.
+- Never imply production-grade encryption or persistence in this front-end demo.
+- Do not write sample or user-entered credentials to browser storage.
+
+## Delivery checks
+
+- 44px interactive targets, visible focus, semantic labels, usable keyboard order.
+- Normal text contrast at least 4.5:1; status UI at least 3:1 and supported by text/icon.
+- Responsive checks at 375, 768, 1024, and 1440px; no horizontal page scroll.
+- Meaningful loading/copy/add/lock feedback and an aria-live status region.
+- `prefers-reduced-motion` disables nonessential transitions.

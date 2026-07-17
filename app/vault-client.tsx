@@ -4,7 +4,6 @@ import {
   AlertTriangle,
   Archive,
   ArrowUpRight,
-  Building2,
   Check,
   ChevronDown,
   ChevronRight,
@@ -38,6 +37,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 
 type Strength = "安全" | "一般" | "风险";
 type ItemType = "登录" | "卡片" | "安全笔记";
+type Space = "全部" | "个人" | "公共";
 
 type VaultItem = {
   id: number;
@@ -70,7 +70,7 @@ const seedItems: VaultItem[] = [
     username: "lin.chen@studio.cn",
     password: "K7!mP2#qL9@vX4",
     type: "登录",
-    group: "工作",
+    group: "公共",
     updated: "刚刚更新",
     strength: "安全",
     twoFactor: true,
@@ -85,7 +85,7 @@ const seedItems: VaultItem[] = [
     username: "chenlin-dev",
     password: "dV8$kR5!yN2@wQ",
     type: "登录",
-    group: "开发",
+    group: "个人",
     updated: "2 小时前",
     strength: "安全",
     twoFactor: true,
@@ -100,7 +100,7 @@ const seedItems: VaultItem[] = [
     username: "chen.lin@work.cn",
     password: "Spring2024!",
     type: "登录",
-    group: "工作",
+    group: "公共",
     updated: "昨天",
     strength: "风险",
     twoFactor: false,
@@ -115,7 +115,7 @@ const seedItems: VaultItem[] = [
     username: "lin.chen@studio.cn",
     password: "N8#xF4@qT6!sL2",
     type: "登录",
-    group: "工作",
+    group: "公共",
     updated: "3 天前",
     strength: "安全",
     twoFactor: true,
@@ -130,7 +130,7 @@ const seedItems: VaultItem[] = [
     username: "陈林",
     password: "482",
     type: "卡片",
-    group: "财务",
+    group: "个人",
     updated: "6 天前",
     strength: "安全",
     twoFactor: false,
@@ -145,7 +145,7 @@ const seedItems: VaultItem[] = [
     username: "admin",
     password: "Home#2022wifi",
     type: "安全笔记",
-    group: "家庭",
+    group: "公共",
     updated: "2 周前",
     strength: "一般",
     twoFactor: false,
@@ -181,6 +181,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
   const [selectedId, setSelectedId] = useState(1);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<(typeof filters)[number]>("全部");
+  const [space, setSpace] = useState<Space>("全部");
   const [revealed, setRevealed] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const [editingItem, setEditingItem] = useState<VaultItem | null>(null);
@@ -194,12 +195,15 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
     const normalized = query.trim().toLowerCase();
     return items.filter((item) => {
       const matchesFilter = filter === "全部" || item.type === filter;
+      const matchesSpace = space === "全部" || item.group === space;
       const matchesQuery = !normalized || [item.name, item.domain, item.username, item.group].some((value) => value.toLowerCase().includes(normalized));
-      return matchesFilter && matchesQuery;
+      return matchesFilter && matchesSpace && matchesQuery;
     });
-  }, [filter, items, query]);
+  }, [filter, items, query, space]);
 
-  const selected = items.find((item) => item.id === selectedId) ?? items[0];
+  const activeSelectedId = visibleItems.some((item) => item.id === selectedId) ? selectedId : visibleItems[0]?.id ?? selectedId;
+  const selected = items.find((item) => item.id === activeSelectedId) ?? items[0];
+  const listTitle = space === "全部" ? (filter === "全部" ? "全部项目" : filter) : `${space} · ${filter === "全部" ? "全部项目" : filter}`;
   const viewerInitial = viewer.displayName.trim().slice(0, 1).toLocaleUpperCase() || "你";
 
   useEffect(() => {
@@ -321,15 +325,14 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
 
         <nav className="main-nav">
           <p className="nav-label">密码库</p>
-          <button className="nav-item is-active"><KeyRound size={18} /><span>所有项目</span><span className="nav-count">{items.length}</span></button>
+          <button className={`nav-item ${space === "全部" ? "is-active" : ""}`} onClick={() => setSpace("全部")}><KeyRound size={18} /><span>所有项目</span><span className="nav-count">{items.length}</span></button>
           <button className="nav-item"><Star size={18} /><span>收藏</span><span className="nav-count">{items.filter((item) => item.favorite).length}</span></button>
           <button className="nav-item"><ShieldEllipsis size={18} /><span>安全检查</span><span className="nav-alert">3</span></button>
           <button className="nav-item"><Archive size={18} /><span>归档</span></button>
 
           <p className="nav-label nav-label-spaced">空间</p>
-          <button className="nav-item"><UserRound size={18} /><span>个人</span></button>
-          <button className="nav-item"><UsersRound size={18} /><span>家庭共享</span></button>
-          <button className="nav-item"><Building2 size={18} /><span>Studio 团队</span></button>
+          <button className={`nav-item ${space === "个人" ? "is-active" : ""}`} onClick={() => setSpace("个人")}><UserRound size={18} /><span>个人</span></button>
+          <button className={`nav-item ${space === "公共" ? "is-active" : ""}`} onClick={() => setSpace("公共")}><UsersRound size={18} /><span>公共</span></button>
         </nav>
 
         <div className="sidebar-tip">
@@ -381,13 +384,13 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
             </div>
 
             <div className="list-heading">
-              <div><h2 id="vault-list-title">{filter === "全部" ? "全部项目" : filter}</h2><span>{visibleItems.length} 项</span></div>
+              <div><h2 id="vault-list-title">{listTitle}</h2><span>{visibleItems.length} 项</span></div>
               <span>安全状态</span><span>更新时间</span><span className="sr-only">更多操作</span>
             </div>
 
             <div className="vault-list">
               {visibleItems.length > 0 ? visibleItems.map((item) => (
-                <button key={item.id} className={`vault-row ${selectedId === item.id ? "is-selected" : ""}`} onClick={() => { setSelectedId(item.id); setRevealed(false); }} aria-pressed={selectedId === item.id}>
+                <button key={item.id} className={`vault-row ${activeSelectedId === item.id ? "is-selected" : ""}`} onClick={() => { setSelectedId(item.id); setRevealed(false); }} aria-pressed={activeSelectedId === item.id}>
                   <div className="item-identity"><BrandMark item={item} /><span><strong>{item.name}</strong><small>{item.username}</small></span></div>
                   <div><StrengthBadge strength={item.strength} /></div>
                   <span className="updated-at">{item.updated}</span>
@@ -460,7 +463,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
               <label>网站地址<input required value={form.domain} onChange={(event) => setForm({ ...form, domain: event.target.value })} placeholder="example.com" inputMode="url" /></label>
               <label>用户名<input required value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} placeholder="name@example.com" autoComplete="username" /></label>
               <label>密码<div className="form-password"><input required type="text" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} placeholder="输入或生成强密码" autoComplete="new-password" /><button type="button" onClick={generatePassword}><WandSparkles size={16} />生成</button></div><small>建议至少 14 位，并混合字母、数字和符号。</small></label>
-              <label>保存到<select value={form.group} onChange={(event) => setForm({ ...form, group: event.target.value })}><option>个人</option><option>工作</option><option>家庭</option><option>开发</option></select></label>
+              <label>保存到空间<select value={form.group} onChange={(event) => setForm({ ...form, group: event.target.value })}><option>个人</option><option>公共</option></select></label>
               <footer><button type="button" className="secondary-button" onClick={() => setShowAdd(false)}>取消</button><button type="submit" className="primary-button"><Plus size={17} />添加项目</button></footer>
             </form>
           </section>
@@ -476,7 +479,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
               <label>网站地址<input required value={editForm.domain} onChange={(event) => setEditForm({ ...editForm, domain: event.target.value })} inputMode="url" /></label>
               <label>用户名<input required value={editForm.username} onChange={(event) => setEditForm({ ...editForm, username: event.target.value })} autoComplete="username" /></label>
               <label>密码<div className="form-password"><input required type="text" value={editForm.password} onChange={(event) => setEditForm({ ...editForm, password: event.target.value })} autoComplete="new-password" /><button type="button" onClick={generateEditPassword}><WandSparkles size={16} />生成</button></div><small>建议至少 14 位，并混合字母、数字和符号。</small></label>
-              <label>保存到<select value={editForm.group} onChange={(event) => setEditForm({ ...editForm, group: event.target.value })}><option>个人</option><option>工作</option><option>家庭</option><option>开发</option></select></label>
+              <label>保存到空间<select value={editForm.group} onChange={(event) => setEditForm({ ...editForm, group: event.target.value })}><option>个人</option><option>公共</option></select></label>
               <footer><button type="button" className="secondary-button" onClick={() => setEditingItem(null)}>取消</button><button type="submit" className="primary-button"><Check size={17} />保存变更</button></footer>
             </form>
           </section>

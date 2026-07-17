@@ -17,6 +17,7 @@ import {
   FileKey2,
   Globe2,
   Heart,
+  ImageUp,
   KeyRound,
   LogOut,
   Menu,
@@ -33,7 +34,9 @@ import {
   WandSparkles,
   X,
 } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import jsQR from "jsqr";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
+import { generateTotpCode, parseTotpInput, totpLabel, totpSecondsRemaining, type TotpConfig } from "./lib/totp";
 
 type Strength = "安全" | "一般" | "风险";
 type ItemType = "登录" | "卡片" | "安全笔记";
@@ -53,6 +56,7 @@ type VaultItem = {
   favorite: boolean;
   brand: string;
   note: string;
+  totp?: TotpConfig;
   canEdit: boolean;
   sharedBy?: string;
 };
@@ -62,7 +66,10 @@ type Viewer = {
   email: string;
 };
 
-type CredentialForm = Pick<VaultItem, "name" | "domain" | "username" | "password" | "group">;
+type CredentialForm = Pick<VaultItem, "name" | "domain" | "username" | "password" | "group"> & {
+  totpInput: string;
+  removeTotp: boolean;
+};
 type VaultMember = { email: string; role: "editor" | "viewer"; createdAt: string };
 type AuditEntry = { action: string; actorEmail: string; itemId: string | null; createdAt: string };
 type ApprovalRequest = {
@@ -77,6 +84,10 @@ type ApprovalRequest = {
 };
 
 const filters = ["全部", "登录", "卡片", "安全笔记"] as const;
+
+function emptyCredentialForm(): CredentialForm {
+  return { name: "", domain: "", username: "", password: "", group: "个人", totpInput: "", removeTotp: false };
+}
 
 function BrandMark({ item }: { item: VaultItem }) {
   const initials = item.name.slice(0, 1).toUpperCase();
@@ -97,6 +108,77 @@ function StrengthBadge({ strength }: { strength: Strength }) {
   );
 }
 
+function AuthenticatorCode({ config, itemId, onCopy }: { config: TotpConfig; itemId: string; onCopy: (value: string, label: string, itemId: string) => void }) {
+  const [now, setNow] = useState(() => Date.now());
+  const [code, setCode] = useState("");
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void generateTotpCode(config, now)
+      .then((nextCode) => {
+        if (!cancelled) {
+          setCode(nextCode);
+          setError("");
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setError("无法生成验证码");
+      });
+    return () => { cancelled = true; };
+  }, [config, now]);
+
+  const splitAt = Math.floor(config.digits / 2);
+  const remaining = totpSecondsRemaining(config, now);
+
+  return (
+    <div className="totp-card">
+      <div className="totp-heading"><span>验证器代码</span><small>{totpLabel(config)}</small></div>
+      <div className="totp-value">
+        <strong>{error || (code ? <>{code.slice(0, splitAt)} <span>{code.slice(splitAt)}</span></> : "··· ···")}</strong>
+        <button className="icon-button" onClick={() => code && onCopy(code, "验证器代码", itemId)} aria-label="复制验证器代码" disabled={!code}><Copy size={17} /></button>
+      </div>
+      <div className="totp-timer"><span style={{ width: `${(remaining / config.period) * 100}%` }} /><small>{remaining} 秒后刷新</small></div>
+    </div>
+  );
+}
+
+async function decodeTotpImage(file: File) {
+  if (!file.type.startsWith("image/")) throw new Error("请选择二维码图片文件。");
+  if (file.size > 5 * 1024 * 1024) throw new Error("二维码图片不能超过 5 MB。");
+
+  const objectUrl = URL.createObjectURL(file);
+  try {
+    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const nextImage = new Image();
+      nextImage.onload = () => resolve(nextImage);
+      nextImage.onerror = () => reject(new Error("无法读取这张二维码图片。"));
+      nextImage.src = objectUrl;
+    });
+    const scale = Math.min(1, 2_048 / Math.max(image.naturalWidth, image.naturalHeight));
+    const width = Math.max(1, Math.round(image.naturalWidth * scale));
+    const height = Math.max(1, Math.round(image.naturalHeight * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    if (!context) throw new Error("当前浏览器无法读取二维码图片。");
+    context.drawImage(image, 0, 0, width, height);
+    const imageData = context.getImageData(0, 0, width, height);
+    const result = jsQR(imageData.data, width, height, { inversionAttempts: "attemptBoth" });
+    if (!result?.data) throw new Error("未在图片中识别到可用二维码。请尝试更清晰的原图，或手动粘贴 Setup Key。");
+    parseTotpInput(result.data);
+    return result.data;
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
 function auditLabel(action: string) {
   const labels: Record<string, string> = {
     item_created: "新增了项目",
@@ -106,6 +188,7 @@ function auditLabel(action: string) {
     member_removed: "移除了协作人",
     password_revealed: "查看了密码",
     credential_copied: "复制了账号信息",
+    totp_copied: "复制了验证器代码",
     export_approval_requested: "请求了导出批准",
     export_approved: "批准了密码库导出",
     export_rejected: "拒绝了密码库导出",
@@ -134,8 +217,9 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
   const [approvals, setApprovals] = useState<ApprovalRequest[]>([]);
   const [memberEmail, setMemberEmail] = useState("");
   const [memberRole, setMemberRole] = useState<"editor" | "viewer">("editor");
-  const [form, setForm] = useState<CredentialForm>({ name: "", domain: "", username: "", password: "", group: "个人" });
-  const [editForm, setEditForm] = useState<CredentialForm>({ name: "", domain: "", username: "", password: "", group: "个人" });
+  const [isReadingTotp, setIsReadingTotp] = useState(false);
+  const [form, setForm] = useState<CredentialForm>(emptyCredentialForm);
+  const [editForm, setEditForm] = useState<CredentialForm>(emptyCredentialForm);
 
   const visibleItems = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -231,21 +315,21 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
     return payload as T;
   }
 
-  function recordAudit(action: "password_revealed" | "credential_copied", itemId: string) {
+  function recordAudit(action: "password_revealed" | "credential_copied" | "totp_copied", itemId: string) {
     void requestVault("/api/vault/audit", { method: "POST", body: JSON.stringify({ action, itemId }) }).catch(() => undefined);
   }
 
   async function copyValue(value: string, label: string, itemId?: string) {
     try {
       await navigator.clipboard.writeText(value);
-      if (itemId) recordAudit("credential_copied", itemId);
+      if (itemId) recordAudit(label === "验证器代码" ? "totp_copied" : "credential_copied", itemId);
       setToast(`${label}已复制，请在不需要时手动清理剪贴板`);
     } catch {
       setToast("复制失败，请手动选择内容");
     }
   }
 
-  async function updateRemoteItem(item: VaultItem, changes: Partial<VaultItem>) {
+  async function updateRemoteItem(item: VaultItem, changes: Record<string, unknown>) {
     setIsSaving(true);
     try {
       const payload = await requestVault<{ item: VaultItem }>(`/api/vault/items/${item.id}`, {
@@ -276,7 +360,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
       });
       setItems((current) => [payload.item, ...current]);
       setSelectedId(payload.item.id);
-      setForm({ name: "", domain: "", username: "", password: "", group: "个人" });
+      setForm(emptyCredentialForm());
       setShowAdd(false);
       setToast("项目已加密保存");
     } catch (error) {
@@ -292,7 +376,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
   }
 
   function openEdit(item: VaultItem) {
-    setEditForm({ name: item.name, domain: item.domain, username: item.username, password: item.password, group: item.group });
+    setEditForm({ name: item.name, domain: item.domain, username: item.username, password: item.password, group: item.group, totpInput: "", removeTotp: false });
     setEditingItem(item);
     setRevealed(false);
   }
@@ -307,7 +391,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
     if (!editingItem) return;
 
     try {
-      await updateRemoteItem(editingItem, editForm);
+      await updateRemoteItem(editingItem, { ...editForm, totp: editingItem.totp });
       setEditingItem(null);
       setToast("项目已加密更新");
     } catch (error) {
@@ -363,6 +447,27 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
       setToast(error instanceof Error ? error.message : "协作人未移除。");
     } finally {
       setIsSaving(false);
+    }
+  }
+
+  async function importTotpFromImage(event: ChangeEvent<HTMLInputElement>, target: "add" | "edit") {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+
+    setIsReadingTotp(true);
+    try {
+      const totpInput = await decodeTotpImage(file);
+      if (target === "add") {
+        setForm((current) => ({ ...current, totpInput, removeTotp: false }));
+      } else {
+        setEditForm((current) => ({ ...current, totpInput, removeTotp: false }));
+      }
+      setToast("已在本地读取二维码，验证器配置将在保存时加密写入");
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "二维码读取失败。");
+    } finally {
+      setIsReadingTotp(false);
     }
   }
 
@@ -531,11 +636,13 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
               <div className={`password-health health-${selected.strength}`}><span /><p><strong>密码{selected.strength}</strong>{selected.strength === "风险" ? "此密码可能已重复使用" : selected.strength === "一般" ? "建议在近期轮换" : "长度和复杂度符合建议"}</p></div>
             </div>
 
+            {selected.totp && <div className="detail-section"><AuthenticatorCode config={selected.totp} itemId={selected.id} onCopy={copyValue} /></div>}
+
             <div className="detail-section security-detail">
               <div className="field-label"><span>账号保护</span></div>
               <div className={`protection-row ${selected.twoFactor ? "is-safe" : "needs-action"}`}>
                 {selected.twoFactor ? <ShieldCheck size={20} /> : <AlertTriangle size={20} />}
-                <div><strong>{selected.twoFactor ? "已开启双重验证" : "尚未开启双重验证"}</strong><span>{selected.twoFactor ? "即使密码泄露，账号仍有额外保护" : "建议前往服务网站启用验证器"}</span></div>
+                <div><strong>{selected.totp ? "验证器代码已配置" : selected.twoFactor ? "已开启外部双重验证" : "尚未开启双重验证"}</strong><span>{selected.totp ? "可在上方直接复制当前动态验证码" : selected.twoFactor ? "即使密码泄露，账号仍有额外保护" : "建议前往服务网站启用验证器"}</span></div>
                 <ChevronRight size={18} />
               </div>
             </div>
@@ -570,6 +677,12 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
               <label>网站地址<input required value={form.domain} onChange={(event) => setForm({ ...form, domain: event.target.value })} placeholder="example.com" inputMode="url" /></label>
               <label>用户名<input required value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} placeholder="name@example.com" autoComplete="username" /></label>
               <label>密码<div className="form-password"><input required type="text" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} placeholder="输入或生成强密码" autoComplete="new-password" /><button type="button" onClick={generatePassword}><WandSparkles size={16} />生成</button></div><small>建议至少 14 位，并混合字母、数字和符号。</small></label>
+              <div className="totp-entry">
+                <label htmlFor="add-totp">二次验证码（可选）</label>
+                <input id="add-totp" type="text" value={form.totpInput} onChange={(event) => setForm({ ...form, totpInput: event.target.value, removeTotp: false })} placeholder="粘贴二维码内容或 Setup Key" autoComplete="off" spellCheck="false" />
+                <div className="totp-entry-actions"><label className="totp-image-button" htmlFor="add-totp-image"><ImageUp size={16} />{isReadingTotp ? "正在读取图片" : "从二维码图片读取"}</label><input id="add-totp-image" className="sr-only" type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => void importTotpFromImage(event, "add")} disabled={isReadingTotp} /></div>
+                <p>不使用摄像头。图片仅在当前浏览器解析，保存时仅加密存入验证器密钥。</p>
+              </div>
               <label>保存到空间<select value={form.group} onChange={(event) => setForm({ ...form, group: event.target.value })}><option>个人</option><option>公共</option></select></label>
               <footer><button type="button" className="secondary-button" onClick={() => setShowAdd(false)} disabled={isSaving}>取消</button><button type="submit" className="primary-button" disabled={isSaving}><Plus size={17} />{isSaving ? "正在保存" : "添加项目"}</button></footer>
             </form>
@@ -586,6 +699,12 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
               <label>网站地址<input required value={editForm.domain} onChange={(event) => setEditForm({ ...editForm, domain: event.target.value })} inputMode="url" /></label>
               <label>用户名<input required value={editForm.username} onChange={(event) => setEditForm({ ...editForm, username: event.target.value })} autoComplete="username" /></label>
               <label>密码<div className="form-password"><input required type="text" value={editForm.password} onChange={(event) => setEditForm({ ...editForm, password: event.target.value })} autoComplete="new-password" /><button type="button" onClick={generateEditPassword}><WandSparkles size={16} />生成</button></div><small>建议至少 14 位，并混合字母、数字和符号。</small></label>
+              <div className="totp-entry">
+                <label htmlFor="edit-totp">二次验证码</label>
+                <input id="edit-totp" type="text" value={editForm.totpInput} onChange={(event) => setEditForm({ ...editForm, totpInput: event.target.value, removeTotp: false })} placeholder={editingItem.totp ? "留空保留；输入新密钥可替换" : "粘贴二维码内容或 Setup Key"} autoComplete="off" spellCheck="false" />
+                <div className="totp-entry-actions"><label className="totp-image-button" htmlFor="edit-totp-image"><ImageUp size={16} />{isReadingTotp ? "正在读取图片" : "从二维码图片读取"}</label><input id="edit-totp-image" className="sr-only" type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => void importTotpFromImage(event, "edit")} disabled={isReadingTotp} /></div>
+                {editingItem.totp ? <p>当前已配置验证器。{editForm.removeTotp ? "保存后会移除。" : "留空可保留现有密钥。"} <button type="button" className="text-button" onClick={() => setEditForm({ ...editForm, removeTotp: !editForm.removeTotp, totpInput: "" })}>{editForm.removeTotp ? "撤销移除" : "移除验证器"}</button></p> : <p>不使用摄像头。图片仅在当前浏览器解析，保存时仅加密存入验证器密钥。</p>}
+              </div>
               <label>保存到空间<select value={editForm.group} onChange={(event) => setEditForm({ ...editForm, group: event.target.value })}><option>个人</option><option>公共</option></select></label>
               <footer><button type="button" className="secondary-button" onClick={() => setEditingItem(null)} disabled={isSaving}>取消</button><button type="submit" className="primary-button" disabled={isSaving}><Check size={17} />{isSaving ? "正在保存" : "保存变更"}</button></footer>
             </form>

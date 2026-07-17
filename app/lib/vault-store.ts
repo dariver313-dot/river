@@ -1,4 +1,5 @@
 import { getD1 } from "../../db";
+import { parseTotpInput, toTotpConfig, type TotpConfig } from "./totp";
 import { decryptVaultPayload, encryptVaultPayload } from "./vault-crypto";
 
 export type VaultSpace = "个人" | "公共";
@@ -19,6 +20,7 @@ export type VaultCredential = {
   favorite: boolean;
   brand: string;
   note: string;
+  totp?: TotpConfig;
   canEdit: boolean;
   sharedBy?: string;
 };
@@ -89,6 +91,12 @@ function storedPayload(input: Record<string, unknown>): StoredCredential {
   const username = typeof input.username === "string" ? input.username.trim() : "";
   const password = typeof input.password === "string" ? input.password : "";
   const type = isItemType(input.type) ? input.type : "登录";
+  const totpInput = typeof input.totpInput === "string" ? input.totpInput.trim() : "";
+  const totp = input.removeTotp === true
+    ? undefined
+    : totpInput
+      ? parseTotpInput(totpInput)
+      : toTotpConfig(input.totp);
 
   if (!name || !domain || !username || !password) {
     throw new Error("名称、网址、用户名和密码不能为空。");
@@ -101,10 +109,11 @@ function storedPayload(input: Record<string, unknown>): StoredCredential {
     password,
     type,
     strength: strengthFor(password),
-    twoFactor: Boolean(input.twoFactor),
+    twoFactor: Boolean(input.twoFactor) || Boolean(totp),
     favorite: Boolean(input.favorite),
     brand: typeof input.brand === "string" && input.brand ? input.brand : "new",
     note: typeof input.note === "string" ? input.note.slice(0, 1_000) : "",
+    ...(totp ? { totp } : {}),
   };
 }
 
@@ -388,7 +397,7 @@ export async function exportVaultData(email: string, approvalId: string) {
 }
 
 export async function recordVaultAudit(email: string, input: Record<string, unknown>) {
-  const action = input.action === "password_revealed" || input.action === "credential_copied" ? input.action : null;
+  const action = input.action === "password_revealed" || input.action === "credential_copied" || input.action === "totp_copied" ? input.action : null;
   const itemId = typeof input.itemId === "string" ? input.itemId : "";
   if (!action || !itemId) return;
 

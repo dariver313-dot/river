@@ -964,6 +964,74 @@ button:disabled {
   color: var(--ink);
 }
 
+.totp-card {
+  display: grid;
+  gap: 9px;
+  padding: 14px;
+  border: 1px solid #c8e3dc;
+  border-radius: var(--radius-sm);
+  background: #f3faf8;
+}
+
+.totp-heading,
+.totp-value,
+.totp-timer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.totp-heading > span {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.totp-heading small,
+.totp-timer small {
+  color: var(--ink-soft);
+  font-size: 10px;
+}
+
+.totp-value strong {
+  color: var(--ink);
+  font-family: var(--font-mono), ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 25px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.12em;
+}
+
+.totp-value strong span {
+  margin-left: 4px;
+}
+
+.totp-timer {
+  position: relative;
+  min-height: 14px;
+  padding-top: 5px;
+}
+
+.totp-timer::before,
+.totp-timer > span {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 3px;
+  border-radius: 99px;
+}
+
+.totp-timer::before {
+  width: 100%;
+  background: #d7ebe5;
+  content: "";
+}
+
+.totp-timer > span {
+  background: var(--accent-strong);
+  transition: width 0.3s linear;
+}
+
 .health-安全 > span { background: var(--accent); }
 .health-一般 > span { background: var(--warning); }
 .health-风险 > span { background: var(--danger); }
@@ -1219,6 +1287,59 @@ button:disabled {
   color: var(--accent-strong);
   font-size: 12px;
   font-weight: 650;
+}
+
+.totp-entry {
+  display: grid;
+  gap: 7px;
+}
+
+.totp-entry > p {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.totp-entry-actions {
+  display: flex;
+  align-items: center;
+}
+
+.modal .totp-image-button {
+  width: fit-content;
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 11px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-subtle);
+  color: var(--accent-strong);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.modal .totp-image-button:hover {
+  border-color: var(--accent-strong);
+  background: var(--surface);
+}
+
+.text-button {
+  display: inline;
+  min-height: 0;
+  margin-left: 4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--danger);
+  cursor: pointer;
+  font-size: inherit;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 .modal form footer {

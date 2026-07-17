@@ -28,6 +28,7 @@ import {
   ShieldEllipsis,
   Smartphone,
   Star,
+  Trash2,
   UserRound,
   UsersRound,
   WandSparkles,
@@ -58,6 +59,8 @@ type Viewer = {
   displayName: string;
   email: string;
 };
+
+type CredentialForm = Pick<VaultItem, "name" | "domain" | "username" | "password" | "group">;
 
 const seedItems: VaultItem[] = [
   {
@@ -180,9 +183,12 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
   const [filter, setFilter] = useState<(typeof filters)[number]>("全部");
   const [revealed, setRevealed] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
+  const [editingItem, setEditingItem] = useState<VaultItem | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<VaultItem | null>(null);
   const [mobileNav, setMobileNav] = useState(false);
   const [toast, setToast] = useState("");
-  const [form, setForm] = useState({ name: "", domain: "", username: "", password: "", group: "个人" });
+  const [form, setForm] = useState<CredentialForm>({ name: "", domain: "", username: "", password: "", group: "个人" });
+  const [editForm, setEditForm] = useState<CredentialForm>({ name: "", domain: "", username: "", password: "", group: "个人" });
 
   const visibleItems = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -206,6 +212,8 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setShowAdd(false);
+        setEditingItem(null);
+        setDeleteTarget(null);
         setMobileNav(false);
       }
     };
@@ -253,6 +261,50 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
   function generatePassword() {
     setForm((current) => ({ ...current, password: "V9@rK4!mT7#qL2xP" }));
     setToast("已生成 16 位演示密码");
+  }
+
+  function openEdit(item: VaultItem) {
+    setEditForm({ name: item.name, domain: item.domain, username: item.username, password: item.password, group: item.group });
+    setEditingItem(item);
+    setRevealed(false);
+  }
+
+  function generateEditPassword() {
+    setEditForm((current) => ({ ...current, password: "R8!vL2#nQ5@zT7mK" }));
+    setToast("已生成 16 位演示密码");
+  }
+
+  function submitEditCredential(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!editingItem) return;
+
+    const updatedItem: VaultItem = {
+      ...editingItem,
+      ...editForm,
+      domain: editForm.domain.trim().replace(/^https?:\/\//, ""),
+      name: editForm.name.trim(),
+      username: editForm.username.trim(),
+      updated: "刚刚更新",
+      strength: editForm.password.length >= 14 ? "安全" : editForm.password.length >= 10 ? "一般" : "风险",
+    };
+
+    setItems((current) => current.map((item) => (item.id === updatedItem.id ? updatedItem : item)));
+    setSelectedId(updatedItem.id);
+    setEditingItem(null);
+    setToast("项目已更新到当前演示会话");
+  }
+
+  function deleteCredential() {
+    if (!deleteTarget) return;
+    const targetIndex = items.findIndex((item) => item.id === deleteTarget.id);
+    const remaining = items.filter((item) => item.id !== deleteTarget.id);
+    const nextSelected = remaining[targetIndex] ?? remaining[targetIndex - 1] ?? remaining[0];
+
+    setItems(remaining);
+    setSelectedId(nextSelected?.id ?? 0);
+    setDeleteTarget(null);
+    setRevealed(false);
+    setToast(`已从当前演示会话删除“${deleteTarget.name}”`);
   }
 
   return (
@@ -347,13 +399,14 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
             </div>
           </section>
 
+          {items.length > 0 ? (
           <aside className="detail-panel" aria-labelledby="detail-title">
             <div className="detail-head">
               <div className="detail-brand"><BrandMark item={selected} /><div><span className="eyebrow">{selected.type} · {selected.group}</span><h2 id="detail-title">{selected.name}</h2><a href={selected.domain.includes(".") ? `https://${selected.domain}` : "#"} target="_blank" rel="noreferrer">{selected.domain}<ArrowUpRight size={14} /></a></div></div>
               <div className="detail-actions">
                 <button className={`icon-button ${selected.favorite ? "is-favorite" : ""}`} onClick={() => toggleFavorite(selected.id)} aria-label={selected.favorite ? "取消收藏" : "添加收藏"}><Heart size={19} fill={selected.favorite ? "currentColor" : "none"} /></button>
-                <button className="icon-button" aria-label="编辑项目"><Edit3 size={18} /></button>
-                <button className="icon-button" aria-label="更多操作"><MoreHorizontal size={19} /></button>
+                <button className="icon-button" onClick={() => openEdit(selected)} aria-label={`编辑${selected.name}`}><Edit3 size={18} /></button>
+                <button className="icon-button destructive-icon" onClick={() => setDeleteTarget(selected)} aria-label={`删除${selected.name}`}><Trash2 size={18} /></button>
               </div>
             </div>
 
@@ -387,6 +440,14 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
               <button className="open-site-button" disabled={!selected.domain.includes(".")} onClick={() => selected.domain.includes(".") && window.open(`https://${selected.domain}`, "_blank", "noopener,noreferrer")}><Globe2 size={17} />访问网站<ArrowUpRight size={15} /></button>
             </div>
           </aside>
+          ) : (
+            <aside className="detail-panel detail-empty" aria-label="空密码库">
+              <Archive size={25} aria-hidden="true" />
+              <h2>密码库为空</h2>
+              <p>新建一个项目，开始整理你的登录信息。</p>
+              <button className="primary-button" onClick={() => setShowAdd(true)}><Plus size={18} />新建项目</button>
+            </aside>
+          )}
         </div>
       </main>
 
@@ -401,6 +462,35 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
               <label>密码<div className="form-password"><input required type="text" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} placeholder="输入或生成强密码" autoComplete="new-password" /><button type="button" onClick={generatePassword}><WandSparkles size={16} />生成</button></div><small>建议至少 14 位，并混合字母、数字和符号。</small></label>
               <label>保存到<select value={form.group} onChange={(event) => setForm({ ...form, group: event.target.value })}><option>个人</option><option>工作</option><option>家庭</option><option>开发</option></select></label>
               <footer><button type="button" className="secondary-button" onClick={() => setShowAdd(false)}>取消</button><button type="submit" className="primary-button"><Plus size={17} />添加项目</button></footer>
+            </form>
+          </section>
+        </div>
+      )}
+
+      {editingItem && (
+        <div className="modal-layer" role="presentation">
+          <section className="modal" role="dialog" aria-modal="true" aria-labelledby="edit-title">
+            <header><div><span className="modal-icon"><Edit3 size={20} /></span><div><h2 id="edit-title">编辑项目</h2><p>变更仅保留在当前演示会话中</p></div></div><button className="icon-button" onClick={() => setEditingItem(null)} aria-label="关闭编辑"><X size={20} /></button></header>
+            <form onSubmit={submitEditCredential}>
+              <label>名称<input required value={editForm.name} onChange={(event) => setEditForm({ ...editForm, name: event.target.value })} autoFocus /></label>
+              <label>网站地址<input required value={editForm.domain} onChange={(event) => setEditForm({ ...editForm, domain: event.target.value })} inputMode="url" /></label>
+              <label>用户名<input required value={editForm.username} onChange={(event) => setEditForm({ ...editForm, username: event.target.value })} autoComplete="username" /></label>
+              <label>密码<div className="form-password"><input required type="text" value={editForm.password} onChange={(event) => setEditForm({ ...editForm, password: event.target.value })} autoComplete="new-password" /><button type="button" onClick={generateEditPassword}><WandSparkles size={16} />生成</button></div><small>建议至少 14 位，并混合字母、数字和符号。</small></label>
+              <label>保存到<select value={editForm.group} onChange={(event) => setEditForm({ ...editForm, group: event.target.value })}><option>个人</option><option>工作</option><option>家庭</option><option>开发</option></select></label>
+              <footer><button type="button" className="secondary-button" onClick={() => setEditingItem(null)}>取消</button><button type="submit" className="primary-button"><Check size={17} />保存变更</button></footer>
+            </form>
+          </section>
+        </div>
+      )}
+
+      {deleteTarget && (
+        <div className="modal-layer" role="presentation">
+          <section className="modal danger-modal" role="dialog" aria-modal="true" aria-labelledby="delete-title">
+            <header><div><span className="modal-icon danger-icon"><AlertTriangle size={20} /></span><div><h2 id="delete-title">删除项目？</h2><p>请确认你不再需要这条登录信息</p></div></div><button className="icon-button" onClick={() => setDeleteTarget(null)} aria-label="关闭删除确认"><X size={20} /></button></header>
+            <form onSubmit={(event) => { event.preventDefault(); deleteCredential(); }}>
+              <div className="delete-summary"><strong>{deleteTarget.name}</strong><span>{deleteTarget.username} · {deleteTarget.type}</span></div>
+              <p className="delete-description">删除后无法从当前演示会话中恢复。请确认你已备份需要的信息。</p>
+              <footer><button type="button" className="secondary-button" onClick={() => setDeleteTarget(null)}>取消</button><button type="submit" className="danger-button"><Trash2 size={17} />删除项目</button></footer>
             </form>
           </section>
         </div>

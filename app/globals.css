@@ -1,32 +1,32 @@
 @import "tailwindcss";
 
 :root {
-  --canvas: #f6f8fb;
+  --canvas: #fafbfe;
   --surface: #ffffff;
-  --surface-subtle: #f8fafc;
-  --ink: #1d2939;
-  --ink-soft: #667085;
+  --surface-subtle: #fafbfc;
+  --ink: #344054;
+  --ink-soft: #718096;
   --ink-faint: #98a2b3;
-  --line: #e4e7ec;
-  --line-strong: #d0d5dd;
-  --nav: #172033;
-  --nav-soft: #222f47;
-  --nav-ink: #f7f9fc;
-  --nav-muted: #a8b3c5;
-  --accent: #2f63d8;
-  --accent-strong: #244da8;
-  --accent-soft: #edf3ff;
-  --focus: #5d7ee8;
+  --line: #e9ecf2;
+  --line-strong: #d9dfea;
+  --nav: #25324a;
+  --nav-soft: #303e58;
+  --nav-ink: #f8faff;
+  --nav-muted: #b8c2d2;
+  --accent: #506fc4;
+  --accent-strong: #405da8;
+  --accent-soft: #f1f4fd;
+  --focus: #8298d5;
   --danger: #a9352b;
   --danger-soft: #fff0ed;
   --warning: #8a5700;
   --warning-soft: #fff5dc;
   --info: #205c87;
   --info-soft: #eaf3fa;
-  --shadow-card: 0 1px 2px rgb(16 24 40 / 0.025), 0 5px 14px rgb(16 24 40 / 0.045);
-  --shadow-card-hover: 0 2px 10px rgb(16 24 40 / 0.07);
-  --shadow-button: 0 1px 2px rgb(36 77 168 / 0.2);
-  --shadow-modal: 0 18px 52px rgb(16 24 40 / 0.18);
+  --shadow-card: 0 1px 2px rgb(16 24 40 / 0.018), 0 3px 10px rgb(16 24 40 / 0.035);
+  --shadow-card-hover: 0 2px 8px rgb(16 24 40 / 0.055);
+  --shadow-button: 0 1px 2px rgb(64 93 168 / 0.16);
+  --shadow-modal: 0 14px 42px rgb(16 24 40 / 0.14);
   --radius-sm: 7px;
   --radius-md: 10px;
   --radius-lg: 14px;
@@ -164,8 +164,8 @@ button:disabled {
 }
 
 .brand-icon {
-  width: 40px;
-  height: 40px;
+  width: 36px;
+  height: 36px;
   border-radius: 11px;
 }
 
@@ -210,7 +210,7 @@ button:disabled {
 }
 
 .nav-item {
-  min-height: 40px;
+  min-height: 36px;
   display: grid;
   grid-template-columns: 22px minmax(0, 1fr) auto;
   align-items: center;
@@ -310,9 +310,9 @@ button:disabled {
 }
 
 .icon-button {
-  width: 40px;
-  height: 40px;
-  flex: 0 0 40px;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -348,7 +348,7 @@ button:disabled {
 }
 
 .topbar {
-  min-height: 78px;
+  min-height: 72px;
   display: grid;
   grid-template-columns: minmax(195px, 0.72fr) minmax(280px, 1fr) auto auto;
   align-items: center;
@@ -370,7 +370,7 @@ button:disabled {
 }
 
 .topbar-search {
-  min-height: 40px;
+  min-height: 36px;
   display: grid;
   grid-template-columns: 20px 1fr auto;
   align-items: center;
@@ -385,7 +385,7 @@ button:disabled {
 
 .topbar-search:focus-within {
   border-color: var(--focus);
-  box-shadow: 0 0 0 3px rgb(93 126 232 / 0.16);
+  box-shadow: 0 0 0 3px rgb(130 152 213 / 0.15);
 }
 
 .topbar-search input {
@@ -413,12 +413,12 @@ button:disabled {
 .primary-button,
 .secondary-button,
 .open-site-button {
-  min-height: 40px;
+  min-height: 36px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 7px;
-  padding: 0 11px;
+  padding: 0 10px;
   border-radius: var(--radius-sm);
   font-size: 12px;
   font-weight: 650;
@@ -436,7 +436,7 @@ button:disabled {
 .primary-button:hover {
   border-color: var(--accent-strong);
   background: var(--accent-strong);
-  box-shadow: 0 3px 8px rgb(36 77 168 / 0.18);
+  box-shadow: 0 2px 6px rgb(64 93 168 / 0.16);
 }
 
 .secondary-button {
@@ -467,7 +467,7 @@ button:disabled {
 }
 
 .score-block {
-  padding: 15px 18px;
+  padding: 13px 16px;
   border-right: 1px solid var(--line);
 }
 
@@ -521,7 +521,7 @@ button:disabled {
 }
 
 .risk-item {
-  min-height: 94px;
+  min-height: 88px;
   display: grid;
   grid-template-columns: 36px 1fr 18px;
   gap: 10px;
@@ -597,7 +597,7 @@ button:disabled {
 }
 
 .panel-toolbar {
-  min-height: 56px;
+  min-height: 52px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -614,7 +614,7 @@ button:disabled {
 
 .filter-tabs button,
 .sort-button {
-  min-height: 36px;
+  min-height: 34px;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -661,7 +661,7 @@ button:disabled {
 }
 
 .list-heading {
-  min-height: 48px;
+  min-height: 44px;
   padding: 0 18px;
   border-bottom: 1px solid var(--line);
   background: var(--surface-subtle);
@@ -687,7 +687,7 @@ button:disabled {
 .vault-row {
   position: relative;
   width: 100%;
-  min-height: 64px;
+  min-height: 60px;
   padding: 9px 18px;
   border: 0;
   border-bottom: 1px solid var(--line);
@@ -714,7 +714,7 @@ button:disabled {
 }
 
 .vault-row.is-selected {
-  background: #f2f6ff;
+  background: #f7f9ff;
 }
 
 .vault-row.is-selected::before {
@@ -1123,8 +1123,8 @@ button:disabled {
 }
 
 .open-site-button {
-  min-height: 40px;
-  padding: 0 11px;
+  min-height: 36px;
+  padding: 0 10px;
   border: 1px solid var(--line-strong);
   background: var(--surface);
   color: var(--ink);
@@ -1282,7 +1282,7 @@ button:disabled {
 .modal select,
 .lock-card input {
   width: 100%;
-  min-height: 40px;
+  min-height: 38px;
   padding: 0 12px;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-sm);
@@ -1295,7 +1295,7 @@ button:disabled {
 .modal select:focus,
 .lock-card input:focus {
   border-color: var(--focus);
-  box-shadow: 0 0 0 3px rgb(93 126 232 / 0.14);
+  box-shadow: 0 0 0 3px rgb(130 152 213 / 0.14);
 }
 
 .modal label > small {
@@ -1346,7 +1346,7 @@ button:disabled {
 
 .form-password:focus-within {
   border-color: var(--focus);
-  box-shadow: 0 0 0 3px rgb(93 126 232 / 0.14);
+  box-shadow: 0 0 0 3px rgb(130 152 213 / 0.14);
 }
 
 .form-password input {
@@ -1370,8 +1370,8 @@ button:disabled {
 }
 
 .form-password .password-visibility {
-  min-width: 40px;
-  width: 40px;
+  min-width: 38px;
+  width: 38px;
   padding: 0;
   border-left: 1px solid var(--line);
 }
@@ -1395,7 +1395,7 @@ button:disabled {
 
 .modal .totp-image-button {
   width: fit-content;
-  min-height: 40px;
+  min-height: 36px;
   display: inline-flex;
   align-items: center;
   gap: 7px;
@@ -1475,7 +1475,7 @@ button:disabled {
 }
 
 .danger-button {
-  min-height: 40px;
+  min-height: 36px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1645,7 +1645,7 @@ button:disabled {
 }
 
 .system-user-actions select {
-  min-height: 40px;
+  min-height: 36px;
   max-width: 98px;
   padding: 0 8px;
   border: 1px solid var(--line-strong);
@@ -1656,7 +1656,7 @@ button:disabled {
 }
 
 .system-user-actions .secondary-button {
-  min-height: 40px;
+  min-height: 36px;
   padding: 0 10px;
   color: var(--danger);
 }
@@ -1797,7 +1797,7 @@ button:disabled {
 .approval-actions .secondary-button,
 .approval-actions .primary-button,
 .approval-section > .secondary-button {
-  min-height: 40px;
+  min-height: 36px;
   padding: 0 10px;
 }
 

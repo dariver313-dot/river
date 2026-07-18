@@ -22,7 +22,7 @@
 | Primary | `#1E3A5F` | `--color-primary` |
 | On Primary | `#FFFFFF` | `--color-on-primary` |
 | Secondary | `#334155` | `--color-secondary` |
-| Accent/CTA | `#2F63D8` | `--color-accent` |
+| Accent/CTA | `#506FC4` | `--color-accent` |
 | Background | `#0F172A` | `--color-background` |
 | Foreground | `#FFFFFF` | `--color-foreground` |
 | Muted | `#10192E` | `--color-muted` |
@@ -76,9 +76,9 @@
 ```css
 /* Primary Button */
 .btn-primary {
-  background: #2F63D8;
+  background: #506FC4;
   color: white;
-  padding: 10px 16px;
+  padding: 8px 14px;
   border-radius: 8px;
   font-weight: 600;
   transition: all 200ms ease;
@@ -95,7 +95,7 @@
   background: transparent;
   color: #1E3A5F;
   border: 2px solid #1E3A5F;
-  padding: 10px 16px;
+  padding: 8px 14px;
   border-radius: 8px;
   font-weight: 600;
   transition: all 200ms ease;

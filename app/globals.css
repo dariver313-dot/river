@@ -143,8 +143,7 @@ button:disabled {
 .protection-row,
 .detail-footer > div,
 .password-health,
-.risk-item,
-.score-status {
+.risk-item {
   display: flex;
   align-items: center;
 }
@@ -471,101 +470,12 @@ button:disabled {
 
 .security-strip {
   display: grid;
-  grid-template-columns: minmax(210px, 1.08fr) repeat(3, minmax(180px, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   background: var(--surface);
   overflow: hidden;
   box-shadow: var(--shadow-card);
-}
-
-.score-block {
-  padding: 13px 16px;
-  border-right: 1px solid var(--line);
-}
-
-.score-block-action {
-  width: 100%;
-  border: 0;
-  background: var(--surface);
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
-  transition: background-color 180ms ease;
-}
-
-.score-block-action:hover {
-  background: var(--surface-subtle);
-}
-
-.score-block-static {
-  cursor: default;
-}
-
-.score-copy {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.score-copy > span {
-  color: var(--ink-soft);
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.score-copy strong {
-  color: var(--ink);
-  font-size: 26px;
-  line-height: 1;
-  font-variant-numeric: tabular-nums;
-}
-
-.score-copy small {
-  color: var(--ink-faint);
-  font-size: 12px;
-  font-weight: 500;
-}
-
-.score-meter {
-  display: block;
-  height: 6px;
-  margin: 10px 0 8px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: #dce9df;
-}
-
-.score-meter span {
-  display: block;
-  width: 86%;
-  height: 100%;
-  background: var(--accent);
-}
-
-.score-meter.is-caution span {
-  background: #b7791f;
-}
-
-.score-meter.is-risk span {
-  background: var(--danger);
-}
-
-.score-meter.is-empty span {
-  background: var(--line-strong);
-}
-
-.score-status {
-  gap: 5px;
-  margin: 0;
-  color: var(--accent-strong);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.score-status svg:last-child {
-  margin-left: auto;
 }
 
 .risk-item {
@@ -3171,13 +3081,7 @@ button:disabled {
   }
 
   .security-strip {
-    grid-template-columns: repeat(3, 1fr);
-  }
-
-  .score-block {
-    grid-column: 1 / -1;
-    border-right: 0;
-    border-bottom: 1px solid var(--line);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .content-grid {
@@ -3368,10 +3272,6 @@ button:disabled {
 
   .security-strip {
     grid-template-columns: 1fr;
-  }
-
-  .score-block {
-    grid-column: auto;
   }
 
   .risk-item {

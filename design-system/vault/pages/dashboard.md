@@ -6,7 +6,7 @@ This file intentionally overrides the mobile/dark recommendation in `../MASTER.m
 
 - Product surface: signed-in desktop web vault, not a marketing landing page.
 - Style: restrained security utility; light, high-contrast, dense but calm.
-- Layout: fixed desktop navigation, risk summary strip, credential table/list, contextual detail panel. Collapse to an off-canvas menu and single column on smaller screens.
+- Layout: fixed desktop navigation, a four-card risk summary strip with equal hierarchy, credential table/list, and contextual detail panel. Collapse to an off-canvas menu and single column on smaller screens.
 - Primary: deep leaf green `#30483A`; accent and positive state: muted sage `#3F7A5B`; canvas: very pale sage `#F8FCF8`; surfaces: white. Keep risk amber/red semantic rather than recoloring it green.
 - Typography: Geist with Chinese system-font fallbacks. Use compact hierarchy and tabular numerals for scores and dates.
 - Radius: 7–14px with a controlled scale. Prefer separators and tonal surfaces over card shadows.

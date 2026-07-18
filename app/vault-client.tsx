@@ -662,6 +662,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
               <Archive size={25} aria-hidden="true" />
               <h2>密码库为空</h2>
               <p>新建一个项目，开始整理你的登录信息。</p>
+              <div className="onboarding-note" role="note"><ShieldCheck size={17} aria-hidden="true" /><div><strong>首次配置</strong><span>填写账号密码；如网站开启 Google Authenticator，可粘贴 Setup Key 或读取配置二维码图片。</span></div></div>
               <button className="primary-button" onClick={() => setShowAdd(true)}><Plus size={18} />新建项目</button>
             </aside>
           )}
@@ -735,6 +736,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
               <p className="form-note">此操作只授予访问权限，不会向邮箱发送通知。协作人下次安全登录后即可访问公共项目。</p>
               <footer><button type="submit" className="primary-button" disabled={isSaving}><UsersRound size={17} />{isSaving ? "正在更新" : "添加协作人"}</button></footer>
             </form>
+            <aside className="sharing-guide" role="note"><ShieldCheck size={18} aria-hidden="true" /><div><strong>添加协作人分两步</strong><ol><li>站点管理员先将对方的安全登录邮箱加入站点访问名单。</li><li>再在这里填入同一邮箱，并选择“可编辑”或“仅查看”。</li><li>对方首次安全登录后，即可看到公共空间。</li></ol></div></aside>
             <div className="sharing-section">
               <div className="sharing-section-title"><h3>当前协作人</h3><span>{members.length} 位</span></div>
               {members.length > 0 ? <div className="member-list">{members.map((member) => <div className="member-row" key={member.email}><div><strong>{member.email}</strong><span>{member.role === "editor" ? "可查看和编辑" : "仅查看"} · {member.createdAt}</span></div><button className="secondary-button" onClick={() => removeMember(member.email)} disabled={isSaving}>移除</button></div>)}</div> : <p className="sharing-empty">尚未添加协作人；公共空间目前只有你自己可以访问。</p>}

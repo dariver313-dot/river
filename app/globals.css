@@ -23,6 +23,9 @@
   --warning-soft: #fff5dc;
   --info: #205c87;
   --info-soft: #eaf3fa;
+  --shadow-card: 0 1px 2px rgb(20 34 53 / 0.04), 0 8px 22px rgb(20 34 53 / 0.06);
+  --shadow-card-hover: 0 2px 4px rgb(20 34 53 / 0.06), 0 12px 28px rgb(20 34 53 / 0.09);
+  --shadow-button: 0 1px 2px rgb(6 46 39 / 0.18);
   --shadow-modal: 0 24px 70px rgb(20 34 53 / 0.2);
   --radius-sm: 7px;
   --radius-md: 10px;
@@ -317,13 +320,14 @@ button:disabled {
   border-radius: var(--radius-sm);
   background: var(--surface);
   color: var(--ink-soft);
-  transition: color 180ms ease, background-color 180ms ease, border-color 180ms ease;
+  transition: color 180ms ease, background-color 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
 }
 
 .icon-button:hover {
   color: var(--ink);
   border-color: var(--line-strong);
   background: var(--surface-subtle);
+  box-shadow: 0 2px 6px rgb(20 34 53 / 0.07);
 }
 
 .dark-icon {
@@ -376,6 +380,7 @@ button:disabled {
   border-radius: var(--radius-md);
   background: var(--surface);
   color: var(--ink-faint);
+  box-shadow: 0 1px 2px rgb(20 34 53 / 0.03);
 }
 
 .topbar-search:focus-within {
@@ -412,35 +417,40 @@ button:disabled {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  padding: 0 15px;
+  gap: 7px;
+  padding: 0 12px;
   border-radius: var(--radius-sm);
-  font-size: 14px;
+  font-size: 12px;
   font-weight: 650;
   white-space: nowrap;
-  transition: background-color 180ms ease, border-color 180ms ease, color 180ms ease;
+  transition: background-color 180ms ease, border-color 180ms ease, color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
 }
 
 .primary-button {
   border: 1px solid var(--accent);
   background: var(--accent);
   color: white;
+  box-shadow: var(--shadow-button);
 }
 
 .primary-button:hover {
   border-color: var(--accent-strong);
   background: var(--accent-strong);
+  box-shadow: 0 4px 10px rgb(6 46 39 / 0.2);
+  transform: translateY(-1px);
 }
 
 .secondary-button {
   border: 1px solid var(--line-strong);
   background: var(--surface);
   color: var(--ink);
+  box-shadow: 0 1px 2px rgb(20 34 53 / 0.03);
 }
 
 .secondary-button:hover {
   border-color: #aebbc4;
   background: var(--surface-subtle);
+  box-shadow: 0 3px 8px rgb(20 34 53 / 0.07);
 }
 
 .mobile-menu {
@@ -454,6 +464,7 @@ button:disabled {
   border-radius: var(--radius-lg);
   background: var(--surface);
   overflow: hidden;
+  box-shadow: var(--shadow-card);
 }
 
 .score-block {
@@ -577,6 +588,13 @@ button:disabled {
   border-radius: var(--radius-lg);
   background: var(--surface);
   overflow: hidden;
+  box-shadow: var(--shadow-card);
+  transition: box-shadow 180ms ease;
+}
+
+.vault-panel:hover,
+.detail-panel:hover {
+  box-shadow: var(--shadow-card-hover);
 }
 
 .panel-toolbar {
@@ -1151,6 +1169,36 @@ button:disabled {
   font-size: 13px;
 }
 
+.onboarding-note {
+  width: min(100%, 310px);
+  display: grid;
+  grid-template-columns: 20px 1fr;
+  gap: 9px;
+  margin: 0 0 18px;
+  padding: 11px 12px;
+  border: 1px solid #c8e3dc;
+  border-radius: var(--radius-sm);
+  background: #f3faf8;
+  color: var(--accent-strong);
+  text-align: left;
+}
+
+.onboarding-note > div {
+  display: grid;
+  gap: 2px;
+}
+
+.onboarding-note strong {
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.onboarding-note span {
+  color: var(--ink-soft);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
 .modal-layer,
 .lock-layer {
   position: fixed;
@@ -1417,6 +1465,37 @@ button:disabled {
   margin: 4px 0 0;
   padding: 14px 0 0;
   background: transparent;
+}
+
+.sharing-guide {
+  display: grid;
+  grid-template-columns: 22px 1fr;
+  gap: 10px;
+  margin: 0 20px;
+  padding: 13px;
+  border: 1px solid #cadde8;
+  border-radius: var(--radius-sm);
+  background: #f5faff;
+  color: var(--info);
+}
+
+.sharing-guide > div {
+  min-width: 0;
+}
+
+.sharing-guide strong {
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.sharing-guide ol {
+  display: grid;
+  gap: 3px;
+  margin: 6px 0 0;
+  padding-left: 16px;
+  color: var(--ink-soft);
+  font-size: 11px;
+  line-height: 1.55;
 }
 
 .sharing-section {

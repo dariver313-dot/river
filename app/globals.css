@@ -144,7 +144,7 @@ button:disabled {
 .detail-footer > div,
 .password-health,
 .risk-item,
-.score-block > p {
+.score-status {
   display: flex;
   align-items: center;
 }
@@ -484,6 +484,20 @@ button:disabled {
   border-right: 1px solid var(--line);
 }
 
+.score-block-action {
+  width: 100%;
+  border: 0;
+  background: var(--surface);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 180ms ease;
+}
+
+.score-block-action:hover {
+  background: var(--surface-subtle);
+}
+
 .score-copy {
   display: flex;
   align-items: flex-end;
@@ -525,12 +539,16 @@ button:disabled {
   background: var(--accent);
 }
 
-.score-block > p {
+.score-status {
   gap: 5px;
   margin: 0;
   color: var(--accent-strong);
   font-size: 12px;
   font-weight: 600;
+}
+
+.score-status svg:last-child {
+  margin-left: auto;
 }
 
 .risk-item {
@@ -553,6 +571,15 @@ button:disabled {
 
 .risk-item:hover {
   background: var(--surface-subtle);
+}
+
+.risk-item:disabled {
+  cursor: default;
+  opacity: 0.68;
+}
+
+.risk-item:disabled:hover {
+  background: var(--surface);
 }
 
 .risk-item > span:nth-child(2) {
@@ -858,6 +885,17 @@ button:disabled {
   color: var(--accent-strong);
 }
 
+.security-focuses button:disabled {
+  cursor: default;
+  opacity: 0.58;
+}
+
+.security-focuses button:disabled:hover:not(.is-selected) {
+  border-color: var(--line);
+  background: var(--surface);
+  color: var(--ink-soft);
+}
+
 .panel-toolbar {
   min-height: 52px;
   display: flex;
@@ -866,6 +904,40 @@ button:disabled {
   gap: 12px;
   padding: 10px 16px;
   border-bottom: 1px solid var(--line);
+}
+
+.toolbar-selects {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.toolbar-select {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.toolbar-select > span {
+  color: var(--ink-faint);
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1;
+}
+
+.toolbar-select .surface-select.is-compact {
+  width: 110px;
+}
+
+.toolbar-select:nth-child(3) .surface-select.is-compact {
+  width: 128px;
+}
+
+.toolbar-select .surface-select.is-compact .surface-select-options {
+  max-height: 240px;
+  overflow-y: auto;
 }
 
 .toolbar-filters {
@@ -1021,6 +1093,8 @@ button:disabled {
 }
 
 .item-identity strong {
+  min-width: 0;
+  flex: 1 1 auto;
   overflow: hidden;
   color: var(--ink);
   font-size: 14px;
@@ -1052,6 +1126,25 @@ button:disabled {
   border-color: #c8d9f1;
   background: #eef5ff;
   color: #315f98;
+}
+
+.category-badge {
+  max-width: 96px;
+  min-width: 0;
+  min-height: 20px;
+  overflow: hidden;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 7px;
+  border: 1px solid #dde4eb;
+  border-radius: 999px;
+  background: #f7f9fb;
+  color: #58677a;
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .item-identity small {
@@ -1168,6 +1261,10 @@ button:disabled {
   color: var(--warning);
 }
 
+.empty-state-success > svg {
+  color: var(--accent-strong);
+}
+
 .detail-panel {
   position: sticky;
   top: 18px;
@@ -1232,8 +1329,28 @@ button:disabled {
   text-decoration: none;
 }
 
+.detail-domain {
+  display: block;
+  margin-top: 3px;
+  overflow: hidden;
+  color: var(--ink-soft);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .detail-brand a:hover {
   text-decoration: underline;
+}
+
+.detail-category {
+  display: block;
+  margin-top: 5px;
+  overflow: hidden;
+  color: var(--ink-soft);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .detail-actions {
@@ -1532,18 +1649,23 @@ button:disabled {
   font-size: 10px;
 }
 
-.open-site-button {
+.detail-delete-button {
   min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   padding: 0 10px;
-  border: 1px solid var(--line-strong);
+  border: 1px solid #e7c4bf;
   background: var(--surface);
-  color: var(--ink);
+  color: var(--danger);
   font-size: 12px;
+  font-weight: 650;
 }
 
-.open-site-button:hover:not(:disabled) {
-  border-color: var(--accent);
-  color: var(--accent-strong);
+.detail-delete-button:hover:not(:disabled) {
+  border-color: #d9a7a0;
+  background: var(--danger-soft);
 }
 
 .destructive-icon {
@@ -3036,6 +3158,17 @@ button:disabled {
     flex-direction: column;
   }
 
+  .toolbar-selects {
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .toolbar-select .surface-select.is-compact,
+  .toolbar-select:nth-child(3) .surface-select.is-compact {
+    width: 100%;
+  }
+
   .filter-tabs {
     width: 100%;
     overflow-x: auto;
@@ -3076,8 +3209,16 @@ button:disabled {
     flex-direction: column;
   }
 
-  .detail-footer .open-site-button {
+  .detail-footer .detail-delete-button {
     width: 100%;
+  }
+
+  .detail-actions .icon-button,
+  .secret-field .icon-button,
+  .totp-value .icon-button {
+    width: 44px;
+    height: 44px;
+    flex-basis: 44px;
   }
 
   .system-user-table,

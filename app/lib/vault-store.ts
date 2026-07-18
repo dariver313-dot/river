@@ -14,6 +14,7 @@ export type VaultCredential = {
   domain: string;
   username: string;
   password: string;
+  category: string;
   type: VaultItemType;
   group: VaultSpace;
   updated: string;
@@ -44,7 +45,10 @@ export type ApprovalRequest = {
   isRequester: boolean;
 };
 
-type StoredCredential = Omit<VaultCredential, "id" | "group" | "updated" | "canEdit" | "sharedBy">;
+type StoredCredential = Omit<VaultCredential, "id" | "group" | "updated" | "canEdit" | "sharedBy" | "category"> & {
+  // 分类随加密项目一起存储；旧项目解密时没有该字段，也应可继续读取。
+  category?: string;
+};
 type VaultKind = "personal" | "public";
 type VaultRole = "owner" | "editor" | "viewer";
 
@@ -94,6 +98,7 @@ function storedPayload(input: Record<string, unknown>): StoredCredential {
   const domain = normalizeDomain(boundedText(input.domain, "domain", { required: true }));
   const username = boundedText(input.username, "username", { required: true });
   const password = boundedText(input.password, "password", { trim: false, required: true });
+  const category = boundedText(input.category, "category");
   const type = isItemType(input.type) ? input.type : "登录";
   const totpInput = typeof input.totpInput === "string" ? input.totpInput.trim() : "";
   if (totpInput.length > 4_096) throw new Error("验证器配置内容过长。请粘贴 Setup Key 或完整二维码内容。");
@@ -112,6 +117,7 @@ function storedPayload(input: Record<string, unknown>): StoredCredential {
     domain,
     username,
     password,
+    category,
     type,
     strength: strengthFor(password),
     twoFactor: Boolean(input.twoFactor) || Boolean(totp),
@@ -220,6 +226,7 @@ function toCredential(row: VaultItemRow, payload: StoredCredential, vault: Acces
   return {
     id: row.id,
     ...payload,
+    category: payload.category ?? "",
     group: vault.kind === "personal" ? "个人" : "公共",
     updated: timeLabel(row.updated_at),
     canEdit: canWrite(vault.role),
@@ -233,6 +240,7 @@ function toSummary(credential: VaultCredential, securityIssues: SecurityIssue[] 
     name: credential.name,
     domain: credential.domain,
     username: credential.username,
+    category: credential.category,
     type: credential.type,
     group: credential.group,
     updated: credential.updated,
@@ -309,7 +317,7 @@ export async function createVaultItem(email: string, input: Record<string, unkno
   ).bind(id, vault.id, encrypted.ciphertext, encrypted.iv).run();
   await writeAudit(vault.id, email, "item_created", id);
 
-  return { id, ...payload, group: space, updated: "刚刚更新", canEdit: space === "个人" || actor.role === "admin" } satisfies VaultCredential;
+  return { id, ...payload, category: payload.category ?? "", group: space, updated: "刚刚更新", canEdit: space === "个人" || actor.role === "admin" } satisfies VaultCredential;
 }
 
 async function findItemAccess(email: string, itemId: string) {
@@ -344,7 +352,7 @@ export async function updateVaultItem(email: string, itemId: string, input: Reco
   ).bind(destination.id, encrypted.ciphertext, encrypted.iv, item.id).run();
   await writeAudit(destination.id, email, nextSpace !== currentSpace ? "item_published_to_public" : "item_updated", item.id);
 
-  return { id: item.id, ...payload, group: nextSpace, updated: "刚刚更新", canEdit: nextSpace === "个人" || actor?.role === "admin" } satisfies VaultCredential;
+  return { id: item.id, ...payload, category: payload.category ?? "", group: nextSpace, updated: "刚刚更新", canEdit: nextSpace === "个人" || actor?.role === "admin" } satisfies VaultCredential;
 }
 
 export async function getVaultItem(email: string, itemId: string) {

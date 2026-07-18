@@ -15,7 +15,8 @@ export function reviewCredentialSecurity(items: ReviewableCredential[]) {
 
   return new Map(items.map((item) => {
     const issues: SecurityIssue[] = [];
-    if (item.strength === "风险") issues.push("weak_password");
+    // “一般”代表长度未达到推荐的 14 位，因此也应在安全检查中给出可处理的提醒。
+    if (item.strength !== "安全") issues.push("weak_password");
     if ((passwordUseCount.get(item.password) ?? 0) > 1) issues.push("reused_password");
     if (!item.twoFactor) issues.push("missing_two_factor");
     return [item.id, issues] as const;

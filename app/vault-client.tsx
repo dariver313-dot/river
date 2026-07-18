@@ -15,7 +15,6 @@ import {
   Eye,
   EyeOff,
   FileKey2,
-  Globe2,
   ImageUp,
   KeyRound,
   LogOut,
@@ -43,6 +42,7 @@ type Space = "全部" | "个人" | "公共";
 type Collection = "all" | "security";
 type Page = "vault" | "profile" | "users";
 type SecurityFocus = "all" | SecurityIssue;
+type SortOrder = "updated" | "name";
 
 type VaultItem = {
   id: string;
@@ -50,6 +50,7 @@ type VaultItem = {
   domain: string;
   username: string;
   password: string;
+  category: string;
   type: ItemType;
   group: string;
   updated: string;
@@ -75,7 +76,7 @@ type Viewer = {
   role: "admin" | "user";
 };
 
-type CredentialForm = Pick<VaultItem, "name" | "domain" | "username" | "password" | "group"> & {
+type CredentialForm = Pick<VaultItem, "name" | "domain" | "username" | "password" | "category" | "group"> & {
   totpInput: string;
   removeTotp: boolean;
 };
@@ -96,7 +97,7 @@ const filters = ["全部", "登录"] as const;
 const spaceFilters = ["全部", "个人", "公共"] as const;
 
 function emptyCredentialForm(): CredentialForm {
-  return { name: "", domain: "", username: "", password: "", group: "个人", totpInput: "", removeTotp: false };
+  return { name: "", domain: "", username: "", password: "", category: "", group: "个人", totpInput: "", removeTotp: false };
 }
 
 function generateStrongPassword() {
@@ -117,6 +118,7 @@ function toItemSummary(item: VaultItem, securityIssues: SecurityIssue[] = []): V
     name: item.name,
     domain: item.domain,
     username: item.username,
+    category: item.category,
     type: item.type,
     group: item.group,
     updated: item.updated,
@@ -152,7 +154,7 @@ function StrengthBadge({ strength }: { strength: Strength }) {
 }
 
 const securityIssueCopy: Record<SecurityIssue, { label: string; detail: string }> = {
-  weak_password: { label: "密码过短", detail: "建议使用至少 14 位的随机密码" },
+  weak_password: { label: "密码长度不足", detail: "建议使用至少 14 位的随机密码" },
   reused_password: { label: "密码重复", detail: "同一密码正用于多个项目" },
   missing_two_factor: { label: "未开启双重验证", detail: "建议在服务网站开启验证器保护" },
 };
@@ -415,6 +417,8 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<(typeof filters)[number]>("全部");
   const [space, setSpace] = useState<Space>("全部");
+  const [category, setCategory] = useState("全部");
+  const [sortOrder, setSortOrder] = useState<SortOrder>("updated");
   const [collection, setCollection] = useState<Collection>("all");
   const [page, setPage] = useState<Page>("vault");
   const [securityFocus, setSecurityFocus] = useState<SecurityFocus>("all");
@@ -448,23 +452,29 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
   const [editForm, setEditForm] = useState<CredentialForm>(emptyCredentialForm);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
+  const categoryNames = useMemo(() => Array.from(new Set(items.map((item) => item.category.trim()).filter(Boolean))).sort((left, right) => left.localeCompare(right, "zh-CN")), [items]);
+  const categoryOptions = useMemo(() => [{ value: "全部", label: "全部分类" }, ...categoryNames.map((value) => ({ value, label: value }))], [categoryNames]);
+  const activeCategory = category === "全部" || categoryNames.includes(category) ? category : "全部";
+
   const visibleItems = useMemo(() => {
     const normalized = query.trim().toLowerCase();
-    return items.filter((item) => {
+    const filtered = items.filter((item) => {
       const matchesFilter = filter === "全部" || item.type === filter;
       const matchesSpace = space === "全部" || item.group === space;
+      const matchesCategory = activeCategory === "全部" || item.category === activeCategory;
       const matchesCollection = collection === "all"
         || (collection === "security" && item.securityIssues.length > 0 && (securityFocus === "all" || item.securityIssues.includes(securityFocus)));
-      const matchesQuery = !normalized || [item.name, item.domain, item.username, item.group].some((value) => value.toLowerCase().includes(normalized));
-      return matchesFilter && matchesSpace && matchesCollection && matchesQuery;
+      const matchesQuery = !normalized || [item.name, item.domain, item.username, item.category, item.group].some((value) => value.toLowerCase().includes(normalized));
+      return matchesFilter && matchesSpace && matchesCategory && matchesCollection && matchesQuery;
     });
-  }, [collection, filter, items, query, securityFocus, space]);
+    return sortOrder === "name" ? filtered.sort((left, right) => left.name.localeCompare(right.name, "zh-CN")) : filtered;
+  }, [activeCategory, collection, filter, items, query, securityFocus, sortOrder, space]);
 
   const activeSelectedId = visibleItems.some((item) => item.id === selectedId) ? selectedId : visibleItems[0]?.id ?? selectedId;
   const selected = selectedDetail?.id === activeSelectedId ? selectedDetail : null;
   const selectedSummary = items.find((item) => item.id === activeSelectedId) ?? null;
   const listTitle = collection === "security"
-      ? "需要处理的账户"
+      ? securityFocus === "all" ? "待处理账户" : securityIssueCopy[securityFocus].label
       : space === "全部" ? (filter === "全部" ? "全部项目" : filter) : `${space} · ${filter === "全部" ? "全部项目" : filter}`;
   const viewerInitial = viewer.displayName.trim().slice(0, 1).toLocaleUpperCase() || "你";
   const isAdmin = viewer.role === "admin";
@@ -678,7 +688,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
   }
 
   function openEdit(item: VaultItem) {
-    setEditForm({ name: item.name, domain: item.domain, username: item.username, password: item.password, group: item.group, totpInput: "", removeTotp: false });
+    setEditForm({ name: item.name, domain: item.domain, username: item.username, password: item.password, category: item.category, group: item.group, totpInput: "", removeTotp: false });
     setEditingItem(item);
     setRevealed(false);
     setShowEditPassword(false);
@@ -747,6 +757,8 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
     setCollection("all");
     setSpace("全部");
     setFilter("全部");
+    setCategory("全部");
+    setSortOrder("updated");
     setSecurityFocus("all");
     setMobileNav(false);
   }
@@ -756,8 +768,19 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
     setCollection("security");
     setSpace("全部");
     setFilter("全部");
+    setCategory("全部");
+    setSortOrder("updated");
     setSecurityFocus(focus);
     setMobileNav(false);
+  }
+
+  function clearVaultFilters() {
+    setQuery("");
+    setFilter("全部");
+    setSpace("全部");
+    setCategory("全部");
+    setSortOrder("updated");
+    setSecurityFocus("all");
   }
 
   async function createSystemUser(event: FormEvent<HTMLFormElement>) {
@@ -945,42 +968,34 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
           <section className="users-panel" aria-labelledby="users-page-title"><div className="users-toolbar"><div className="users-toolbar-copy"><h2 id="users-page-title">系统用户</h2><span>{isUsersLoading ? "正在读取用户" : `显示 ${visibleSystemUsers.length} / ${systemUsers.length} 位用户`}</span></div><span className="users-toolbar-note">角色与访问状态</span></div>{isUsersLoading ? <p className="users-empty">正在读取系统用户。</p> : visibleSystemUsers.length > 0 ? <div className="system-user-table-wrap"><table className="system-user-table"><thead><tr><th scope="col">用户</th><th scope="col">角色</th><th scope="col">状态</th><th scope="col">创建时间</th><th scope="col">管理</th></tr></thead><tbody>{visibleSystemUsers.map((user) => <tr key={user.email}><td data-label="用户"><div className="system-user-identity"><strong title={user.email}>{user.email}</strong>{user.isCurrent && <span className="current-user">当前账户</span>}</div></td><td data-label="角色"><b className={`role-badge role-${user.role}`}>{user.role === "admin" ? "管理员" : "普通用户"}</b></td><td data-label="状态"><b className={`status-badge status-${user.status}`}>{user.status === "active" ? "已启用" : "已停用"}</b></td><td data-label="创建时间"><span className="system-user-created">{user.createdAt}</span></td><td data-label="管理">{user.isCurrent ? <span className="current-user">当前账户不可调整</span> : <div className="system-user-actions"><SurfaceSelect id={`role-${user.email}`} ariaLabel={`调整${user.email}的系统角色`} value={user.role} onChange={(role) => void updateSystemUser(user, { role })} options={[{ value: "user", label: "普通用户" }, { value: "admin", label: "管理员" }]} disabled={isSaving} compact /><button type="button" className="secondary-button" onClick={() => { const nextStatus = user.status === "active" ? "suspended" : "active"; if (nextStatus === "suspended" && !window.confirm(`确定停用 ${user.email} 吗？`)) return; void updateSystemUser(user, { status: nextStatus }); }} disabled={isSaving}>{user.status === "active" ? "停用" : "启用"}</button><button type="button" className="secondary-button user-delete-button" onClick={() => void deleteSystemUser(user)} disabled={isSaving}>删除</button></div>}</td></tr>)}</tbody></table></div> : <p className="users-empty">没有找到匹配的系统用户。</p>}</section>
         </section> : page === "profile" ? <ProfileOverview viewer={viewer} viewerInitial={viewerInitial} isLoading={isLoading} securityScore={securityScore} securityIssueCount={securityIssueCount} onOpenSecurity={openSecurityReview} /> : <>
         <section className="security-strip" aria-labelledby="security-heading">
-          <div className="score-block">
-          <div className="score-copy"><span>基础安全评分</span><strong id="security-heading">{securityScore}<small>/100</small></strong></div>
-            <div className="score-meter" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={securityScore} aria-label={`安全评分 ${securityScore} 分`}><span style={{ width: `${securityScore}%` }} /></div>
-            <p>{securityScore >= 80 ? <Check size={15} aria-hidden="true" /> : <AlertTriangle size={15} aria-hidden="true" />}{securityScore >= 80 ? "未发现需要处理的基础风险" : `${securityIssueCount} 条风险需要处理`}</p>
-          </div>
-          <button className="risk-item" onClick={() => openSecurityReview("weak_password")}><span className="risk-icon risk-danger"><AlertTriangle size={17} /></span><span><strong>{weakPasswordCount} 个密码过短</strong><small>建议立即更换</small></span><ChevronRight size={18} /></button>
-          <button className="risk-item" onClick={() => openSecurityReview("reused_password")}><span className="risk-icon risk-warning"><ShieldEllipsis size={17} /></span><span><strong>{reusedPasswordCount} 个重复密码</strong><small>避免一个泄露影响多个账号</small></span><ChevronRight size={18} /></button>
-          <button className="risk-item" onClick={() => openSecurityReview("missing_two_factor")}><span className="risk-icon risk-info"><Smartphone size={17} /></span><span><strong>{missingTwoFactorCount} 个未启用双重验证</strong><small>查看需处理账户</small></span><ChevronRight size={18} /></button>
+          <button type="button" className="score-block score-block-action" onClick={() => openSecurityReview()} aria-label="查看全部账户安全检查结果">
+            <span className="score-copy"><span>基础安全评分</span><strong id="security-heading">{securityScore}<small>/100</small></strong></span>
+            <span className="score-meter" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={securityScore} aria-label={`安全评分 ${securityScore} 分`}><span style={{ width: `${securityScore}%` }} /></span>
+            <span className="score-status">{items.length === 0 ? <ShieldCheck size={15} aria-hidden="true" /> : securityScore >= 80 ? <Check size={15} aria-hidden="true" /> : <AlertTriangle size={15} aria-hidden="true" />}{items.length === 0 ? "添加账户后显示安全评分" : securityScore >= 80 ? "未发现需要处理的基础风险" : `${securityIssueCount} 条风险需要处理`}<ChevronRight size={15} aria-hidden="true" /></span>
+          </button>
+          <button className="risk-item" onClick={() => openSecurityReview("weak_password")} disabled={weakPasswordCount === 0}><span className="risk-icon risk-danger"><AlertTriangle size={17} /></span><span><strong>{weakPasswordCount} 个密码长度不足</strong><small>建议使用至少 14 位随机密码</small></span><ChevronRight size={18} /></button>
+          <button className="risk-item" onClick={() => openSecurityReview("reused_password")} disabled={reusedPasswordCount === 0}><span className="risk-icon risk-warning"><ShieldEllipsis size={17} /></span><span><strong>{reusedPasswordCount} 个重复密码</strong><small>避免一个泄露影响多个账号</small></span><ChevronRight size={18} /></button>
+          <button className="risk-item" onClick={() => openSecurityReview("missing_two_factor")} disabled={missingTwoFactorCount === 0}><span className="risk-icon risk-info"><Smartphone size={17} /></span><span><strong>{missingTwoFactorCount} 个未启用双重验证</strong><small>查看需处理账户</small></span><ChevronRight size={18} /></button>
         </section>
 
         <div className="content-grid">
           <section className="vault-panel" aria-labelledby="vault-list-title">
             {collection === "security" && <div className="security-review" role="region" aria-labelledby="security-review-title">
-              <div className="security-review-head"><div><span className="eyebrow">账户安全检查</span><h2 id="security-review-title">{securityIssueCount > 0 ? `${securityIssueCount} 条基础风险待处理` : "基础检查已通过"}</h2><p>检查密码长度、重复使用情况和双重验证状态。</p></div><button type="button" className="secondary-button" onClick={openAccountManagement}>查看全部账户</button></div>
+              <div className="security-review-head"><div><span className="eyebrow">账户安全检查</span><h2 id="security-review-title">{items.length === 0 ? "还没有可检查的账户" : securityIssueCount > 0 ? `${securityIssueCount} 条基础风险待处理` : "基础检查已通过"}</h2><p>{items.length === 0 ? "新建账户后会自动检查密码长度、重复使用与双重验证状态。" : "检查密码长度、重复使用情况和双重验证状态。"}</p></div><button type="button" className="secondary-button" onClick={openAccountManagement}>查看全部账户</button></div>
               <div className="security-focuses" role="group" aria-label="安全风险筛选">
                 <button className={securityFocus === "all" ? "is-selected" : ""} onClick={() => setSecurityFocus("all")}>全部 {securityIssueCount}</button>
-                <button className={securityFocus === "weak_password" ? "is-selected" : ""} onClick={() => setSecurityFocus("weak_password")}>密码过短 {weakPasswordCount}</button>
-                <button className={securityFocus === "reused_password" ? "is-selected" : ""} onClick={() => setSecurityFocus("reused_password")}>密码重复 {reusedPasswordCount}</button>
-                <button className={securityFocus === "missing_two_factor" ? "is-selected" : ""} onClick={() => setSecurityFocus("missing_two_factor")}>未开双重验证 {missingTwoFactorCount}</button>
+                <button className={securityFocus === "weak_password" ? "is-selected" : ""} onClick={() => setSecurityFocus("weak_password")} disabled={weakPasswordCount === 0}>密码长度不足 {weakPasswordCount}</button>
+                <button className={securityFocus === "reused_password" ? "is-selected" : ""} onClick={() => setSecurityFocus("reused_password")} disabled={reusedPasswordCount === 0}>密码重复 {reusedPasswordCount}</button>
+                <button className={securityFocus === "missing_two_factor" ? "is-selected" : ""} onClick={() => setSecurityFocus("missing_two_factor")} disabled={missingTwoFactorCount === 0}>未开双重验证 {missingTwoFactorCount}</button>
               </div>
             </div>}
             <div className="panel-toolbar">
-              <div className="toolbar-filters">
-                <div className="filter-tabs" role="group" aria-label="项目范围筛选">
-                  {spaceFilters.map((item) => (
-                    <button key={item} className={space === item ? "is-selected" : ""} onClick={() => { setCollection("all"); setSpace(item); }}>{item}<span>{spaceCounts[item]}</span></button>
-                  ))}
-                </div>
-                <span className="toolbar-divider" aria-hidden="true" />
-                <div className="filter-tabs filter-tabs-secondary" role="group" aria-label="项目类型筛选">
-                  {filters.map((item) => (
-                    <button key={item} className={filter === item ? "is-selected" : ""} onClick={() => { setCollection("all"); setFilter(item); }}>{item}</button>
-                  ))}
-                </div>
+              <div className="toolbar-selects" aria-label="账户筛选与排序">
+                <div className="toolbar-select"><span>范围</span><SurfaceSelect id="vault-space-filter" ariaLabel="项目范围" value={space} onChange={setSpace} options={spaceFilters.map((value) => ({ value, label: `${value}${value === "全部" ? "项目" : ""} · ${spaceCounts[value]}` }))} compact /></div>
+                <div className="toolbar-select"><span>类型</span><SurfaceSelect id="vault-type-filter" ariaLabel="项目类型" value={filter} onChange={setFilter} options={filters.map((value) => ({ value, label: value === "全部" ? "全部类型" : value }))} compact /></div>
+                <div className="toolbar-select"><span>分类</span><SurfaceSelect id="vault-category-filter" ariaLabel="自定义分类" value={activeCategory} onChange={setCategory} options={categoryOptions} compact /></div>
+                <div className="toolbar-select"><span>排序</span><SurfaceSelect id="vault-sort-order" ariaLabel="项目排序" value={sortOrder} onChange={setSortOrder} options={[{ value: "updated", label: "最近更新" }, { value: "name", label: "名称 A–Z" }]} compact /></div>
               </div>
-              <span className="sort-button">最近更新</span>
             </div>
 
             <div className="list-heading">
@@ -995,13 +1010,13 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
                 <div className="empty-state empty-state-error" role="alert"><AlertTriangle size={24} /><h3>无法读取密码库</h3><p>{loadError}</p><button className="secondary-button" onClick={() => setLoadAttempt((current) => current + 1)}>重新加载</button></div>
               ) : visibleItems.length > 0 ? visibleItems.map((item) => (
                 <button key={item.id} className={`vault-row ${activeSelectedId === item.id ? "is-selected" : ""}`} onClick={() => { setSelectedId(item.id); setRevealed(false); }} aria-pressed={activeSelectedId === item.id}>
-                  <div className="item-identity"><BrandMark item={item} /><span><span className="item-name-line"><strong>{item.name}</strong><b className={`space-badge ${item.group === "公共" ? "is-public" : "is-personal"}`}>{item.group}</b></span><small>{item.username}</small></span></div>
+                  <div className="item-identity"><BrandMark item={item} /><span><span className="item-name-line"><strong>{item.name}</strong><b className={`space-badge ${item.group === "公共" ? "is-public" : "is-personal"}`}>{item.group}</b>{item.category && <b className="category-badge">{item.category}</b>}</span><small>{item.username}</small></span></div>
                   <div>{collection === "security" ? <SecurityIssueBadges issues={item.securityIssues} /> : <StrengthBadge strength={item.strength} />}</div>
                   <span className="updated-at">{item.updated}</span>
                   <span className="row-chevron"><ChevronRight size={18} /></span>
                 </button>
               )) : (
-                <div className="empty-state"><Search size={24} /><h3>{items.length === 0 ? "密码库尚未添加项目" : "没有找到匹配项目"}</h3><p>{items.length === 0 ? "从第一个账号开始，建立加密保存的密码库。" : "尝试搜索其他账号、网址或分类。"}</p><button className="secondary-button" onClick={() => { if (items.length === 0) setShowAdd(true); else { setQuery(""); setFilter("全部"); setCollection("all"); setSpace("全部"); } }}>{items.length === 0 ? "新建项目" : "清除筛选"}</button></div>
+                collection === "security" && items.length > 0 && securityIssueCount === 0 ? <div className="empty-state empty-state-success"><ShieldCheck size={24} /><h3>基础检查已通过</h3><p>当前账户没有密码长度、重复使用或双重验证方面的基础风险。</p><button className="secondary-button" onClick={openAccountManagement}>查看全部账户</button></div> : <div className="empty-state"><Search size={24} /><h3>{items.length === 0 ? "密码库尚未添加项目" : collection === "security" ? "没有符合当前风险条件的账户" : "没有找到匹配项目"}</h3><p>{items.length === 0 ? "从第一个账号开始，建立加密保存的密码库。" : collection === "security" ? "可调整范围、类型、分类或风险条件继续查看。" : "可调整搜索、范围、类型或分类继续查看。"}</p><button className="secondary-button" onClick={() => { if (items.length === 0) setShowAdd(true); else clearVaultFilters(); }}>{items.length === 0 ? "新建项目" : "清除筛选"}</button></div>
               )}
             </div>
           </section>
@@ -1009,9 +1024,9 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
           {selected ? (
           <aside className="detail-panel" aria-labelledby="detail-title">
             <div className="detail-head">
-              <div className="detail-brand"><BrandMark item={selected} /><div><span className="eyebrow">{selected.type}</span><div className="detail-title-line"><h2 id="detail-title">{selected.name}</h2><b className={`space-badge ${selected.group === "公共" ? "is-public" : "is-personal"}`}>{selected.group}</b></div><a href={selected.domain.includes(".") ? `https://${selected.domain}` : "#"} target="_blank" rel="noreferrer">{selected.domain}<ArrowUpRight size={14} /></a></div></div>
+              <div className="detail-brand"><BrandMark item={selected} /><div><span className="eyebrow">{selected.type}</span><div className="detail-title-line"><h2 id="detail-title">{selected.name}</h2><b className={`space-badge ${selected.group === "公共" ? "is-public" : "is-personal"}`}>{selected.group}</b></div>{selected.domain.includes(".") ? <a href={`https://${selected.domain}`} target="_blank" rel="noreferrer">{selected.domain}<ArrowUpRight size={14} /></a> : <span className="detail-domain">{selected.domain}</span>}{selected.category && <span className="detail-category">分类：{selected.category}</span>}</div></div>
               <div className="detail-actions">
-                {selected.canEdit ? <><button className="icon-button" onClick={() => openEdit(selected)} aria-label={`编辑${selected.name}`} disabled={isSaving}><Edit3 size={18} /></button><button className="icon-button destructive-icon" onClick={() => setDeleteTarget(selected)} aria-label={`删除${selected.name}`} disabled={isSaving}><Trash2 size={18} /></button></> : <span className="detail-read-only" title="公共项目仅管理员可编辑或删除"><Eye size={15} aria-hidden="true" />只读</span>}
+                {selected.canEdit ? <button className="icon-button" onClick={() => openEdit(selected)} aria-label={`编辑${selected.name}`} disabled={isSaving}><Edit3 size={18} /></button> : <span className="detail-read-only" title="公共项目仅管理员可编辑或删除"><Eye size={15} aria-hidden="true" />只读</span>}
               </div>
             </div>
 
@@ -1035,14 +1050,14 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
 
             {selected.totp && <div className="detail-section"><AuthenticatorCode config={selected.totp} itemId={selected.id} onCopy={copyValue} onReveal={() => recordAudit("totp_revealed", selected.id)} /></div>}
 
-            <div className="detail-section">
+            {selected.note && <div className="detail-section">
               <div className="field-label"><span>备注</span></div>
               <p className="note-copy">{selected.note}</p>
-            </div>
+            </div>}
 
             <div className="detail-footer">
               <div><Clock3 size={15} /><span>上次修改：{selected.updated}</span></div>
-              <button className="open-site-button" disabled={!selected.domain.includes(".")} onClick={() => selected.domain.includes(".") && window.open(`https://${selected.domain}`, "_blank", "noopener,noreferrer")}><Globe2 size={17} />访问网站<ArrowUpRight size={15} /></button>
+              {selected.canEdit && <button className="detail-delete-button" onClick={() => setDeleteTarget(selected)} disabled={isSaving}><Trash2 size={16} />删除项目</button>}
             </div>
           </aside>
           ) : items.length > 0 ? (
@@ -1069,6 +1084,8 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
             <form onSubmit={submitCredential}>
               <label>名称<input required value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="例如：公司邮箱" autoFocus /></label>
               <label>网站地址<input required value={form.domain} onChange={(event) => setForm({ ...form, domain: event.target.value })} placeholder="example.com" inputMode="url" /></label>
+              <label>分类（可选）<input list="credential-category-options" value={form.category} onChange={(event) => setForm({ ...form, category: event.target.value })} placeholder="例如：部门一" maxLength={60} /><small>可输入新名称；分类会随加密项目保存，用于搜索和筛选。</small></label>
+              <datalist id="credential-category-options">{categoryNames.map((name) => <option value={name} key={name} />)}</datalist>
               <label>用户名<input required value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} placeholder="name@example.com" autoComplete="username" /></label>
               <label>密码<div className="form-password"><input required type={showNewPassword ? "text" : "password"} value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} placeholder="输入或生成强密码" autoComplete="new-password" /><button type="button" className="password-visibility" onClick={() => setShowNewPassword((current) => !current)} aria-label={showNewPassword ? "隐藏输入的密码" : "显示输入的密码"}>{showNewPassword ? <EyeOff size={16} /> : <Eye size={16} />}</button><button type="button" onClick={generatePassword}><WandSparkles size={16} />生成</button></div><small>建议至少 14 位，并混合字母、数字和符号。</small></label>
               <div className="totp-entry">
@@ -1091,6 +1108,8 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
             <form onSubmit={submitEditCredential}>
               <label>名称<input required value={editForm.name} onChange={(event) => setEditForm({ ...editForm, name: event.target.value })} autoFocus /></label>
               <label>网站地址<input required value={editForm.domain} onChange={(event) => setEditForm({ ...editForm, domain: event.target.value })} inputMode="url" /></label>
+              <label>分类（可选）<input list="credential-category-options" value={editForm.category} onChange={(event) => setEditForm({ ...editForm, category: event.target.value })} placeholder="例如：部门一" maxLength={60} /><small>可输入新名称；分类会随加密项目保存，用于搜索和筛选。</small></label>
+              <datalist id="credential-category-options">{categoryNames.map((name) => <option value={name} key={name} />)}</datalist>
               <label>用户名<input required value={editForm.username} onChange={(event) => setEditForm({ ...editForm, username: event.target.value })} autoComplete="username" /></label>
               <label>密码<div className="form-password"><input required type={showEditPassword ? "text" : "password"} value={editForm.password} onChange={(event) => setEditForm({ ...editForm, password: event.target.value })} autoComplete="new-password" /><button type="button" className="password-visibility" onClick={() => setShowEditPassword((current) => !current)} aria-label={showEditPassword ? "隐藏输入的密码" : "显示输入的密码"}>{showEditPassword ? <EyeOff size={16} /> : <Eye size={16} />}</button><button type="button" onClick={generateEditPassword}><WandSparkles size={16} />生成</button></div><small>建议至少 14 位，并混合字母、数字和符号。</small></label>
               <div className="totp-entry">

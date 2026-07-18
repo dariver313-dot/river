@@ -23,8 +23,10 @@ test("只有管理员能将个人项目设为公共项目", () => {
 
 test("敏感字段有明确的长度边界", () => {
   assert.equal(boundedText("  example.com  ", "domain", { required: true }), "example.com");
+  assert.equal(boundedText(" 部门一 ", "category"), "部门一");
   assert.throws(() => boundedText("x".repeat(121), "name"), /不能超过 120/);
   assert.throws(() => boundedText("x".repeat(1_025), "password", { trim: false }), /不能超过 1024/);
+  assert.throws(() => boundedText("x".repeat(61), "category"), /不能超过 60/);
 });
 
 test("密码库响应禁止缓存并带有浏览器安全策略", async () => {
@@ -55,4 +57,12 @@ test("安全检查会标记短密码、重复密码和缺少双重验证", () =>
   assert.deepEqual(review.get("one"), ["weak_password", "reused_password", "missing_two_factor"]);
   assert.deepEqual(review.get("two"), ["reused_password"]);
   assert.deepEqual(review.get("three"), ["missing_two_factor"]);
+});
+
+test("安全检查会将未达到推荐长度的密码列为待处理项", () => {
+  const review = reviewCredentialSecurity([
+    { id: "standard", password: "1234567890", strength: "一般", twoFactor: true },
+  ]);
+
+  assert.deepEqual(review.get("standard"), ["weak_password"]);
 });

@@ -5,6 +5,7 @@ const fieldLimits = {
   domain: 255,
   username: 255,
   password: 1024,
+  category: 60,
   brand: 32,
   note: 1_000,
 } as const;
@@ -35,6 +36,7 @@ function fieldLabel(field: keyof typeof fieldLimits) {
     domain: "网址",
     username: "用户名",
     password: "密码",
+    category: "分类",
     brand: "标识",
     note: "备注",
   };

@@ -226,3 +226,41 @@ export async function updateManagedUser(actorEmail: string, input: Record<string
   if (!updated) throw new Error("用户更新失败，请重试。");
   return toManagedUser(updated, actor.email);
 }
+
+export async function deleteManagedUser(actorEmail: string, input: Record<string, unknown>) {
+  const actor = await requireAdmin(actorEmail);
+  const email = typeof input.email === "string" ? normalizedEmail(input.email) : "";
+  if (!email) throw new Error("缺少用户邮箱。");
+
+  const current = await findUser(email);
+  if (!current) throw new Error("未找到该用户。");
+  if (current.email === actor.email || current.email === configuredPrimaryAdminEmail()) {
+    throw new Error("不能删除当前的主管理员账户。");
+  }
+
+  if (current.role === "admin" && current.status === "active") {
+    const admins = await getD1().prepare(
+      "SELECT COUNT(*) AS count FROM app_users WHERE role = 'admin' AND status = 'active'",
+    ).first<{ count: number }>();
+    if ((admins?.count ?? 0) <= 1) throw new Error("系统至少需要保留一位有效管理员。");
+  }
+
+  const d1 = getD1();
+  const personalVaults = await d1.prepare(
+    "SELECT id FROM vaults WHERE owner_email = ? AND kind = 'personal'",
+  ).bind(current.email).all<{ id: string }>();
+  const statements = personalVaults.results.flatMap((vault) => [
+    d1.prepare("DELETE FROM vault_items WHERE vault_id = ?").bind(vault.id),
+    d1.prepare("DELETE FROM vault_members WHERE vault_id = ?").bind(vault.id),
+    d1.prepare("DELETE FROM audit_events WHERE vault_id = ?").bind(vault.id),
+    d1.prepare("DELETE FROM approval_requests WHERE vault_id = ?").bind(vault.id),
+    d1.prepare("DELETE FROM vaults WHERE id = ?").bind(vault.id),
+  ]);
+  statements.push(
+    d1.prepare("DELETE FROM vault_members WHERE email = ?").bind(current.email),
+    d1.prepare("DELETE FROM approval_requests WHERE requested_by = ? OR approver_email = ?").bind(current.email, current.email),
+    d1.prepare("DELETE FROM app_users WHERE email = ?").bind(current.email),
+  );
+  await d1.batch(statements);
+  await writeSystemAudit(actor.email, "system_user_deleted", current.email);
+}

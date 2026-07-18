@@ -35,6 +35,17 @@ export type VaultItemSummary = Omit<VaultCredential, "password" | "note" | "totp
   securityIssues: SecurityIssue[];
 };
 
+export type VaultListOptions = {
+  page?: number;
+  pageSize?: number;
+  query?: string;
+  space?: VaultSpace | "全部";
+  category?: string;
+  collection?: "all" | "security";
+  securityFocus?: "all" | SecurityIssue;
+  sortOrder?: "updated" | "name";
+};
+
 export type ApprovalRequest = {
   id: string;
   action: "export_vault";
@@ -338,10 +349,73 @@ export async function listVaultData(email: string) {
   };
 }
 
-export async function listVaultSummaryData(email: string) {
+function boundedPage(value: number | undefined) {
+  if (!Number.isFinite(value)) return 1;
+  return Math.max(1, Math.min(100_000, Math.floor(value ?? 1)));
+}
+
+function boundedPageSize(value: number | undefined) {
+  if (!Number.isFinite(value)) return 20;
+  return Math.max(1, Math.min(20, Math.floor(value ?? 20)));
+}
+
+function summaryMatchesQuery(item: VaultItemSummary, query: string) {
+  if (!query) return true;
+  return [item.name, item.domain, item.username, item.category, item.group]
+    .some((value) => value.toLocaleLowerCase().includes(query));
+}
+
+export async function listVaultSummaryData(email: string, options: VaultListOptions = {}) {
   const data = await listVaultData(email);
   const issuesByItem = reviewCredentialSecurity(data.items);
-  return { ...data, items: data.items.map((item) => toSummary(item, issuesByItem.get(item.id) ?? [])) };
+  const summaries = data.items.map((item) => toSummary(item, issuesByItem.get(item.id) ?? []));
+  const categoryNames = Array.from(new Set(summaries.map((item) => item.category.trim()).filter(Boolean)))
+    .sort((left, right) => left.localeCompare(right, "zh-CN"));
+  const spaceCounts = {
+    全部: summaries.length,
+    个人: summaries.filter((item) => item.group === "个人").length,
+    公共: summaries.filter((item) => item.group === "公共").length,
+  };
+  const weakPasswordCount = summaries.filter((item) => item.securityIssues.includes("weak_password")).length;
+  const reusedPasswordCount = summaries.filter((item) => item.securityIssues.includes("reused_password")).length;
+  const missingTwoFactorCount = summaries.filter((item) => item.securityIssues.includes("missing_two_factor")).length;
+  const securityIssueCount = summaries.reduce((count, item) => count + item.securityIssues.length, 0);
+  const normalizedQuery = typeof options.query === "string" ? options.query.trim().slice(0, 120).toLocaleLowerCase() : "";
+  const selectedSpace = options.space === "个人" || options.space === "公共" ? options.space : "全部";
+  const selectedCategory = typeof options.category === "string" && categoryNames.includes(options.category) ? options.category : "全部";
+  const selectedCollection = options.collection === "security" ? "security" : "all";
+  const selectedFocus = options.securityFocus === "weak_password" || options.securityFocus === "reused_password" || options.securityFocus === "missing_two_factor"
+    ? options.securityFocus
+    : "all";
+  const filtered = summaries.filter((item) => {
+    if (selectedSpace !== "全部" && item.group !== selectedSpace) return false;
+    if (selectedCategory !== "全部" && item.category !== selectedCategory) return false;
+    if (selectedCollection === "security" && (item.securityIssues.length === 0 || (selectedFocus !== "all" && !item.securityIssues.includes(selectedFocus)))) return false;
+    return summaryMatchesQuery(item, normalizedQuery);
+  });
+  const sorted = options.sortOrder === "name"
+    ? [...filtered].sort((left, right) => left.name.localeCompare(right.name, "zh-CN") || left.id.localeCompare(right.id))
+    : filtered;
+  const pageSize = boundedPageSize(options.pageSize);
+  const pageCount = Math.max(1, Math.ceil(sorted.length / pageSize));
+  const page = Math.min(boundedPage(options.page), pageCount);
+  const offset = (page - 1) * pageSize;
+
+  return {
+    ...data,
+    items: sorted.slice(offset, offset + pageSize),
+    categoryNames,
+    spaceCounts,
+    security: {
+      totalItems: summaries.length,
+      weakPasswordCount,
+      reusedPasswordCount,
+      missingTwoFactorCount,
+      securityIssueCount,
+      score: summaries.length === 0 ? 0 : Math.max(0, 100 - weakPasswordCount * 14 - reusedPasswordCount * 24 - missingTwoFactorCount * 8),
+    },
+    pagination: { page, pageSize, total: sorted.length, pageCount },
+  };
 }
 
 export async function createVaultItem(email: string, input: Record<string, unknown>) {

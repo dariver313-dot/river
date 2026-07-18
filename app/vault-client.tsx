@@ -6,6 +6,7 @@ import {
   ArrowUpRight,
   Check,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   Clipboard,
   Clock3,
@@ -93,6 +94,25 @@ type ApprovalRequest = {
   canDecide: boolean;
   isRequester: boolean;
 };
+type Pagination = { page: number; pageSize: number; total: number; pageCount: number };
+type VaultSecuritySummary = {
+  totalItems: number;
+  weakPasswordCount: number;
+  reusedPasswordCount: number;
+  missingTwoFactorCount: number;
+  securityIssueCount: number;
+  score: number;
+};
+
+const emptyPagination: Pagination = { page: 1, pageSize: 20, total: 0, pageCount: 1 };
+const emptySecuritySummary: VaultSecuritySummary = {
+  totalItems: 0,
+  weakPasswordCount: 0,
+  reusedPasswordCount: 0,
+  missingTwoFactorCount: 0,
+  securityIssueCount: 0,
+  score: 0,
+};
 
 const spaceFilters = ["全部", "个人", "公共"] as const;
 
@@ -114,28 +134,6 @@ function generateStrongPassword() {
     [password[index], password[swap]] = [password[swap], password[index]];
   }
   return password.join("");
-}
-
-function toItemSummary(item: VaultItem, securityIssues: SecurityIssue[] = []): VaultItemSummary {
-  return {
-    id: item.id,
-    name: item.name,
-    domain: item.domain,
-    username: item.username,
-    category: item.category,
-    type: item.type,
-    group: item.group,
-    updated: item.updated,
-    strength: item.strength,
-    twoFactor: item.twoFactor,
-    favorite: item.favorite,
-    brand: item.brand,
-    canEdit: item.canEdit,
-    ...(item.sharedBy ? { sharedBy: item.sharedBy } : {}),
-    passwordLength: item.password.length,
-    hasTotp: item.totps.length > 0,
-    securityIssues,
-  };
 }
 
 function BrandMark({ item }: { item: VaultItem }) {
@@ -165,6 +163,43 @@ const securityIssueCopy: Record<SecurityIssue, { label: string; detail: string }
 
 function SecurityIssueBadges({ issues }: { issues: SecurityIssue[] }) {
   return <div className="security-issue-badges">{issues.map((issue) => <span className={`security-issue security-issue-${issue}`} key={issue}>{securityIssueCopy[issue].label}</span>)}</div>;
+}
+
+function useDebouncedValue(value: string, delay = 250) {
+  const [debouncedValue, setDebouncedValue] = useState(value);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedValue(value), delay);
+    return () => window.clearTimeout(timer);
+  }, [delay, value]);
+  return debouncedValue;
+}
+
+function pageNumbers(currentPage: number, pageCount: number) {
+  if (pageCount <= 7) return Array.from({ length: pageCount }, (_, index) => index + 1);
+  const candidates = [1, currentPage - 1, currentPage, currentPage + 1, pageCount]
+    .filter((page, index, values) => page >= 1 && page <= pageCount && values.indexOf(page) === index)
+    .sort((left, right) => left - right);
+  const values: Array<number | "ellipsis"> = [];
+  candidates.forEach((page, index) => {
+    const previous = candidates[index - 1];
+    if (previous && page - previous > 1) values.push("ellipsis");
+    values.push(page);
+  });
+  return values;
+}
+
+function PaginationControls({ pagination, onChange, label }: { pagination: Pagination; onChange: (page: number) => void; label: string }) {
+  if (pagination.total === 0) return null;
+  return <nav className="pagination" aria-label={`${label}分页`}>
+    <span className="pagination-summary">第 {pagination.page} / {pagination.pageCount} 页，共 {pagination.total} 项</span>
+    {pagination.pageCount > 1 && <div className="pagination-controls">
+      <button type="button" className="pagination-button" onClick={() => onChange(pagination.page - 1)} disabled={pagination.page === 1} aria-label="上一页"><ChevronLeft size={16} /></button>
+      {pageNumbers(pagination.page, pagination.pageCount).map((page, index) => page === "ellipsis"
+        ? <span className="pagination-ellipsis" key={`ellipsis-${index}`} aria-hidden="true">…</span>
+        : <button type="button" className={`pagination-button ${page === pagination.page ? "is-current" : ""}`} key={page} onClick={() => onChange(page)} aria-current={page === pagination.page ? "page" : undefined}>{page}</button>)}
+      <button type="button" className="pagination-button" onClick={() => onChange(pagination.page + 1)} disabled={pagination.page === pagination.pageCount} aria-label="下一页"><ChevronRight size={16} /></button>
+    </div>}
+  </nav>;
 }
 
 type SurfaceSelectOption<T extends string> = { value: T; label: string };
@@ -482,6 +517,11 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loadAttempt, setLoadAttempt] = useState(0);
+  const [vaultCurrentPage, setVaultCurrentPage] = useState(1);
+  const [vaultPagination, setVaultPagination] = useState<Pagination>(emptyPagination);
+  const [categoryNames, setCategoryNames] = useState<string[]>([]);
+  const [spaceCounts, setSpaceCounts] = useState<Record<Space, number>>({ 全部: 0, 个人: 0, 公共: 0 });
+  const [securitySummary, setSecuritySummary] = useState<VaultSecuritySummary>(emptySecuritySummary);
   const [isDetailLoading, setIsDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [detailAttempt, setDetailAttempt] = useState(0);
@@ -494,6 +534,9 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
   const [systemUserRole, setSystemUserRole] = useState<"admin" | "user">("user");
   const [userQuery, setUserQuery] = useState("");
   const [isUsersLoading, setIsUsersLoading] = useState(false);
+  const [userCurrentPage, setUserCurrentPage] = useState(1);
+  const [userPagination, setUserPagination] = useState<Pagination>(emptyPagination);
+  const [userLoadAttempt, setUserLoadAttempt] = useState(0);
   const [isReadingTotp, setIsReadingTotp] = useState(false);
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [showEditPassword, setShowEditPassword] = useState(false);
@@ -501,24 +544,12 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
   const [editForm, setEditForm] = useState<CredentialForm>(emptyCredentialForm);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
-  const categoryNames = useMemo(() => Array.from(new Set(items.map((item) => item.category.trim()).filter(Boolean))).sort((left, right) => left.localeCompare(right, "zh-CN")), [items]);
+  const debouncedVaultQuery = useDebouncedValue(query);
+  const debouncedUserQuery = useDebouncedValue(userQuery);
   const categoryOptions = useMemo(() => [{ value: "全部", label: "全部分类" }, ...categoryNames.map((value) => ({ value, label: value }))], [categoryNames]);
   const activeCategory = category === "全部" || categoryNames.includes(category) ? category : "全部";
 
-  const visibleItems = useMemo(() => {
-    const normalized = query.trim().toLowerCase();
-    const filtered = items.filter((item) => {
-      const matchesSpace = space === "全部" || item.group === space;
-      const matchesCategory = activeCategory === "全部" || item.category === activeCategory;
-      const matchesCollection = collection === "all"
-        || (collection === "security" && item.securityIssues.length > 0 && (securityFocus === "all" || item.securityIssues.includes(securityFocus)));
-      const matchesQuery = !normalized || [item.name, item.domain, item.username, item.category, item.group].some((value) => value.toLowerCase().includes(normalized));
-      return matchesSpace && matchesCategory && matchesCollection && matchesQuery;
-    });
-    return sortOrder === "name" ? filtered.sort((left, right) => left.name.localeCompare(right.name, "zh-CN")) : filtered;
-  }, [activeCategory, collection, items, query, securityFocus, sortOrder, space]);
-
-  const activeSelectedId = visibleItems.some((item) => item.id === selectedId) ? selectedId : visibleItems[0]?.id ?? selectedId;
+  const activeSelectedId = items.some((item) => item.id === selectedId) ? selectedId : items[0]?.id ?? null;
   const selected = selectedDetail?.id === activeSelectedId ? selectedDetail : null;
   const selectedSummary = items.find((item) => item.id === activeSelectedId) ?? null;
   const listTitle = collection === "security"
@@ -526,20 +557,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
       : space === "全部" ? "全部项目" : `${space}项目`;
   const viewerInitial = viewer.displayName.trim().slice(0, 1).toLocaleUpperCase() || "你";
   const isAdmin = viewer.role === "admin";
-  const spaceCounts: Record<Space, number> = {
-    全部: items.length,
-    个人: items.filter((item) => item.group === "个人").length,
-    公共: items.filter((item) => item.group === "公共").length,
-  };
-  const weakPasswordCount = items.filter((item) => item.securityIssues.includes("weak_password")).length;
-  const reusedPasswordCount = items.filter((item) => item.securityIssues.includes("reused_password")).length;
-  const missingTwoFactorCount = items.filter((item) => item.securityIssues.includes("missing_two_factor")).length;
-  const securityIssueCount = items.reduce((count, item) => count + item.securityIssues.length, 0);
-  const securityScore = items.length === 0 ? 0 : Math.max(0, 100 - weakPasswordCount * 14 - reusedPasswordCount * 24 - missingTwoFactorCount * 8);
-  const visibleSystemUsers = useMemo(() => {
-    const normalized = userQuery.trim().toLowerCase();
-    return normalized ? systemUsers.filter((user) => user.email.toLowerCase().includes(normalized)) : systemUsers;
-  }, [systemUsers, userQuery]);
+  const { totalItems, weakPasswordCount, reusedPasswordCount, missingTwoFactorCount, securityIssueCount, score: securityScore } = securitySummary;
 
   useEffect(() => {
     if (!toast) return;
@@ -593,8 +611,27 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
       setIsLoading(true);
       setLoadError(null);
       try {
-        const response = await fetch("/api/vault", { cache: "no-store" });
-        const payload = await response.json() as { items?: VaultItemSummary[]; publicUserCount?: number; audit?: AuditEntry[]; approvals?: ApprovalRequest[]; error?: string };
+        const search = new URLSearchParams({
+          page: String(vaultCurrentPage),
+          query: debouncedVaultQuery,
+          space,
+          category: activeCategory,
+          collection,
+          securityFocus,
+          sortOrder,
+        });
+        const response = await fetch(`/api/vault?${search.toString()}`, { cache: "no-store" });
+        const payload = await response.json() as {
+          items?: VaultItemSummary[];
+          publicUserCount?: number;
+          audit?: AuditEntry[];
+          approvals?: ApprovalRequest[];
+          categoryNames?: string[];
+          spaceCounts?: Record<Space, number>;
+          security?: VaultSecuritySummary;
+          pagination?: Pagination;
+          error?: string;
+        };
         if (!response.ok) throw new Error(payload.error ?? "无法读取密码库。");
         if (cancelled) return;
 
@@ -603,7 +640,13 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
         setPublicUserCount(payload.publicUserCount ?? 0);
         setAudit(payload.audit ?? []);
         setApprovals(payload.approvals ?? []);
-        setSelectedId((current) => current ?? loadedItems[0]?.id ?? null);
+        setCategoryNames(payload.categoryNames ?? []);
+        setSpaceCounts(payload.spaceCounts ?? { 全部: 0, 个人: 0, 公共: 0 });
+        setSecuritySummary(payload.security ?? emptySecuritySummary);
+        const nextPagination = payload.pagination ?? emptyPagination;
+        setVaultPagination(nextPagination);
+        setVaultCurrentPage((current) => current === nextPagination.page ? current : nextPagination.page);
+        setSelectedId((current) => loadedItems.some((item) => item.id === current) ? current : loadedItems[0]?.id ?? null);
       } catch (error) {
         if (!cancelled) {
           const message = error instanceof Error ? error.message : "无法读取密码库。";
@@ -617,7 +660,32 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
 
     void loadVault();
     return () => { cancelled = true; };
-  }, [loadAttempt]);
+  }, [activeCategory, collection, debouncedVaultQuery, loadAttempt, securityFocus, sortOrder, space, vaultCurrentPage]);
+
+  useEffect(() => {
+    if (page !== "users" || !isAdmin) return;
+    let cancelled = false;
+
+    async function loadUsers() {
+      setIsUsersLoading(true);
+      try {
+        const search = new URLSearchParams({ page: String(userCurrentPage), query: debouncedUserQuery });
+        const payload = await requestVault<{ users: SystemUser[]; pagination?: Pagination }>(`/api/users?${search.toString()}`, { method: "GET" });
+        if (cancelled) return;
+        const nextPagination = payload.pagination ?? emptyPagination;
+        setSystemUsers(payload.users ?? []);
+        setUserPagination(nextPagination);
+        setUserCurrentPage((current) => current === nextPagination.page ? current : nextPagination.page);
+      } catch (error) {
+        if (!cancelled) setToast(error instanceof Error ? error.message : "无法读取系统用户。");
+      } finally {
+        if (!cancelled) setIsUsersLoading(false);
+      }
+    }
+
+    void loadUsers();
+    return () => { cancelled = true; };
+  }, [debouncedUserQuery, isAdmin, page, userCurrentPage, userLoadAttempt]);
 
   useEffect(() => {
     if (!activeSelectedId) return;
@@ -711,7 +779,6 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
         method: "PATCH",
         body: JSON.stringify({ ...item, ...changes }),
       });
-      setItems((current) => current.map((currentItem) => currentItem.id === item.id ? toItemSummary(payload.item, currentItem.securityIssues) : currentItem));
       setSelectedId(payload.item.id);
       setSelectedDetail(payload.item);
       setLoadAttempt((current) => current + 1);
@@ -729,7 +796,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
         method: "POST",
         body: JSON.stringify({ ...form, type: "登录", twoFactor: false, favorite: false, brand: "new", note: "" }),
       });
-      setItems((current) => [toItemSummary(payload.item), ...current]);
+      setVaultCurrentPage(1);
       setSelectedId(payload.item.id);
       setSelectedDetail(payload.item);
       setLoadAttempt((current) => current + 1);
@@ -782,14 +849,11 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
     setIsSaving(true);
     try {
       await requestVault(`/api/vault/items/${deleteTarget.id}`, { method: "DELETE" });
-      const targetIndex = items.findIndex((item) => item.id === deleteTarget.id);
-      const remaining = items.filter((item) => item.id !== deleteTarget.id);
-      const nextSelected = remaining[targetIndex] ?? remaining[targetIndex - 1] ?? remaining[0];
-      setItems(remaining);
-      setSelectedId(nextSelected?.id ?? null);
+      setSelectedId(null);
       setSelectedDetail(null);
       setDeleteTarget(null);
       setRevealed(false);
+      setLoadAttempt((current) => current + 1);
       setToast(`已删除“${deleteTarget.name}”`);
     } catch (error) {
       setToast(error instanceof Error ? error.message : "项目未删除。");
@@ -798,20 +862,12 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
     }
   }
 
-  async function openUserManagement() {
+  function openUserManagement() {
     if (!isAdmin) return;
     setPage("users");
     setShowUserCreateDialog(false);
     setUserQuery("");
-    setIsUsersLoading(true);
-    try {
-      const payload = await requestVault<{ users: SystemUser[] }>("/api/users", { method: "GET" });
-      setSystemUsers(payload.users);
-    } catch (error) {
-      setToast(error instanceof Error ? error.message : "无法读取系统用户。");
-    } finally {
-      setIsUsersLoading(false);
-    }
+    setUserCurrentPage(1);
   }
 
   function openAccountManagement() {
@@ -821,6 +877,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
     setCategory("全部");
     setSortOrder("updated");
     setSecurityFocus("all");
+    setVaultCurrentPage(1);
     setMobileNav(false);
   }
 
@@ -831,6 +888,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
     setCategory("全部");
     setSortOrder("updated");
     setSecurityFocus(focus);
+    setVaultCurrentPage(1);
     setMobileNav(false);
   }
 
@@ -840,21 +898,24 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
     setCategory("全部");
     setSortOrder("updated");
     setSecurityFocus("all");
+    setVaultCurrentPage(1);
   }
 
   async function createSystemUser(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setIsSaving(true);
     try {
-      const payload = await requestVault<{ user: SystemUser }>("/api/users", {
+      await requestVault<{ user: SystemUser }>("/api/users", {
         method: "POST",
         body: JSON.stringify({ email: systemUserEmail, role: systemUserRole }),
       });
-      setSystemUsers((current) => [...current, payload.user].sort((left, right) => left.role === right.role ? left.email.localeCompare(right.email) : left.role === "admin" ? -1 : 1));
       setPublicUserCount((current) => current + 1);
       setSystemUserEmail("");
       setSystemUserRole("user");
       setShowUserCreateDialog(false);
+      setUserQuery("");
+      setUserCurrentPage(1);
+      setUserLoadAttempt((current) => current + 1);
       setToast("系统用户已创建");
     } catch (error) {
       setToast(error instanceof Error ? error.message : "无法创建系统用户。");
@@ -866,14 +927,14 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
   async function updateSystemUser(user: SystemUser, changes: Partial<Pick<SystemUser, "role" | "status">>) {
     setIsSaving(true);
     try {
-      const payload = await requestVault<{ user: SystemUser }>("/api/users", {
+      await requestVault<{ user: SystemUser }>("/api/users", {
         method: "PATCH",
         body: JSON.stringify({ email: user.email, ...changes }),
       });
-      setSystemUsers((current) => current.map((candidate) => candidate.email === user.email ? payload.user : candidate));
       if (changes.status && changes.status !== user.status) {
         setPublicUserCount((current) => Math.max(0, current + (changes.status === "active" ? 1 : -1)));
       }
+      setUserLoadAttempt((current) => current + 1);
       setToast(changes.status ? (changes.status === "suspended" ? "用户已停用" : "用户已重新启用") : "用户角色已更新");
     } catch (error) {
       setToast(error instanceof Error ? error.message : "无法更新该用户。");
@@ -888,8 +949,8 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
     setIsSaving(true);
     try {
       await requestVault("/api/users", { method: "DELETE", body: JSON.stringify({ email: user.email }) });
-      setSystemUsers((current) => current.filter((candidate) => candidate.email !== user.email));
       if (user.status === "active") setPublicUserCount((current) => Math.max(0, current - 1));
+      setUserLoadAttempt((current) => current + 1);
       setToast("系统用户已删除");
     } catch (error) {
       setToast(error instanceof Error ? error.message : "无法删除该用户。");
@@ -1000,9 +1061,9 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
 
         <nav className="main-nav">
           <p className="nav-label">密码库</p>
-          <button className={`nav-item ${page === "vault" ? "is-active" : ""}`} aria-pressed={page === "vault"} onClick={openAccountManagement}><KeyRound size={18} /><span>账户管理</span><span className="nav-count">{items.length}</span></button>
+          <button className={`nav-item ${page === "vault" ? "is-active" : ""}`} aria-pressed={page === "vault"} onClick={openAccountManagement}><KeyRound size={18} /><span>账户管理</span><span className="nav-count">{totalItems}</span></button>
 
-          {isAdmin && <><p className="nav-label nav-label-spaced">系统</p><button className={`nav-item ${page === "users" ? "is-active" : ""}`} aria-pressed={page === "users"} onClick={() => { setMobileNav(false); void openUserManagement(); }}><UserCog size={18} /><span>用户管理</span></button></>}
+          {isAdmin && <><p className="nav-label nav-label-spaced">系统</p><button className={`nav-item ${page === "users" ? "is-active" : ""}`} aria-pressed={page === "users"} onClick={() => { setMobileNav(false); openUserManagement(); }}><UserCog size={18} /><span>用户管理</span></button></>}
 
           <p className="nav-label nav-label-spaced">个人</p>
           <button className={`nav-item ${page === "profile" ? "is-active" : ""}`} aria-pressed={page === "profile"} onClick={() => { setPage("profile"); setMobileNav(false); }}><UserRound size={18} /><span>个人信息</span></button>
@@ -1027,13 +1088,13 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
           {page === "vault" && <div className="topbar-search">
             <Search size={18} aria-hidden="true" />
             <label className="sr-only" htmlFor="vault-search">搜索密码库</label>
-            <input ref={searchInputRef} id="vault-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索账号、网址或分类" />
+            <input ref={searchInputRef} id="vault-search" value={query} onChange={(event) => { setQuery(event.target.value); setVaultCurrentPage(1); }} placeholder="搜索账号、网址或分类" />
             <kbd>⌘ K</kbd>
           </div>}
           {page === "users" && <div className="topbar-search topbar-search-simple">
             <Search size={18} aria-hidden="true" />
             <label className="sr-only" htmlFor="user-search">搜索系统用户</label>
-            <input id="user-search" value={userQuery} onChange={(event) => setUserQuery(event.target.value)} placeholder="搜索用户邮箱" />
+            <input id="user-search" value={userQuery} onChange={(event) => { setUserQuery(event.target.value); setUserCurrentPage(1); }} placeholder="搜索用户邮箱" />
           </div>}
           <button className="secondary-button lock-button" onClick={endSession}><LogOut size={17} />结束会话</button>
           {page === "vault" && <button className="primary-button" onClick={() => setShowAdd(true)} disabled={isLoading || isSaving}><Plus size={18} />新建项目</button>}
@@ -1041,40 +1102,44 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
         </header>
 
         {page === "users" ? <section className="users-page" aria-labelledby="users-page-title">
-          <section className="users-panel" aria-labelledby="users-page-title"><div className="users-toolbar"><div className="users-toolbar-copy"><h2 id="users-page-title">系统用户</h2><span>{isUsersLoading ? "正在读取用户" : `显示 ${visibleSystemUsers.length} / ${systemUsers.length} 位用户`}</span></div><span className="users-toolbar-note">角色与访问状态</span></div>{isUsersLoading ? <p className="users-empty">正在读取系统用户。</p> : visibleSystemUsers.length > 0 ? <div className="system-user-table-wrap"><table className="system-user-table"><thead><tr><th scope="col">用户</th><th scope="col">角色</th><th scope="col">状态</th><th scope="col">创建时间</th><th scope="col">管理</th></tr></thead><tbody>{visibleSystemUsers.map((user) => <tr key={user.email}><td data-label="用户"><div className="system-user-identity"><strong title={user.email}>{user.email}</strong>{user.isCurrent && <span className="current-user">当前账户</span>}</div></td><td data-label="角色"><b className={`role-badge role-${user.role}`}>{user.role === "admin" ? "管理员" : "普通用户"}</b></td><td data-label="状态"><b className={`status-badge status-${user.status}`}>{user.status === "active" ? "已启用" : "已停用"}</b></td><td data-label="创建时间"><span className="system-user-created">{user.createdAt}</span></td><td data-label="管理">{user.isCurrent ? <span className="current-user">当前账户不可调整</span> : <div className="system-user-actions"><SurfaceSelect id={`role-${user.email}`} ariaLabel={`调整${user.email}的系统角色`} value={user.role} onChange={(role) => void updateSystemUser(user, { role })} options={[{ value: "user", label: "普通用户" }, { value: "admin", label: "管理员" }]} disabled={isSaving} compact /><button type="button" className="secondary-button" onClick={() => { const nextStatus = user.status === "active" ? "suspended" : "active"; if (nextStatus === "suspended" && !window.confirm(`确定停用 ${user.email} 吗？`)) return; void updateSystemUser(user, { status: nextStatus }); }} disabled={isSaving}>{user.status === "active" ? "停用" : "启用"}</button><button type="button" className="secondary-button user-delete-button" onClick={() => void deleteSystemUser(user)} disabled={isSaving}>删除</button></div>}</td></tr>)}</tbody></table></div> : <p className="users-empty">没有找到匹配的系统用户。</p>}</section>
+          <section className="users-panel" aria-labelledby="users-page-title">
+            <div className="users-toolbar"><div className="users-toolbar-copy"><h2 id="users-page-title">系统用户</h2><span>{isUsersLoading ? "正在读取用户" : `本页 ${systemUsers.length} 位，共 ${userPagination.total} 位用户`}</span></div><span className="users-toolbar-note">角色与访问状态</span></div>
+            {isUsersLoading ? <p className="users-empty">正在读取系统用户。</p> : systemUsers.length > 0 ? <div className="system-user-table-wrap"><table className="system-user-table"><thead><tr><th scope="col">用户</th><th scope="col">角色</th><th scope="col">状态</th><th scope="col">创建时间</th><th scope="col">管理</th></tr></thead><tbody>{systemUsers.map((user) => <tr key={user.email}><td data-label="用户"><div className="system-user-identity"><strong title={user.email}>{user.email}</strong>{user.isCurrent && <span className="current-user">当前账户</span>}</div></td><td data-label="角色"><b className={`role-badge role-${user.role}`}>{user.role === "admin" ? "管理员" : "普通用户"}</b></td><td data-label="状态"><b className={`status-badge status-${user.status}`}>{user.status === "active" ? "已启用" : "已停用"}</b></td><td data-label="创建时间"><span className="system-user-created">{user.createdAt}</span></td><td data-label="管理">{user.isCurrent ? <span className="current-user">当前账户不可调整</span> : <div className="system-user-actions"><SurfaceSelect id={`role-${user.email}`} ariaLabel={`调整${user.email}的系统角色`} value={user.role} onChange={(role) => void updateSystemUser(user, { role })} options={[{ value: "user", label: "普通用户" }, { value: "admin", label: "管理员" }]} disabled={isSaving} compact /><button type="button" className="secondary-button" onClick={() => { const nextStatus = user.status === "active" ? "suspended" : "active"; if (nextStatus === "suspended" && !window.confirm(`确定停用 ${user.email} 吗？`)) return; void updateSystemUser(user, { status: nextStatus }); }} disabled={isSaving}>{user.status === "active" ? "停用" : "启用"}</button><button type="button" className="secondary-button user-delete-button" onClick={() => void deleteSystemUser(user)} disabled={isSaving}>删除</button></div>}</td></tr>)}</tbody></table></div> : <p className="users-empty">没有找到匹配的系统用户。</p>}
+            {!isUsersLoading && <PaginationControls pagination={userPagination} onChange={setUserCurrentPage} label="系统用户" />}
+          </section>
         </section> : page === "profile" ? <ProfileOverview viewer={viewer} viewerInitial={viewerInitial} isLoading={isLoading} securityScore={securityScore} securityIssueCount={securityIssueCount} onOpenSecurity={openSecurityReview} /> : <>
         <section className="security-strip" aria-labelledby="security-heading">
           {securityIssueCount > 0 ? <button type="button" className="score-block score-block-action" onClick={() => openSecurityReview()} aria-label="查看全部账户安全检查结果">
             <span className="score-copy"><span>基础安全评分</span><strong id="security-heading">{securityScore}<small>/100</small></strong></span>
-            <span className={`score-meter ${items.length === 0 ? "is-empty" : securityScore >= 80 ? "is-healthy" : securityScore >= 60 ? "is-caution" : "is-risk"}`} role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={securityScore} aria-valuetext={items.length === 0 ? "尚无账户，未生成评分" : `安全评分 ${securityScore} 分，共 ${securityIssueCount} 条基础风险`}><span style={{ width: `${securityScore}%` }} /></span>
-            <span className="score-status">{items.length === 0 ? <ShieldCheck size={15} aria-hidden="true" /> : securityScore >= 80 ? <Check size={15} aria-hidden="true" /> : <AlertTriangle size={15} aria-hidden="true" />}{items.length === 0 ? "添加账户后显示安全评分" : securityScore >= 80 ? "未发现需要处理的基础风险" : `${securityIssueCount} 条风险需要处理`}<ChevronRight size={15} aria-hidden="true" /></span>
-          </button> : <div className="score-block score-block-static"><span className="score-copy"><span>基础安全评分</span><strong id="security-heading">{securityScore}<small>/100</small></strong></span><span className={`score-meter ${items.length === 0 ? "is-empty" : "is-healthy"}`} role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={securityScore} aria-valuetext={items.length === 0 ? "尚无账户，未生成评分" : "安全评分 100 分，未发现基础风险"}><span style={{ width: `${securityScore}%` }} /></span><span className="score-status">{items.length === 0 ? <ShieldCheck size={15} aria-hidden="true" /> : <Check size={15} aria-hidden="true" />}{items.length === 0 ? "添加账户后显示安全评分" : "基础检查已通过"}</span></div>}
-          {weakPasswordCount > 0 ? <button className="risk-item" onClick={() => openSecurityReview("weak_password")}><span className="risk-icon risk-danger"><AlertTriangle size={17} /></span><span><strong>{weakPasswordCount} 个密码长度不足</strong><small>建议使用至少 14 位随机密码</small></span><ChevronRight size={18} /></button> : <div className="risk-item risk-item-static"><span className="risk-icon risk-safe"><Check size={17} /></span><span><strong>{items.length === 0 ? "尚无账户" : "密码长度符合建议"}</strong><small>{items.length === 0 ? "添加账户后自动检查" : "未发现少于 14 位的密码"}</small></span></div>}
-          {reusedPasswordCount > 0 ? <button className="risk-item" onClick={() => openSecurityReview("reused_password")}><span className="risk-icon risk-warning"><ShieldEllipsis size={17} /></span><span><strong>{reusedPasswordCount} 个重复密码</strong><small>避免一个泄露影响多个账号</small></span><ChevronRight size={18} /></button> : <div className="risk-item risk-item-static"><span className="risk-icon risk-safe"><Check size={17} /></span><span><strong>{items.length === 0 ? "尚无账户" : "未发现重复密码"}</strong><small>{items.length === 0 ? "添加账户后自动检查" : "每个已保存密码均不重复"}</small></span></div>}
-          {missingTwoFactorCount > 0 ? <button className="risk-item" onClick={() => openSecurityReview("missing_two_factor")}><span className="risk-icon risk-info"><Smartphone size={17} /></span><span><strong>{missingTwoFactorCount} 个未启用双重验证</strong><small>查看需处理账户</small></span><ChevronRight size={18} /></button> : <div className="risk-item risk-item-static"><span className="risk-icon risk-safe"><Check size={17} /></span><span><strong>{items.length === 0 ? "尚无账户" : "双重验证状态正常"}</strong><small>{items.length === 0 ? "添加账户后自动检查" : "全部账户均已开启保护"}</small></span></div>}
+            <span className={`score-meter ${totalItems === 0 ? "is-empty" : securityScore >= 80 ? "is-healthy" : securityScore >= 60 ? "is-caution" : "is-risk"}`} role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={securityScore} aria-valuetext={totalItems === 0 ? "尚无账户，未生成评分" : `安全评分 ${securityScore} 分，共 ${securityIssueCount} 条基础风险`}><span style={{ width: `${securityScore}%` }} /></span>
+            <span className="score-status">{totalItems === 0 ? <ShieldCheck size={15} aria-hidden="true" /> : securityScore >= 80 ? <Check size={15} aria-hidden="true" /> : <AlertTriangle size={15} aria-hidden="true" />}{totalItems === 0 ? "添加账户后显示安全评分" : securityScore >= 80 ? "未发现需要处理的基础风险" : `${securityIssueCount} 条风险需要处理`}<ChevronRight size={15} aria-hidden="true" /></span>
+          </button> : <div className="score-block score-block-static"><span className="score-copy"><span>基础安全评分</span><strong id="security-heading">{securityScore}<small>/100</small></strong></span><span className={`score-meter ${totalItems === 0 ? "is-empty" : "is-healthy"}`} role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={securityScore} aria-valuetext={totalItems === 0 ? "尚无账户，未生成评分" : "安全评分 100 分，未发现基础风险"}><span style={{ width: `${securityScore}%` }} /></span><span className="score-status">{totalItems === 0 ? <ShieldCheck size={15} aria-hidden="true" /> : <Check size={15} aria-hidden="true" />}{totalItems === 0 ? "添加账户后显示安全评分" : "基础检查已通过"}</span></div>}
+          {weakPasswordCount > 0 ? <button className="risk-item" onClick={() => openSecurityReview("weak_password")}><span className="risk-icon risk-danger"><AlertTriangle size={17} /></span><span><strong>{weakPasswordCount} 个密码长度不足</strong><small>建议使用至少 14 位随机密码</small></span><ChevronRight size={18} /></button> : <div className="risk-item risk-item-static"><span className="risk-icon risk-safe"><Check size={17} /></span><span><strong>{totalItems === 0 ? "尚无账户" : "密码长度符合建议"}</strong><small>{totalItems === 0 ? "添加账户后自动检查" : "未发现少于 14 位的密码"}</small></span></div>}
+          {reusedPasswordCount > 0 ? <button className="risk-item" onClick={() => openSecurityReview("reused_password")}><span className="risk-icon risk-warning"><ShieldEllipsis size={17} /></span><span><strong>{reusedPasswordCount} 个重复密码</strong><small>避免一个泄露影响多个账号</small></span><ChevronRight size={18} /></button> : <div className="risk-item risk-item-static"><span className="risk-icon risk-safe"><Check size={17} /></span><span><strong>{totalItems === 0 ? "尚无账户" : "未发现重复密码"}</strong><small>{totalItems === 0 ? "添加账户后自动检查" : "每个已保存密码均不重复"}</small></span></div>}
+          {missingTwoFactorCount > 0 ? <button className="risk-item" onClick={() => openSecurityReview("missing_two_factor")}><span className="risk-icon risk-info"><Smartphone size={17} /></span><span><strong>{missingTwoFactorCount} 个未启用双重验证</strong><small>查看需处理账户</small></span><ChevronRight size={18} /></button> : <div className="risk-item risk-item-static"><span className="risk-icon risk-safe"><Check size={17} /></span><span><strong>{totalItems === 0 ? "尚无账户" : "双重验证状态正常"}</strong><small>{totalItems === 0 ? "添加账户后自动检查" : "全部账户均已开启保护"}</small></span></div>}
         </section>
 
         <div className="content-grid">
           <section className="vault-panel" aria-labelledby="vault-list-title">
             {collection === "security" && <div className="security-review" role="region" aria-labelledby="security-review-title">
-              <div className="security-review-head"><div><span className="eyebrow">账户安全检查</span><h2 id="security-review-title">{items.length === 0 ? "还没有可检查的账户" : securityIssueCount > 0 ? `${securityIssueCount} 条基础风险待处理` : "基础检查已通过"}</h2><p>{items.length === 0 ? "新建账户后会自动检查密码长度、重复使用与双重验证状态。" : "检查密码长度、重复使用情况和双重验证状态。"}</p></div><button type="button" className="secondary-button" onClick={openAccountManagement}>查看全部账户</button></div>
+              <div className="security-review-head"><div><span className="eyebrow">账户安全检查</span><h2 id="security-review-title">{totalItems === 0 ? "还没有可检查的账户" : securityIssueCount > 0 ? `${securityIssueCount} 条基础风险待处理` : "基础检查已通过"}</h2><p>{totalItems === 0 ? "新建账户后会自动检查密码长度、重复使用与双重验证状态。" : "检查密码长度、重复使用情况和双重验证状态。"}</p></div><button type="button" className="secondary-button" onClick={openAccountManagement}>查看全部账户</button></div>
               <div className="security-focuses" role="group" aria-label="安全风险筛选">
-                <button className={securityFocus === "all" ? "is-selected" : ""} onClick={() => setSecurityFocus("all")}>全部 {securityIssueCount}</button>
-                <button className={securityFocus === "weak_password" ? "is-selected" : ""} onClick={() => setSecurityFocus("weak_password")} disabled={weakPasswordCount === 0}>密码长度不足 {weakPasswordCount}</button>
-                <button className={securityFocus === "reused_password" ? "is-selected" : ""} onClick={() => setSecurityFocus("reused_password")} disabled={reusedPasswordCount === 0}>密码重复 {reusedPasswordCount}</button>
-                <button className={securityFocus === "missing_two_factor" ? "is-selected" : ""} onClick={() => setSecurityFocus("missing_two_factor")} disabled={missingTwoFactorCount === 0}>未开双重验证 {missingTwoFactorCount}</button>
+                <button className={securityFocus === "all" ? "is-selected" : ""} onClick={() => { setSecurityFocus("all"); setVaultCurrentPage(1); }}>全部 {securityIssueCount}</button>
+                <button className={securityFocus === "weak_password" ? "is-selected" : ""} onClick={() => { setSecurityFocus("weak_password"); setVaultCurrentPage(1); }} disabled={weakPasswordCount === 0}>密码长度不足 {weakPasswordCount}</button>
+                <button className={securityFocus === "reused_password" ? "is-selected" : ""} onClick={() => { setSecurityFocus("reused_password"); setVaultCurrentPage(1); }} disabled={reusedPasswordCount === 0}>密码重复 {reusedPasswordCount}</button>
+                <button className={securityFocus === "missing_two_factor" ? "is-selected" : ""} onClick={() => { setSecurityFocus("missing_two_factor"); setVaultCurrentPage(1); }} disabled={missingTwoFactorCount === 0}>未开双重验证 {missingTwoFactorCount}</button>
               </div>
             </div>}
             <div className="panel-toolbar">
               <div className="toolbar-selects" aria-label="账户筛选与排序">
-                <div className="toolbar-select"><span>范围</span><SurfaceSelect id="vault-space-filter" ariaLabel="项目范围" value={space} onChange={setSpace} options={spaceFilters.map((value) => ({ value, label: `${value}${value === "全部" ? "项目" : ""} · ${spaceCounts[value]}` }))} compact /></div>
-                <div className="toolbar-select toolbar-category"><span>自定义分类</span><SurfaceSelect id="vault-category-filter" ariaLabel="自定义分类" value={activeCategory} onChange={setCategory} options={categoryOptions} compact /></div>
-                <div className="toolbar-select"><span>排序</span><SurfaceSelect id="vault-sort-order" ariaLabel="项目排序" value={sortOrder} onChange={setSortOrder} options={[{ value: "updated", label: "最近更新" }, { value: "name", label: "名称 A–Z" }]} compact /></div>
+                <div className="toolbar-select"><span>范围</span><SurfaceSelect id="vault-space-filter" ariaLabel="项目范围" value={space} onChange={(value) => { setSpace(value); setVaultCurrentPage(1); }} options={spaceFilters.map((value) => ({ value, label: `${value}${value === "全部" ? "项目" : ""} · ${spaceCounts[value]}` }))} compact /></div>
+                <div className="toolbar-select toolbar-category"><span>自定义分类</span><SurfaceSelect id="vault-category-filter" ariaLabel="自定义分类" value={activeCategory} onChange={(value) => { setCategory(value); setVaultCurrentPage(1); }} options={categoryOptions} compact /></div>
+                <div className="toolbar-select"><span>排序</span><SurfaceSelect id="vault-sort-order" ariaLabel="项目排序" value={sortOrder} onChange={(value) => { setSortOrder(value); setVaultCurrentPage(1); }} options={[{ value: "updated", label: "最近更新" }, { value: "name", label: "名称 A–Z" }]} compact /></div>
               </div>
             </div>
 
             <div className="list-heading">
-              <div><h2 id="vault-list-title">{listTitle}</h2><span>{visibleItems.length} 项</span></div>
+              <div><h2 id="vault-list-title">{listTitle}</h2><span>共 {vaultPagination.total} 项</span></div>
               <span>安全状态</span><span>更新时间</span><span className="sr-only">更多操作</span>
             </div>
 
@@ -1083,7 +1148,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
                 <div className="empty-state"><Clock3 size={24} /><h3>正在读取密码库</h3><p>正在加载已加密的项目。</p></div>
               ) : loadError ? (
                 <div className="empty-state empty-state-error" role="alert"><AlertTriangle size={24} /><h3>无法读取密码库</h3><p>{loadError}</p><button className="secondary-button" onClick={() => setLoadAttempt((current) => current + 1)}>重新加载</button></div>
-              ) : visibleItems.length > 0 ? visibleItems.map((item) => (
+              ) : items.length > 0 ? items.map((item) => (
                 <button key={item.id} className={`vault-row ${activeSelectedId === item.id ? "is-selected" : ""}`} onClick={() => { setSelectedId(item.id); setRevealed(false); }} aria-pressed={activeSelectedId === item.id}>
                   <div className="item-identity"><BrandMark item={item} /><span><span className="item-name-line"><strong>{item.name}</strong><b className={`space-badge ${item.group === "公共" ? "is-public" : "is-personal"}`}>{item.group}</b>{item.category && <b className="category-badge">{item.category}</b>}</span><small>{item.username}</small></span></div>
                   <div>{collection === "security" ? <SecurityIssueBadges issues={item.securityIssues} /> : <StrengthBadge strength={item.strength} />}</div>
@@ -1091,9 +1156,10 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
                   <span className="row-chevron"><ChevronRight size={18} /></span>
                 </button>
               )) : (
-                collection === "security" && items.length > 0 && securityIssueCount === 0 ? <div className="empty-state empty-state-success"><ShieldCheck size={24} /><h3>基础检查已通过</h3><p>当前账户没有密码长度、重复使用或双重验证方面的基础风险。</p><button className="secondary-button" onClick={openAccountManagement}>查看全部账户</button></div> : <div className="empty-state"><Search size={24} /><h3>{items.length === 0 ? "密码库尚未添加项目" : collection === "security" ? "没有符合当前风险条件的账户" : "没有找到匹配项目"}</h3><p>{items.length === 0 ? "从第一个账号开始，建立加密保存的密码库。" : collection === "security" ? "可调整范围、类型、分类或风险条件继续查看。" : "可调整搜索、范围、类型或分类继续查看。"}</p><button className="secondary-button" onClick={() => { if (items.length === 0) setShowAdd(true); else clearVaultFilters(); }}>{items.length === 0 ? "新建项目" : "清除筛选"}</button></div>
+                collection === "security" && totalItems > 0 && securityIssueCount === 0 ? <div className="empty-state empty-state-success"><ShieldCheck size={24} /><h3>基础检查已通过</h3><p>当前账户没有密码长度、重复使用或双重验证方面的基础风险。</p><button className="secondary-button" onClick={openAccountManagement}>查看全部账户</button></div> : <div className="empty-state"><Search size={24} /><h3>{totalItems === 0 ? "密码库尚未添加项目" : collection === "security" ? "没有符合当前风险条件的账户" : "没有找到匹配项目"}</h3><p>{totalItems === 0 ? "从第一个账号开始，建立加密保存的密码库。" : collection === "security" ? "可调整范围、分类或风险条件继续查看。" : "可调整搜索、范围或分类继续查看。"}</p><button className="secondary-button" onClick={() => { if (totalItems === 0) setShowAdd(true); else clearVaultFilters(); }}>{totalItems === 0 ? "新建项目" : "清除筛选"}</button></div>
               )}
             </div>
+            {!isLoading && !loadError && <PaginationControls pagination={vaultPagination} onChange={setVaultCurrentPage} label="账户" />}
           </section>
 
           {selected ? (
@@ -1135,9 +1201,9 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
               {selected.canEdit && <button className="secondary-button detail-delete-button" onClick={() => setDeleteTarget(selected)} disabled={isSaving}><Trash2 size={16} />删除项目</button>}
             </div>
           </aside>
-          ) : items.length > 0 ? (
+          ) : totalItems > 0 ? (
             <aside className="detail-panel detail-empty" aria-live="polite">
-              {isDetailLoading ? <><Clock3 size={25} aria-hidden="true" /><h2>正在读取项目</h2><p>敏感字段仅在选中项目后按需读取。</p></> : <><AlertTriangle size={25} aria-hidden="true" /><h2>无法读取项目详情</h2><p>{detailError ?? "请重新选择该项目。"}</p><button className="secondary-button" onClick={() => setDetailAttempt((current) => current + 1)}>重新读取</button></>}
+              {items.length === 0 ? <><Search size={25} aria-hidden="true" /><h2>没有符合条件的项目</h2><p>调整搜索、范围、分类或风险条件后继续查看。</p><button className="secondary-button" onClick={clearVaultFilters}>清除筛选</button></> : isDetailLoading ? <><Clock3 size={25} aria-hidden="true" /><h2>正在读取项目</h2><p>敏感字段仅在选中项目后按需读取。</p></> : <><AlertTriangle size={25} aria-hidden="true" /><h2>无法读取项目详情</h2><p>{detailError ?? "请重新选择该项目。"}</p><button className="secondary-button" onClick={() => setDetailAttempt((current) => current + 1)}>重新读取</button></>}
             </aside>
           ) : (
             <aside className="detail-panel detail-empty" aria-label="空密码库">
@@ -1232,7 +1298,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
               <div className="sharing-section">
                 <div className="sharing-section-title"><h3>系统用户</h3><span>{publicUserCount} 位已启用</span></div>
                 <p className="sharing-member-note"><UserCog size={16} aria-hidden="true" />添加用户后，还需在站点访问控制中授权该邮箱。</p>
-                {isAdmin ? <button type="button" className="secondary-button" onClick={() => { setShowSharing(false); void openUserManagement(); }}><UserCog size={17} />管理系统用户</button> : <p className="sharing-empty">系统用户与公共项目权限由管理员维护。</p>}
+                {isAdmin ? <button type="button" className="secondary-button" onClick={() => { setShowSharing(false); openUserManagement(); }}><UserCog size={17} />管理系统用户</button> : <p className="sharing-empty">系统用户与公共项目权限由管理员维护。</p>}
               </div>
               <div className="sharing-section approval-section">
                 <div className="sharing-section-title"><h3>双人确认导出</h3><span>有效期 10 分钟</span></div>

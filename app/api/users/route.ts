@@ -4,13 +4,23 @@ import { createManagedUser, deleteManagedUser, listManagedUsers, updateManagedUs
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+function positiveInteger(value: string | null) {
+  const parsed = Number.parseInt(value ?? "", 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+}
+
+export async function GET(request: Request) {
   const actor = await requireVaultActor();
   if (!actor) return actorRequiredResponse();
   if (actor.role !== "admin") return adminRequiredResponse();
 
   try {
-    return secureJson({ users: await listManagedUsers(actor.email) });
+    const search = new URL(request.url).searchParams;
+    return secureJson(await listManagedUsers(actor.email, {
+      page: positiveInteger(search.get("page")),
+      pageSize: 20,
+      query: search.get("query") ?? "",
+    }));
   } catch (error) {
     return apiError(error);
   }

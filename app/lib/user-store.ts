@@ -15,6 +15,11 @@ export type ManagedAppUser = AppActor & {
   isCurrent: boolean;
 };
 
+export type ManagedUsersPage = {
+  users: ManagedAppUser[];
+  pagination: { page: number; pageSize: number; total: number; pageCount: number };
+};
+
 type AppUserRow = {
   email: string;
   role: AppRole;
@@ -118,19 +123,38 @@ export async function countActiveApplicationUsers() {
   return result?.count ?? 0;
 }
 
-export async function listManagedUsers(actorEmail: string): Promise<ManagedAppUser[]> {
-  const current = normalizedEmail(actorEmail);
-  const result = await getD1().prepare(
-    "SELECT email, role, status, created_at FROM app_users ORDER BY CASE role WHEN 'admin' THEN 0 ELSE 1 END, created_at ASC",
-  ).all<AppUserRow>();
+function boundedPage(value: number | undefined) {
+  if (!Number.isFinite(value)) return 1;
+  return Math.max(1, Math.min(100_000, Math.floor(value ?? 1)));
+}
 
-  return result.results.map((user) => ({
-    email: user.email,
-    role: user.role,
-    status: user.status,
-    createdAt: timeLabel(user.created_at),
-    isCurrent: user.email === current,
-  }));
+export async function listManagedUsers(actorEmail: string, options: { page?: number; pageSize?: number; query?: string } = {}): Promise<ManagedUsersPage> {
+  const current = normalizedEmail(actorEmail);
+  const pageSize = 20;
+  const query = typeof options.query === "string" ? options.query.trim().toLowerCase().slice(0, 120) : "";
+  const where = query ? "WHERE LOWER(email) LIKE ?" : "";
+  const parameters = query ? [`%${query}%`] : [];
+  const d1 = getD1();
+  const count = await d1.prepare(`SELECT COUNT(*) AS count FROM app_users ${where}`).bind(...parameters).first<{ count: number }>();
+  const total = count?.count ?? 0;
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  const page = Math.min(boundedPage(options.page), pageCount);
+  const offset = (page - 1) * pageSize;
+  const result = await d1.prepare(
+    `SELECT email, role, status, created_at FROM app_users ${where}
+     ORDER BY CASE role WHEN 'admin' THEN 0 ELSE 1 END, created_at ASC, email ASC LIMIT ? OFFSET ?`,
+  ).bind(...parameters, pageSize, offset).all<AppUserRow>();
+
+  return {
+    users: result.results.map((user) => ({
+      email: user.email,
+      role: user.role,
+      status: user.status,
+      createdAt: timeLabel(user.created_at),
+      isCurrent: user.email === current,
+    })),
+    pagination: { page, pageSize, total, pageCount },
+  };
 }
 
 async function requireAdmin(actorEmail: string) {

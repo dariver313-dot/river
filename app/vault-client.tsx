@@ -416,7 +416,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
   const [editingItem, setEditingItem] = useState<VaultItem | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<VaultItemSummary | null>(null);
   const [showSharing, setShowSharing] = useState(false);
-  const [showUserCreateForm, setShowUserCreateForm] = useState(false);
+  const [showUserCreateDialog, setShowUserCreateDialog] = useState(false);
   const [mobileNav, setMobileNav] = useState(false);
   const [toast, setToast] = useState("");
   const [isLoading, setIsLoading] = useState(true);
@@ -481,7 +481,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
     const closeOnEscape = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
-        if (page === "profile") {
+        if (page !== "vault") {
           setPage("vault");
           window.setTimeout(() => searchInputRef.current?.focus(), 0);
         } else {
@@ -494,7 +494,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
         setEditingItem(null);
         setDeleteTarget(null);
         setShowSharing(false);
-        setShowUserCreateForm(false);
+        setShowUserCreateDialog(false);
         setMobileNav(false);
       }
     };
@@ -717,7 +717,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
   async function openUserManagement() {
     if (!isAdmin) return;
     setPage("users");
-    setShowUserCreateForm(false);
+    setShowUserCreateDialog(false);
     setUserQuery("");
     setIsUsersLoading(true);
     try {
@@ -742,6 +742,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
       setPublicUserCount((current) => current + 1);
       setSystemUserEmail("");
       setSystemUserRole("user");
+      setShowUserCreateDialog(false);
       setToast("系统用户已创建");
     } catch (error) {
       setToast(error instanceof Error ? error.message : "无法创建系统用户。");
@@ -907,15 +908,11 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
           </div>}
           <button className="secondary-button lock-button" onClick={endSession}><LogOut size={17} />结束会话</button>
           {page === "vault" && <button className="primary-button" onClick={() => setShowAdd(true)} disabled={isLoading || isSaving}><Plus size={18} />新建项目</button>}
-          {page === "users" && <button className="primary-button" onClick={() => setShowUserCreateForm((current) => !current)} disabled={isSaving}><Plus size={18} />{showUserCreateForm ? "收起创建" : "添加用户"}</button>}
+          {page === "users" && <button className="primary-button user-add-button" onClick={() => setShowUserCreateDialog(true)} disabled={isSaving}><Plus size={16} />添加用户</button>}
         </header>
 
         {page === "users" ? <section className="users-page" aria-labelledby="users-page-title">
-          <div className="users-page-heading"><div><span className="eyebrow">系统账户</span><h2 id="users-page-title">系统用户</h2><p>仅管理员可管理访问权限。删除用户会移除其个人密码库；公共项目与系统审计记录会保留。</p></div><span>{systemUsers.length} 位用户</span></div>
-
-          {showUserCreateForm && <section className="user-create-card" aria-labelledby="create-system-user-title"><div className="user-create-heading"><div><h3 id="create-system-user-title">添加系统用户</h3><p>创建后，还需要在站点访问控制中允许该邮箱登录。</p></div><button className="icon-button" type="button" onClick={() => setShowUserCreateForm(false)} aria-label="关闭添加用户"><X size={19} /></button></div><form className="user-create-form" onSubmit={createSystemUser}><label>用户邮箱<input required type="email" value={systemUserEmail} onChange={(event) => setSystemUserEmail(event.target.value)} placeholder="name@example.com" autoComplete="email" /></label><div className="field-control"><span>系统角色</span><SurfaceSelect id="new-user-role" ariaLabel="系统角色" value={systemUserRole} onChange={setSystemUserRole} options={[{ value: "user", label: "普通用户" }, { value: "admin", label: "管理员" }]} /></div><button type="submit" className="primary-button" disabled={isSaving}><UserCog size={17} />{isSaving ? "正在创建" : "创建用户"}</button></form></section>}
-
-          <section className="users-panel" aria-label="系统用户列表"><div className="users-toolbar"><div className="users-toolbar-copy"><h3>用户列表</h3><span>{isUsersLoading ? "正在读取" : `显示 ${visibleSystemUsers.length} 位用户`}</span></div><div className="users-search"><Search size={17} aria-hidden="true" /><label className="sr-only" htmlFor="user-search">搜索系统用户</label><input id="user-search" value={userQuery} onChange={(event) => setUserQuery(event.target.value)} placeholder="搜索邮箱" /></div></div>{isUsersLoading ? <p className="users-empty">正在读取系统用户。</p> : visibleSystemUsers.length > 0 ? <div className="system-user-table-wrap"><table className="system-user-table"><thead><tr><th scope="col">用户</th><th scope="col">角色</th><th scope="col">状态</th><th scope="col">创建时间</th><th scope="col">管理</th></tr></thead><tbody>{visibleSystemUsers.map((user) => <tr key={user.email}><td data-label="用户"><div className="system-user-identity"><strong title={user.email}>{user.email}</strong>{user.isCurrent && <span className="current-user">当前账户</span>}</div></td><td data-label="角色"><b className={`role-badge role-${user.role}`}>{user.role === "admin" ? "管理员" : "普通用户"}</b></td><td data-label="状态"><b className={`status-badge status-${user.status}`}>{user.status === "active" ? "已启用" : "已停用"}</b></td><td data-label="创建时间"><span className="system-user-created">{user.createdAt}</span></td><td data-label="管理">{user.isCurrent ? <span className="current-user">当前账户不可调整</span> : <div className="system-user-actions"><SurfaceSelect id={`role-${user.email}`} ariaLabel={`调整${user.email}的系统角色`} value={user.role} onChange={(role) => void updateSystemUser(user, { role })} options={[{ value: "user", label: "普通用户" }, { value: "admin", label: "管理员" }]} disabled={isSaving} compact /><button type="button" className="secondary-button" onClick={() => { const nextStatus = user.status === "active" ? "suspended" : "active"; if (nextStatus === "suspended" && !window.confirm(`确定停用 ${user.email} 吗？`)) return; void updateSystemUser(user, { status: nextStatus }); }} disabled={isSaving}>{user.status === "active" ? "停用" : "启用"}</button><button type="button" className="secondary-button user-delete-button" onClick={() => void deleteSystemUser(user)} disabled={isSaving}>删除</button></div>}</td></tr>)}</tbody></table></div> : <p className="users-empty">没有找到匹配的系统用户。</p>}</section>
+          <section className="users-panel" aria-labelledby="users-page-title"><div className="users-toolbar"><div className="users-toolbar-copy"><h2 id="users-page-title">系统用户</h2><span>{isUsersLoading ? "正在读取用户" : `显示 ${visibleSystemUsers.length} / ${systemUsers.length} 位用户`}</span></div><div className="users-search"><Search size={17} aria-hidden="true" /><label className="sr-only" htmlFor="user-search">搜索系统用户</label><input id="user-search" value={userQuery} onChange={(event) => setUserQuery(event.target.value)} placeholder="搜索邮箱" /></div></div>{isUsersLoading ? <p className="users-empty">正在读取系统用户。</p> : visibleSystemUsers.length > 0 ? <div className="system-user-table-wrap"><table className="system-user-table"><thead><tr><th scope="col">用户</th><th scope="col">角色</th><th scope="col">状态</th><th scope="col">创建时间</th><th scope="col">管理</th></tr></thead><tbody>{visibleSystemUsers.map((user) => <tr key={user.email}><td data-label="用户"><div className="system-user-identity"><strong title={user.email}>{user.email}</strong>{user.isCurrent && <span className="current-user">当前账户</span>}</div></td><td data-label="角色"><b className={`role-badge role-${user.role}`}>{user.role === "admin" ? "管理员" : "普通用户"}</b></td><td data-label="状态"><b className={`status-badge status-${user.status}`}>{user.status === "active" ? "已启用" : "已停用"}</b></td><td data-label="创建时间"><span className="system-user-created">{user.createdAt}</span></td><td data-label="管理">{user.isCurrent ? <span className="current-user">当前账户不可调整</span> : <div className="system-user-actions"><SurfaceSelect id={`role-${user.email}`} ariaLabel={`调整${user.email}的系统角色`} value={user.role} onChange={(role) => void updateSystemUser(user, { role })} options={[{ value: "user", label: "普通用户" }, { value: "admin", label: "管理员" }]} disabled={isSaving} compact /><button type="button" className="secondary-button" onClick={() => { const nextStatus = user.status === "active" ? "suspended" : "active"; if (nextStatus === "suspended" && !window.confirm(`确定停用 ${user.email} 吗？`)) return; void updateSystemUser(user, { status: nextStatus }); }} disabled={isSaving}>{user.status === "active" ? "停用" : "启用"}</button><button type="button" className="secondary-button user-delete-button" onClick={() => void deleteSystemUser(user)} disabled={isSaving}>删除</button></div>}</td></tr>)}</tbody></table></div> : <p className="users-empty">没有找到匹配的系统用户。</p>}</section>
         </section> : page === "profile" ? <ProfileOverview viewer={viewer} viewerInitial={viewerInitial} isLoading={isLoading} securityScore={securityScore} securityIssueCount={securityIssueCount} onOpenSecurity={() => { setPage("vault"); setCollection("security"); setSpace("全部"); setSecurityFocus("all"); }} /> : <>
         <section className="security-strip" aria-labelledby="security-heading">
           <div className="score-block">
@@ -1087,6 +1084,20 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
               <div className="delete-summary"><strong>{deleteTarget.name}</strong><span>{deleteTarget.username} · {deleteTarget.type}</span></div>
               <p className="delete-description">删除后会从加密密码库中移除，操作记录会保留在审计日志中。</p>
               <footer><button type="button" className="secondary-button" onClick={() => setDeleteTarget(null)} disabled={isSaving}>取消</button><button type="submit" className="danger-button" disabled={isSaving}><Trash2 size={17} />{isSaving ? "正在删除" : "删除项目"}</button></footer>
+            </form>
+          </section>
+        </div>
+      )}
+
+      {showUserCreateDialog && page === "users" && isAdmin && (
+        <div className="modal-layer" role="presentation">
+          <section className="modal user-create-modal" role="dialog" aria-modal="true" aria-labelledby="create-system-user-title">
+            <header><div><span className="modal-icon"><UserCog size={20} /></span><div><h2 id="create-system-user-title">添加系统用户</h2><p>创建后可在用户管理页继续调整角色与状态</p></div></div><button className="icon-button" type="button" onClick={() => setShowUserCreateDialog(false)} aria-label="关闭添加用户"><X size={20} /></button></header>
+            <form onSubmit={createSystemUser}>
+              <label>用户邮箱<input required type="email" value={systemUserEmail} onChange={(event) => setSystemUserEmail(event.target.value)} placeholder="name@example.com" autoComplete="email" autoFocus /></label>
+              <div className="field-control"><span>系统角色</span><SurfaceSelect id="new-user-role" ariaLabel="系统角色" value={systemUserRole} onChange={setSystemUserRole} options={[{ value: "user", label: "普通用户" }, { value: "admin", label: "管理员" }]} /></div>
+              <aside className="access-setup-note" role="note"><ShieldCheck size={17} aria-hidden="true" /><div><strong>创建后还需完成站点访问授权</strong><p>系统用户创建成功后，请在站点访问控制中允许该邮箱访问；完成后，对方登录即可使用对应权限。</p></div></aside>
+              <footer><button type="button" className="secondary-button" onClick={() => setShowUserCreateDialog(false)} disabled={isSaving}>取消</button><button type="submit" className="primary-button" disabled={isSaving}><UserCog size={17} />{isSaving ? "正在创建" : "创建用户"}</button></footer>
             </form>
           </section>
         </div>

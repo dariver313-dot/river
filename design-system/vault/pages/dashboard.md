@@ -7,7 +7,7 @@ This file intentionally overrides the mobile/dark recommendation in `../MASTER.m
 - Product surface: signed-in desktop web vault, not a marketing landing page.
 - Style: restrained security utility; light, high-contrast, dense but calm.
 - Layout: fixed desktop navigation, risk summary strip, credential table/list, contextual detail panel. Collapse to an off-canvas menu and single column on smaller screens.
-- Primary: deep navy `#102437`; accent and positive state: secure teal `#0A7A67`; canvas: cool gray `#F2F5F7`; surfaces: white.
+- Primary: deep navy `#172033`; accent and positive state: clear blue `#2F63D8`; canvas: cool gray `#F6F8FB`; surfaces: white.
 - Typography: Geist with Chinese system-font fallbacks. Use compact hierarchy and tabular numerals for scores and dates.
 - Radius: 7–14px with a controlled scale. Prefer separators and tonal surfaces over card shadows.
 - Motion: 180–220ms state transitions only; no ambient blobs, parallax, glow, spring choreography, or decorative reveal.
@@ -22,7 +22,7 @@ This file intentionally overrides the mobile/dark recommendation in `../MASTER.m
 
 ## Delivery checks
 
-- 44px interactive targets, visible focus, semantic labels, usable keyboard order.
+- Desktop controls use a compact 40px target; retain 44px touch targets for the primary mobile action. Keep focus visible and keyboard order usable.
 - Normal text contrast at least 4.5:1; status UI at least 3:1 and supported by text/icon.
 - Responsive checks at 375, 768, 1024, and 1440px; no horizontal page scroll.
 - Meaningful loading/copy/add/lock feedback and an aria-live status region.

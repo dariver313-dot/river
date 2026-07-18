@@ -22,7 +22,7 @@
 | Primary | `#1E3A5F` | `--color-primary` |
 | On Primary | `#FFFFFF` | `--color-on-primary` |
 | Secondary | `#334155` | `--color-secondary` |
-| Accent/CTA | `#059669` | `--color-accent` |
+| Accent/CTA | `#2F63D8` | `--color-accent` |
 | Background | `#0F172A` | `--color-background` |
 | Foreground | `#FFFFFF` | `--color-foreground` |
 | Muted | `#10192E` | `--color-muted` |
@@ -30,7 +30,7 @@
 | Destructive | `#DC2626` | `--color-destructive` |
 | Ring | `#1E3A5F` | `--color-ring` |
 
-**Color Notes:** Vault dark blue + secure green
+**Color Notes:** Vault navy + clear blue, cool-gray surfaces, and restrained shadows
 
 ### Typography
 
@@ -76,9 +76,9 @@
 ```css
 /* Primary Button */
 .btn-primary {
-  background: #059669;
+  background: #2F63D8;
   color: white;
-  padding: 12px 24px;
+  padding: 10px 16px;
   border-radius: 8px;
   font-weight: 600;
   transition: all 200ms ease;
@@ -95,7 +95,7 @@
   background: transparent;
   color: #1E3A5F;
   border: 2px solid #1E3A5F;
-  padding: 12px 24px;
+  padding: 10px 16px;
   border-radius: 8px;
   font-weight: 600;
   transition: all 200ms ease;

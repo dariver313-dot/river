@@ -27,11 +27,12 @@
 import axios, { type AxiosRequestConfig } from 'axios';
 import http from 'http';
 import https from 'https';
+import crypto from 'crypto';
 import { tokenManager, type TokenKey } from '../token-manager';
 import { generateTOTP } from '../totp';
 import { encryptPassword } from '../rsa-encrypt';
 import { env } from '../crypto-utils';
-import { TokenExpiredError, ConfigError, RateLimitError } from '../errors';
+import { TokenExpiredError, ConfigError, RateLimitError, UpstreamError } from '../errors';
 import { FIXED_UA, getTimezoneDateRange, createUserLock, parallelLimit } from '../utils';
 
 const TOKEN_KEY: TokenKey = 'platform_a';
@@ -116,10 +117,49 @@ const MAX_RETRIES = 3;
 const BACKOFF_BASE = 1000;
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
+interface MultipartFormBody {
+  contentType: string;
+  data: string;
+}
+
+type MultipartFieldValue = string | number | boolean | null | undefined;
+
+/** 平台 A 会员管理页面真实使用 multipart/form-data，而不是将筛选条件放进 URL。 */
+export function createMultipartForm(fields: Record<string, MultipartFieldValue>): MultipartFormBody {
+  const boundary = `----AuthService${crypto.randomBytes(12).toString('hex')}`;
+  const lines: string[] = [];
+  for (const [name, value] of Object.entries(fields)) {
+    if (value === null || value === undefined) continue;
+    const safeName = name.replace(/[\r\n"]/g, '');
+    const safeValue = String(value).replace(/[\r\n]/g, '');
+    lines.push(`--${boundary}\r\nContent-Disposition: form-data; name="${safeName}"\r\n\r\n${safeValue}\r\n`);
+  }
+  lines.push(`--${boundary}--\r\n`);
+  return { contentType: `multipart/form-data; boundary=${boundary}`, data: lines.join('') };
+}
+
+function isMultipartFormBody(value: unknown): value is MultipartFormBody {
+  return !!value
+    && typeof value === 'object'
+    && typeof (value as MultipartFormBody).contentType === 'string'
+    && typeof (value as MultipartFormBody).data === 'string';
+}
+
+function transportError(error: unknown): Error {
+  if (!axios.isAxiosError(error)) return error instanceof Error ? error : new Error(String(error));
+  const status = error.response?.status;
+  return new UpstreamError(
+    502,
+    status ? `平台 A HTTP ${status}` : '平台 A 网络请求失败',
+    status ?? error.code ?? null,
+    status === undefined || status >= 500,
+  );
+}
+
 async function request<T = unknown>(
   method: string,
   path: string,
-  body?: Record<string, unknown> | URLSearchParams,
+  body?: Record<string, unknown> | URLSearchParams | MultipartFormBody,
 ): Promise<T> {
   const baseUrl = getBaseUrl();
   if (!baseUrl) throw new ConfigError('PLATFORM_A_BASE_URL 未配置');
@@ -155,7 +195,10 @@ async function request<T = unknown>(
         };
 
         if (body) {
-          if (body instanceof URLSearchParams) {
+          if (isMultipartFormBody(body)) {
+            options.data = body.data;
+            options.headers = { ...headers, 'Content-Type': body.contentType };
+          } else if (body instanceof URLSearchParams) {
             options.data = body.toString();
             options.headers = { ...headers, 'Content-Type': 'application/x-www-form-urlencoded' };
           } else {
@@ -185,12 +228,28 @@ async function request<T = unknown>(
           throw new RateLimitError(waitMs);
         }
 
+        // 平台 A 的业务失败也可能使用 HTTP 200，必须检查响应信封。
+        if (data && typeof data === 'object') {
+          const upstreamCode = data.code ?? data.status ?? null;
+          const hasEnvelope = 'succeed' in data || 'code' in data || 'message' in data;
+          const codeOk = upstreamCode === null || upstreamCode === 0 || upstreamCode === '0';
+          const succeedOk = !('succeed' in data) || data.succeed === true;
+          if (hasEnvelope && (!succeedOk || !codeOk)) {
+            throw new UpstreamError(
+              502,
+              String(data.message || data.msg || '平台 A 返回业务失败'),
+              upstreamCode,
+              Boolean(data.retry),
+            );
+          }
+        }
+
         return data as T;
 
       } catch (err: any) {
         // 类型化错误：Token/配置/限流 — 按类型处理
         if (err instanceof TokenExpiredError) break;
-        if (err instanceof ConfigError) throw err;
+        if (err instanceof ConfigError || err instanceof UpstreamError) throw err;
         if (err instanceof RateLimitError) {
           if (isSafeMethod && attempt < maxAttempts) {
             await new Promise(resolve => setTimeout(resolve, err.retryAfterMs));
@@ -200,14 +259,15 @@ async function request<T = unknown>(
         }
 
         // 非安全方法（POST/PUT）：不重试，避免重复执行
-        if (!isSafeMethod) throw err;
+        if (!isSafeMethod) throw transportError(err);
 
-        // 安全方法：指数退避重试
-        if (attempt < maxAttempts) {
+        // 安全方法：仅网络错误或 5xx 才重试；4xx 参数/权限错误立即返回。
+        const retryableTransport = !axios.isAxiosError(err) || !err.response || err.response.status >= 500;
+        if (retryableTransport && attempt < maxAttempts) {
           const delay = BACKOFF_BASE * Math.pow(2, attempt);
           await new Promise(resolve => setTimeout(resolve, delay));
         } else {
-          throw err;
+          throw transportError(err);
         }
       }
     }
@@ -245,9 +305,8 @@ export async function checkUser(members: string[]): Promise<Record<string, { exi
         };
       }
     } catch (e: any) {
-      // 类型化 Token 错误 → 向上传播触发刷新；其他错误 → 标记为不存在
-      if (e instanceof TokenExpiredError) throw e;
-      result[account] = { exists: false };
+      // 查询失败不能伪装成“会员不存在”，交给调用方进入人工处理。
+      throw e;
     }
   });
 
@@ -352,7 +411,7 @@ export function setToken(token: string): void {
 
 /** 获取提现订单 */
 export async function getWithdrawOrders(params: {
-  status?: number;
+  status?: number | number[];
   page?: number;
   pageSize?: number;
   startTime?: string;
@@ -372,14 +431,66 @@ export async function getWithdrawOrders(params: {
   return request('POST', `/api/admin/finance/memberWithdraw/page?${searchParams.toString()}`);
 }
 
+const RECHARGE_ORDER_FIELDS = [
+  'id', 'brandId', 'account', 'nickname', 'balance', 'superAccount', 'orderNo',
+  'payTypeName', 'tpInterfaceName', 'tpMerchantName', 'tpPayChannelName',
+  'amount', 'payAmount', 'discountAmount', 'discountType', 'totalAmount',
+  'discountDml', 'rechargePerson', 'rechargeTime', 'status', 'remarks',
+  'auditorAccount', 'auditTime', 'auditRemarks', 'ipAddress', 'createTime',
+  'memberType', 'mode', 'payType', 'memberId', 'memberLevel', 'vipLevel',
+  'pointFlag', 'currency', 'currencyRate', 'currencyCount', 'rechargeTimes',
+  'popularizeId', 'parentPopularizeId', 'userRemark',
+] as const;
+
+const MEMBER_LIST_FIELDS = [
+  'id', 'brandId', 'popularizeId', 'account', 'nickname', 'vipLevel', 'remark',
+  'parentId', 'parentPopularizeId', 'parentName', 'userType', 'superPath', 'userLevel', 'lowerNum',
+  'withdrawFlag', 'currency', 'balance', 'freeze', 'gameFreeze',
+  'totalRechAmount', 'totalRechTimes', 'totalWithdrawAmount', 'totalWithdrawTimes',
+  'registerIp', 'registerIpCount', 'createTime', 'invitationCode', 'registerHost', 'registerSource',
+  'status', 'online', 'lastLoginIp', 'lastLoginIpCount', 'lastLoginTime', 'lastLoginDeviceClientId',
+  'agentLevel', 'registerBrowser', 'registerDeviceClientId', 'registerDeviceCount', 'registerOs',
+  'growth', 'goldCoin', 'salaryFlag', 'balanceDifference', 'winAmount', 'waterAmount', 'betAmount',
+  'validAmount', 'iconId', 'adSource', 'adInfo', 'registerMode',
+  'validAmountToday', 'validAmountHistory', 'winAmountToday', 'winAmountHistory',
+  'waterAmountToday', 'waterAmountHistory', 'bonusAmountToday', 'bonusAmountHistory',
+  'exceptionRechargeTotalAmount', 'exceptionWithdrawTotalAmount',
+  'commissionAmountToday', 'commissionAmountHistory', 'inviter', 'interestAmount',
+  'firstRechTime', 'firstRechAmount', 'firstWithdrawTime', 'firstWithdrawAmount',
+  'lastRechTime', 'lastRechAmount', 'thirdSource', 'appVersion',
+] as const;
+
+function pickFields(source: any, fields: readonly string[]): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  if (!source || typeof source !== 'object') return result;
+  for (const field of fields) {
+    if (Object.prototype.hasOwnProperty.call(source, field)) result[field] = source[field];
+  }
+  return result;
+}
+
+function sanitizePlatformARecords(response: any, fields: readonly string[]): any {
+  const records = response?.data?.records;
+  if (!Array.isArray(records)) return response;
+  return {
+    ...response,
+    data: { ...response.data, records: records.map((item: any) => pickFields(item, fields)) },
+  };
+}
+
+export function sanitizePlatformAMemberRecords(response: any): any {
+  return sanitizePlatformARecords(response, MEMBER_LIST_FIELDS);
+}
+
 /** 查询会员信息 */
 export async function getMemberInfo(params: { account: string }): Promise<any> {
-  const searchParams = new URLSearchParams({
+  const formData = createMultipartForm({
     flag: '0', baseSearchType: '8', baseSearchFuzzy: '0',
     otherSearchType: '0', accountSearchType: '2',
     current: '1', size: '10', account: params.account,
   });
-  return request('POST', `/api/admin/member/list?${searchParams.toString()}`);
+  const response = await request('POST', '/api/admin/member/list', formData);
+  return sanitizePlatformAMemberRecords(response);
 }
 
 /** 会员所有游戏有效投注分析（支持自定义日期范围，用于风控近7天占比计算）
@@ -423,11 +534,12 @@ export async function getRechargeHistory(params: { account: string; beginDatetim
 
   const searchParams = new URLSearchParams({
     orderBy: 'auditTime', order: 'DESC', adSource: '0', rechargeTimes: '-1',
-    flag: '0', superPathLike: 'false', current: '1', size: '50',
-    status: '3', currency: 'CNY', userAccount: params.account,
+    flag: '0', superPathLike: 'false', current: '1', size: '500',
+    status: '3', currency: 'CNY', userAccount: params.account, account: params.account,
     beginDatetime, endDatetime, modeList: '2', pointFlag: '1', memberType: 'M',
   });
-  return request('POST', `/api/admin/finance/rechargeOrderHistory/page?${searchParams.toString()}`);
+  const response = await request('POST', `/api/admin/finance/rechargeOrderHistory/page?${searchParams.toString()}`);
+  return sanitizePlatformARecords(response, RECHARGE_ORDER_FIELDS);
 }
 
 /** 彩金加款明细（会员彩金加款详细数据，modeList=2,3 + discountTypes=888）
@@ -445,7 +557,8 @@ export async function getRechargeDiscountHistory(params: { account: string; begi
     account: params.account,
     beginDatetime, endDatetime,
   });
-  return request('POST', `/api/admin/finance/rechargeOrderHistory/page?${searchParams.toString()}`);
+  const response = await request('POST', `/api/admin/finance/rechargeOrderHistory/page?${searchParams.toString()}`);
+  return sanitizePlatformARecords(response, RECHARGE_ORDER_FIELDS);
 }
 
 /** 官彩游戏有效投注查询（按 gameId 过滤，用于风控占比计算）
@@ -498,7 +611,8 @@ export async function getPaymentOrders(params: { account: string; startTime?: st
     account: params.account,
     createTimeFrom: startStr, createTimeTo: endStr,
   });
-  return request('POST', `/api/admin/finance/rechargeOrder/page?${searchParams.toString()}`);
+  const response = await request('POST', `/api/admin/finance/rechargeOrder/page?${searchParams.toString()}`);
+  return sanitizePlatformARecords(response, RECHARGE_ORDER_FIELDS);
 }
 
 /** 健康检查 */
@@ -520,13 +634,14 @@ export async function checkHealth(): Promise<boolean> {
 
 /** 按代理账号查下级会员列表 */
 export async function getMembersByAgency(params: { agencyUsername: string; page?: number; pageSize?: number }): Promise<any> {
-  const formData = new URLSearchParams({
+  const formData = createMultipartForm({
     flag: '0', baseSearchType: '8', baseSearchFuzzy: '0',
     otherSearchType: '0', accountSearchType: '2',
     current: String(params.page ?? 1), size: String(params.pageSize ?? 200),
     account: '', superAccount: params.agencyUsername,
   });
-  return request('POST', `/api/admin/member/list?${formData.toString()}`);
+  const response = await request('POST', '/api/admin/member/list', formData);
+  return sanitizePlatformAMemberRecords(response);
 }
 
 /** 投注记录查询（分页） */

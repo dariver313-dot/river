@@ -1,0 +1,11 @@
+packages:
+  - .
+
+onlyBuiltDependencies:
+  - prisma
+  - "@prisma/client"
+  - "@prisma/engines"
+  - esbuild
+
+overrides:
+  form-data: 4.0.6

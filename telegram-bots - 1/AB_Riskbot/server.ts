@@ -1,7 +1,7 @@
 /**
  * HTTP 服务器模块
  *
- * 从 index.ts 提取，提供 HTTP API 路由：健康检查、规则管理、评估查询。
+ * 从 index.ts 提取，提供本机管理 API：规则管理、评估查询。
  * 通过 ServerDeps 注入所有外部依赖，避免直接引用模块级变量。
  */
 
@@ -10,7 +10,7 @@ import crypto from 'crypto';
 import { dbHolder } from './db';
 import { getAllRules, setRuleEnabled, getRuleStates, invalidateActiveRuleIds } from './rule-engine';
 import { apiClient } from './api-client';
-import { getReceivingInfoCache, getAgentWithdrawCache } from './evaluator';
+import { getCacheStats } from './evaluator';
 import { logger } from './logger';
 import type { LRUCache } from 'lru-cache';
 export interface ServerDeps {
@@ -35,9 +35,8 @@ export function createServer(deps: ServerDeps): http.Server {
       return;
     }
 
-    // auth-service 迁移后，HTTP API 使用 AUTH_API_KEY 做 Bearer 认证
-    // /health 和 / 始终公开，其余路由需要 Bearer 认证
-    const isPublic = ['/health', '/'].includes(url.pathname);
+    // HTTP API 使用 AUTH_API_KEY 做 Bearer 认证；根路径只用于本机进程探测。
+    const isPublic = url.pathname === '/';
     const serverApiKey = process.env.AUTH_API_KEY || '';
     if (!isPublic) {
       if (!serverApiKey) {
@@ -64,49 +63,13 @@ export function createServer(deps: ServerDeps): http.Server {
     try {
       if (url.pathname === '/' && req.method === 'GET') {
         const hasToken = !!(process.env.AUTH_API_KEY || '');
-        const [evalCount, recentEvals] = await Promise.all([
-          dbHolder.db.riskEval.count(),
-          dbHolder.db.riskEval.findMany({ take: 5, orderBy: { createdAt: 'desc' } }),
-        ]);
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
           status: 'running',
-          tokenConfigured: hasToken,
-          totalEvaluations: evalCount,
-          lastPollTime: deps.getLastPollTime() ? new Date(deps.getLastPollTime()).toISOString() : null,
-          recentEvals,
-          message: hasToken ? '风控机器人运行中' : '等待设置 API Token',
-        }));
-        return;
-      }
-
-      if (url.pathname === '/health' && req.method === 'GET') {
-        const hasToken = !!(process.env.AUTH_API_KEY || '');
-        const apiHealthy = hasToken
-          ? await Promise.race([
-              apiClient.checkHealth(),
-              new Promise<false>(resolve => setTimeout(() => resolve(false), 3000)),
-            ]).catch(() => false)
-          : false;
-        let evalCount = 0;
-        try { evalCount = await dbHolder.db.riskEval.count(); } catch (err) {
-          logger.warn({ err: (err as Error).message }, '[HTTP] /health DB count 失败');
-        }
-
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({
-          status: apiHealthy ? 'healthy' : hasToken ? 'degraded' : 'waiting_token',
           timestamp: new Date().toISOString(),
           tokenConfigured: hasToken,
-          apiHealthy,
-          totalEvaluations: evalCount,
-          lastPollTime: deps.getLastPollTime() ? new Date(deps.getLastPollTime()).toISOString() : null,
-          pollIntervalSec: deps.getPollInterval() / 1000,
-          caches: {
-            receivingInfo: getReceivingInfoCache().size,
-            agentWithdraw: getAgentWithdrawCache().size,
-          },
+          message: hasToken ? '风控机器人运行中' : '等待设置 API Token',
         }));
         return;
       }
@@ -153,10 +116,7 @@ export function createServer(deps: ServerDeps): http.Server {
           highRiskEvaluations: highRiskCount,
           lastPollTime: deps.getLastPollTime() ? new Date(deps.getLastPollTime()).toISOString() : null,
           pollInterval: deps.getPollInterval() / 1000,
-          caches: {
-            receivingInfo: getReceivingInfoCache().size,
-            agentWithdraw: getAgentWithdrawCache().size,
-          },
+          caches: getCacheStats(),
         }));
         return;
       }

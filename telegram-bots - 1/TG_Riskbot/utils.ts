@@ -1,7 +1,6 @@
-import crypto from 'crypto';
 import { type WithdrawOrder } from './ws-client';
 import type { MemberInfo } from './types';
-import { logger, warnOnce } from './logger';
+import { logger } from './logger';
 
 export function parseTimeStr(t: string | number | undefined | null): number {
   if (!t) return 0;
@@ -77,69 +76,34 @@ export function fmtNum(n: number | string | undefined | null): string {
   return num.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
 }
 
+/** 规范会员备注，用于通知展示和“无备注”规则，避免空白/符号备注造成噪声。 */
+export function normalizeMemberRemark(value: unknown, maxLength = 80): string {
+  const compact = String(value ?? '')
+    .replace(/[\u0000-\u001F\u007F\u200B-\u200D\uFEFF]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const meaningful = compact.replace(/[\s\p{P}\p{S}]/gu, '');
+  if (!meaningful) return '';
+  return compact.length > maxLength ? `${compact.slice(0, maxLength)}...` : compact;
+}
+
+/** 合并会员与订单备注，去除重复内容后再用于展示和规则判断。 */
+export function combineMemberRemarks(values: unknown[], maxLength = 80): string {
+  const seen = new Set<string>();
+  const remarks: string[] = [];
+  for (const value of values) {
+    const remark = normalizeMemberRemark(value, maxLength);
+    const key = remark.toLocaleLowerCase();
+    if (remark && !seen.has(key)) {
+      seen.add(key);
+      remarks.push(remark);
+    }
+  }
+  return normalizeMemberRemark(remarks.join('；'), maxLength);
+}
+
 export function extractProxyCode(order?: WithdrawOrder | null, member?: MemberInfo | null): string {
   return order?.proxyCode || order?.proxy_code || order?.agencyMemberName ||
     member?.agencyMemberName || member?.proxyCode || member?.proxy_code ||
     member?.agentCode || member?.agent_code || member?.proxyName || member?.parentName || '';
 }
-
-/* ===== 敏感数据加密/解密（用于 Token 等安全存储） ===== */
-
-const ENC_ALGO = 'aes-256-gcm';
-const ENC_PREFIX = 'enc:';
-
-function getEncryptionKey(): Buffer | null {
-  const hex = process.env.ENCRYPTION_KEY || '';
-  if (!hex || hex.length !== 64) return null;
-  return Buffer.from(hex, 'hex');
-}
-
-/**
- * 加密明文。无 ENCRYPTION_KEY 时降级为明文存储（向后兼容）。
- * 加密格式: enc:<iv_hex>:<authTag_hex>:<ciphertext_hex>
- */
-export function encrypt(plaintext: string): string {
-  const key = getEncryptionKey();
-  if (!key) {
-    warnOnce('[加密] 未配置 ENCRYPTION_KEY，敏感数据将以明文存储，建议在 .env 中设置 64 位 hex 密钥');
-    return plaintext;
-  }
-  const iv = crypto.randomBytes(12);
-  const cipher = crypto.createCipheriv(ENC_ALGO, key, iv);
-  let encrypted = cipher.update(plaintext, 'utf8', 'hex');
-  encrypted += cipher.final('hex');
-  const authTag = cipher.getAuthTag().toString('hex');
-  return `${ENC_PREFIX}${iv.toString('hex')}:${authTag}:${encrypted}`;
-}
-
-/**
- * 解密密文。自动识别加密格式，非加密格式直接返回（向后兼容旧数据）。
- */
-export function decrypt(ciphertext: string): string {
-  if (!ciphertext.startsWith(ENC_PREFIX)) return ciphertext;
-  const key = getEncryptionKey();
-  if (!key) {
-    warnOnce('[加密] 数据已加密但未配置 ENCRYPTION_KEY，无法解密');
-    return ciphertext;
-  }
-  try {
-    const parts = ciphertext.slice(ENC_PREFIX.length).split(':');
-    if (parts.length !== 3) return ciphertext;
-    const [ivHex, tagHex, data] = parts;
-    const decipher = crypto.createDecipheriv(ENC_ALGO, key, Buffer.from(ivHex, 'hex'));
-    decipher.setAuthTag(Buffer.from(tagHex, 'hex'));
-    let decrypted = decipher.update(data, 'hex', 'utf8');
-    decrypted += decipher.final('utf8');
-    return decrypted;
-  } catch (err) {
-    logger.error({ err: (err as Error).message }, '[加密] 解密失败，返回原始值');
-    return ciphertext;
-  }
-}
-
-/** 生成新的 ENCRYPTION_KEY（运行一次，将输出写入 .env） */
-export function generateEncryptionKey(): string {
-  return crypto.randomBytes(32).toString('hex');
-}
-
-

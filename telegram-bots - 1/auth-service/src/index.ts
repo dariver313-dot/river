@@ -20,7 +20,10 @@ import apiRouter from './api';
 import http from 'http';
 
 const PORT = parseInt(process.env.PORT || '3100', 10);
+const HOST = process.env.HOST || '0.0.0.0';
 const USE_HTTPS = !!(process.env.HTTPS_KEY_PATH && process.env.HTTPS_CERT_PATH);
+const DEFAULT_REFRESH_INTERVAL = 4 * 60 * 60 * 1000;
+const FAILED_LOGIN_RETRY_INTERVAL = 5 * 60 * 1000;
 const app = express();
 
 let activeServer: http.Server | null = null;
@@ -109,6 +112,9 @@ async function bootstrap(): Promise<void> {
   if (!env('BOT_ADMIN_KEYS')) {
     warnings.push('BOT_ADMIN_KEYS 未配置，setToken/status 操作将被 403 拒绝');
   }
+  if (env('PLATFORM_B_WS_URL') && !env('BOT_WS_KEYS')) {
+    warnings.push('BOT_WS_KEYS 未配置，TG_Riskbot 获取 ws-token 将被 403 拒绝');
+  }
 
   if (warnings.length > 0) {
     console.warn('[启动] ⚠ 配置警告:');
@@ -133,10 +139,16 @@ async function bootstrap(): Promise<void> {
         tokenManager.startAutoRefresh('platform_a', autoLoginConfig, refreshInterval);
       } else {
         console.warn('[启动] 平台A 自动登录失败');
+        tokenManager.startAutoRefresh(
+          'platform_a', autoLoginConfig, DEFAULT_REFRESH_INTERVAL, undefined, FAILED_LOGIN_RETRY_INTERVAL,
+        );
       }
     } catch (e: any) {
       const safeMsg = (e.message || '').replace(/([?&])(account|password|code)=[^&\s]*/gi, '$1$2=***');
       console.error(`[启动] 平台A 自动登录异常: ${safeMsg}`);
+      tokenManager.startAutoRefresh(
+        'platform_a', autoLoginConfig, DEFAULT_REFRESH_INTERVAL, undefined, FAILED_LOGIN_RETRY_INTERVAL,
+      );
     }
   } else {
     console.log('[启动] 未配置平台A自动登录，Token 需要手动设置');
@@ -173,10 +185,22 @@ async function bootstrap(): Promise<void> {
         tokenManager.startAutoRefresh('platform_b', bConfig, refreshInterval, () => { clearSm4Cache(); });
       } else {
         console.warn('[启动] 平台B 自动登录失败');
+        tokenManager.startAutoRefresh(
+          'platform_b', bConfig, DEFAULT_REFRESH_INTERVAL,
+          () => { clearSm4Cache(); }, FAILED_LOGIN_RETRY_INTERVAL,
+        );
       }
     } catch (e: any) {
       const safeMsg = (e.message || '').replace(/([?&])(account|password|code|googleCode)=[^&\s]*/gi, '$1$2=***');
       console.error(`[启动] 平台B 自动登录异常: ${safeMsg}`);
+      const retryConfig: PlatformBLoginConfig = {
+        platform: 'b', baseUrl: bBaseUrl, account: bAccount, password: bPassword,
+        totpSecret: bTotpSecret, tenantCode: env('PLATFORM_B_TENANT_CODE') || 'CSZH',
+      };
+      tokenManager.startAutoRefresh(
+        'platform_b', retryConfig, DEFAULT_REFRESH_INTERVAL,
+        () => { clearSm4Cache(); }, FAILED_LOGIN_RETRY_INTERVAL,
+      );
     }
   } else if (env('PLATFORM_B_ROBOT_BASE_URL')) {
     console.log('[启动] 平台B 未配置自动登录，Token 需要手动设置');
@@ -203,12 +227,12 @@ async function bootstrap(): Promise<void> {
       cert: fs.readFileSync(certPath),
     }, app);
     activeServer = httpsServer;
-    httpsServer.listen(PORT, () => {
-      console.log(`[启动] Auth Service 已启动，端口: ${PORT} (${protocol.toUpperCase()})`);
+    httpsServer.listen(PORT, HOST, () => {
+      console.log(`[启动] Auth Service 已启动，地址: ${HOST}:${PORT} (${protocol.toUpperCase()})`);
     });
   } else {
-    activeServer = app.listen(PORT, () => {
-      console.log(`[启动] Auth Service 已启动，端口: ${PORT} (${protocol.toUpperCase()})`);
+    activeServer = app.listen(PORT, HOST, () => {
+      console.log(`[启动] Auth Service 已启动，地址: ${HOST}:${PORT} (${protocol.toUpperCase()})`);
     });
   }
 }

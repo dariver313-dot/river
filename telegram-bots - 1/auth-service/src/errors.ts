@@ -39,9 +39,18 @@ export class RateLimitError extends Error {
 export class UpstreamError extends Error {
   readonly code = 'UPSTREAM_ERROR' as const;
   readonly statusCode: number;
-  constructor(statusCode: number, message: string) {
+  readonly upstreamCode: string | number | null;
+  readonly retryable: boolean;
+  constructor(
+    statusCode: number,
+    message: string,
+    upstreamCode: string | number | null = null,
+    retryable = false,
+  ) {
     super(message);
     this.name = 'UpstreamError';
     this.statusCode = statusCode;
+    this.upstreamCode = upstreamCode;
+    this.retryable = retryable;
   }
 }

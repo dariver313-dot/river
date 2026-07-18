@@ -1,4 +1,4 @@
-import type { MemberInfo, BetRecord, WithdrawalRecord, ThirdGameOrder, PaymentOrder, BetsCount, LoginLogItem } from './types';
+import type { MemberInfo, BetRecord, WithdrawalRecord, ThirdGameOrder, PaymentOrder, BetsCount, LoginLogItem, AccountChangeRecord, QueryQuality } from './types';
 import type { WithdrawOrder } from './ws-client';
 import type { LHCCheckResult } from './lhc-checker';
 import type { SSCCheckResult } from './ssc-checker';
@@ -18,20 +18,34 @@ export interface RiskRule {
   evaluate: (ctx: RuleContext) => RuleResult;
 }
 
+export interface LoginAssociationSummary {
+  value: string;
+  memberNames: string[];
+  otherMemberNames: string[];
+  latestLoginAtByMember?: Record<string, number>;
+  accountCount: number;
+  fetchedCount?: number;
+  totalCount?: number;
+  truncated?: boolean;
+}
+
 export interface RuleContext {
   order: WithdrawOrder;
   member: MemberInfo;
   bets: BetRecord[];
+  dailyBets?: BetRecord[];
   withdrawals: WithdrawalRecord[];
   relatedByLoginIp: LoginLogItem[];
   relatedByLoginDevice: LoginLogItem[];
   relatedByLoginIpCount: number;
   relatedByLoginDeviceCount: number;
-  receivingInfoCache: LRUCache<string, { data: Set<string> }>;
+  dailyLoginIpAssociations?: LoginAssociationSummary[];
+  dailyLoginDeviceAssociations?: LoginAssociationSummary[];
+  receivingAssociations?: string[];
   agentWithdrawCache: LRUCache<string, { count: number; memberIds: Set<string>; lastUpdate: number }>;
-  payChannelCache: LRUCache<string, { data: Set<string> }>;
   thirdGameBets: ThirdGameOrder[];
   paymentOrders: PaymentOrder[];
+  accountChanges?: AccountChangeRecord[];
   betsCount: BetsCount | null;
   manualRechargeToday: number;
   manualRecharge3Day: number;
@@ -50,14 +64,19 @@ export interface RuleContext {
   _pk10Result?: PK10CheckResult;
   reviewedPeriodKeys?: Set<string>;
   traceId?: string;
-  lastWithdrawMethod?: { bank: string; card: string; name: string } | null;
+  lastWithdrawMethod?: { bank: string; card: string; name: string; time?: number } | null;
   mainGameType?: string;  // 近7天主投游戏类型（如"电子类游戏"），仅用于信息展示
+  latestRechargeTime?: number;
+  latestRechargeAmount?: number;
+  dataQuality?: QueryQuality[];
 }
 
 export interface RuleResult {
   triggered: boolean;
   reason?: string;
   score: number;
+  severity?: RiskRule['severity'];
+  presentation?: 'core' | 'support';
 }
 
 export interface EvaluationResult {
@@ -73,6 +92,7 @@ export interface EvaluationResult {
     group: string;
     reason: string;
     score: number;
+    presentation?: 'core' | 'support';
   }>;
   groupScores: Record<string, number>;
   depositCount: number;
@@ -80,11 +100,19 @@ export interface EvaluationResult {
   registerTime: string;
   daysSinceReg: number;
   rechargeWithdrawDiff: number;
+  rechargeAmount?: number;
+  withdrawAmount?: number;
   proxyCode: string;
   orderAmount: string;
   balance: string;
+  /** 规范后的会员备注，仅作为通知上下文展示，不参与风险评分。 */
+  remark?: string;
   associatedGroup?: string[];
   isEarlyMorning?: boolean;
   periodInfo?: string;
   mainGameType?: string;  // 近7天主投游戏类型（如"电子类游戏"），仅用于信息展示
+  dataQuality?: QueryQuality[];
+  dataIssues?: string[];
+  estimatedProfitLoss?: boolean;
+  profitLoss?: number;
 }

@@ -3,4 +3,8 @@ dist/
 db/
 *.db
 *.db-journal
+*.db-wal
+*.db-shm
+*.log
+*.zip
 .env

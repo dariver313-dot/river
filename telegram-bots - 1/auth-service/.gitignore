@@ -20,3 +20,7 @@ Thumbs.db
 *.db
 *.db-shm
 *.db-wal
+
+# 运行时幂等记录
+data/idempotency-store.json
+data/idempotency-store.json.*.tmp

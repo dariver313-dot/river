@@ -2,6 +2,9 @@ import { PrismaClient } from '@prisma/client';
 import { logger } from './logger';
 import path from 'path';
 import fs from 'fs';
+import { fileURLToPath } from 'url';
+
+const APP_ROOT = path.dirname(fileURLToPath(import.meta.url));
 
 class DbHolder {
   private _db: PrismaClient | null = null;
@@ -28,42 +31,32 @@ export function getDb(): PrismaClient {
 
 function getDatabaseUrl(): string {
   const envUrl = process.env.DATABASE_URL || '';
-  if (envUrl) return envUrl;
-  const dbPath = path.join(process.cwd(), 'prisma', 'db', 'riskbot.db');
-  return `file:${dbPath}?journal_mode=WAL&synchronous=NORMAL&cache_size=-64000`;
+  if (envUrl) {
+    return envUrl.includes('connection_limit') ? envUrl : `${envUrl}${envUrl.includes('?') ? '&' : '?'}connection_limit=1`;
+  }
+  const dbPath = path.join(APP_ROOT, 'prisma', 'db', 'riskbot.db');
+  return `file:${dbPath}?journal_mode=WAL&synchronous=NORMAL&cache_size=-64000&connection_limit=1`;
 }
 
 function resolveDbFilePath(url: string): string {
   const raw = url.replace(/^file:/, '').split('?')[0];
   if (path.isAbsolute(raw)) return raw;
-  return path.resolve(process.cwd(), raw);
+  return path.resolve(APP_ROOT, raw);
 }
 
-function deleteCorruptedDb(dbFile: string): void {
+function archiveCorruptedDb(dbFile: string): void {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const files = [dbFile, `${dbFile}-wal`, `${dbFile}-shm`];
   for (const f of files) {
     try {
       if (fs.existsSync(f)) {
-        fs.unlinkSync(f);
-        logger.warn({ file: f }, '[数据库] 已删除损坏文件');
+        const archived = `${f}.corrupt-${stamp}`;
+        fs.renameSync(f, archived);
+        logger.warn({ file: f, archived }, '[数据库] 已备份损坏文件');
       }
     } catch (e) {
-      logger.warn({ file: f, err: (e as Error).message }, '[数据库] 删除文件失败');
-    }
-  }
-}
-
-/** 仅删除 WAL/SHM 日志文件（安全操作，主数据库文件保留，仅丢失未提交的写入） */
-function deleteWalShm(dbFile: string): void {
-  for (const suffix of ['-wal', '-shm']) {
-    const f = dbFile + suffix;
-    try {
-      if (fs.existsSync(f)) {
-        fs.unlinkSync(f);
-        logger.warn({ file: f }, '[数据库] 已删除残留日志文件');
-      }
-    } catch (e) {
-      logger.warn({ file: f, err: (e as Error).message }, '[数据库] 删除日志文件失败');
+      logger.error({ file: f, err: (e as Error).message }, '[数据库] 备份损坏文件失败');
+      throw e;
     }
   }
 }
@@ -72,9 +65,9 @@ function migrateFromLegacyPath(newDbFile: string): void {
   if (fs.existsSync(newDbFile)) return;
 
   const legacyPaths = [
-    path.resolve(process.cwd(), 'db', 'riskbot.db'),
-    path.resolve(process.cwd(), 'riskbot.db'),
-    path.resolve(process.cwd(), 'prisma', 'riskbot.db'),
+    path.resolve(APP_ROOT, 'db', 'riskbot.db'),
+    path.resolve(APP_ROOT, 'riskbot.db'),
+    path.resolve(APP_ROOT, 'prisma', 'riskbot.db'),
   ];
 
   for (const legacyPath of legacyPaths) {
@@ -107,13 +100,15 @@ function migrateFromLegacyPath(newDbFile: string): void {
 }
 
 /** 启动时验证数据库表结构与 Prisma schema / DDL 定义一致 */
-async function verifySchemaConsistency(): Promise<void> {
+async function verifySchemaConsistency(): Promise<string[]> {
+  const issues: string[] = [];
   const expectedColumns: Record<string, string[]> = {
-    RiskEval: ['orderId', 'memberId', 'memberName', 'totalScore', 'riskLevel', 'triggeredRules', 'detail', 'notified', 'finalStatus', 'feedback', 'notifyMsgId', 'notifiedAt', 'createdAt'],
-    RuleFeedback: ['evalId', 'ruleId', 'feedback', 'memberId', 'periodInfo', 'createdAt'],
-    BotConfig: ['key', 'value'],
-    MemberProfile: ['memberName', 'memberId', 'evalCount', 'highRiskCount', 'maxRiskLevel', 'lastEvalAt', 'lastEvalScore', 'topRules', 'totalWithdrawAmount', 'recentWithdrawTrend'],
-    AgentProfile: ['proxyCode', 'memberCount', 'evalCount', 'highRiskCount', 'totalWithdrawAmount', 'riskScore', 'topRules'],
+    RiskEval: ['id', 'orderId', 'memberId', 'memberName', 'totalScore', 'riskLevel', 'triggeredRules', 'detail', 'notified', 'finalStatus', 'feedback', 'notifyMsgId', 'notifiedAt', 'notifyLeaseAt', 'createdAt'],
+    RuleFeedback: ['id', 'evalId', 'ruleId', 'feedback', 'memberId', 'periodInfo', 'createdAt'],
+    BotConfig: ['id', 'key', 'value'],
+    MemberProfile: ['memberName', 'memberId', 'evalCount', 'highRiskCount', 'maxRiskLevel', 'lastEvalAt', 'lastEvalScore', 'topRules', 'totalWithdrawAmount', 'recentWithdrawTrend', 'lastWithdrawMethod', 'createdAt', 'updatedAt'],
+    AgentProfile: ['proxyCode', 'memberCount', 'evalCount', 'highRiskCount', 'totalWithdrawAmount', 'riskScore', 'topRules', 'createdAt', 'updatedAt'],
+    SuccessfulWithdrawal: ['orderId', 'memberId', 'memberName', 'amount', 'receivingBank', 'receivingName', 'receivingCardNo', 'receivingFingerprint', 'createTime', 'recordedAt'],
   };
 
   try {
@@ -126,6 +121,7 @@ async function verifySchemaConsistency(): Promise<void> {
     for (const [tableName, requiredCols] of Object.entries(expectedColumns)) {
       if (!tableNames.has(tableName)) {
         logger.warn({ table: tableName }, '[数据库] 期望的表不存在，将在 prisma db push 中创建');
+        issues.push(`${tableName}表不存在`);
         continue;
       }
 
@@ -137,11 +133,50 @@ async function verifySchemaConsistency(): Promise<void> {
 
       if (missing.length > 0) {
         logger.warn({ table: tableName, missing }, `[数据库] 表 ${tableName} 缺少字段: ${missing.join(', ')}，可能需要手动执行 prisma db push`);
+        issues.push(`${tableName}缺少字段:${missing.join(',')}`);
       }
     }
   } catch (err) {
-    logger.warn({ err: (err as Error).message }, '[数据库] Schema一致性校验失败，继续启动');
+    const message = (err as Error).message;
+    logger.error({ err: message }, '[数据库] Schema一致性校验失败');
+    issues.push(`无法校验数据库结构:${message}`);
   }
+  return issues;
+}
+
+async function dedupeRuleFeedback(): Promise<void> {
+  try {
+    await dbHolder.db.$executeRawUnsafe(`
+      DELETE FROM RuleFeedback
+      WHERE rowid NOT IN (
+        SELECT MIN(rowid)
+        FROM RuleFeedback
+        GROUP BY evalId, ruleId
+      )
+    `);
+  } catch (err) {
+    const msg = (err as Error).message || '';
+    if (!msg.includes('no such table')) {
+      logger.warn({ err: msg }, '[数据库] RuleFeedback 去重失败，唯一索引可能无法创建');
+    }
+  }
+}
+
+/**
+ * prisma db push 在正常环境会完成此变更；此处仅为其失败时的安全兜底。
+ * 列名与 SQL 均为固定常量，且只做 SQLite 支持的追加列操作。
+ */
+async function ensureRiskEvalNotificationLeaseColumn(): Promise<void> {
+  const tables = await dbHolder.db.$queryRawUnsafe<Array<{ name: string }>>(
+    "SELECT name FROM sqlite_master WHERE type='table' AND name='RiskEval'",
+  );
+  if (tables.length === 0) return;
+
+  const columns = await dbHolder.db.$queryRawUnsafe<Array<{ name: string }>>('PRAGMA table_info("RiskEval")');
+  if (columns.some(column => column.name === 'notifyLeaseAt')) return;
+
+  await dbHolder.db.$executeRawUnsafe('ALTER TABLE "RiskEval" ADD COLUMN "notifyLeaseAt" DATETIME');
+  logger.info('[数据库] 已为历史 RiskEval 表补充通知租约字段');
 }
 
 export async function ensureDatabase(): Promise<void> {
@@ -179,9 +214,9 @@ export async function ensureDatabase(): Promise<void> {
       await dbHolder.db.$disconnect().catch(() => {});
 
       if (isCantOpen && !isCorrupt) {
-        // CANTOPEN 通常是残留锁或 WAL 文件损坏，先尝试只删除 WAL/SHM（保留主数据库）
-        logger.warn({ db: dbFile }, '[数据库] 数据库无法打开，尝试清理残留日志文件');
-        deleteWalShm(dbFile);
+        // WAL 可能包含已提交但尚未 checkpoint 的数据，不能通过删除 WAL/SHM 恢复。
+        logger.warn({ db: dbFile }, '[数据库] 数据库暂时无法打开，等待后重连并保留全部数据库文件');
+        await new Promise(resolve => setTimeout(resolve, 1000));
 
         // 确保目录存在
         if (!fs.existsSync(dbDir)) {
@@ -194,17 +229,28 @@ export async function ensureDatabase(): Promise<void> {
           await dbHolder.db.$queryRawUnsafe('PRAGMA busy_timeout = 5000');
           await dbHolder.db.$queryRawUnsafe('PRAGMA journal_mode = WAL');
           await dbHolder.db.$queryRawUnsafe('PRAGMA synchronous = NORMAL');
-          logger.info('[数据库] 清理日志文件后连接成功');
+          logger.info('[数据库] 等待后重新连接成功');
           return; // 恢复成功，跳过完整重建
         } catch (retryErr) {
-          logger.warn({ err: (retryErr as Error).message }, '[数据库] 清理日志文件无效，尝试完整重建');
+          logger.warn({ err: (retryErr as Error).message }, '[数据库] 重新连接失败');
           await dbHolder.db.$disconnect().catch(() => {});
         }
       }
 
-      // 完整重建（删除所有文件）
-      logger.warn({ db: dbFile }, '[数据库] 数据库文件不可用，自动重建');
-      deleteCorruptedDb(dbFile);
+      // 完整重建需要显式允许：默认不动主库，避免生产环境静默丢历史数据
+      if (process.env.ALLOW_DB_REBUILD !== 'true') {
+        logger.error({ db: dbFile }, '[数据库] 数据库文件不可用。为避免误删历史数据，已停止启动；确认可重建后设置 ALLOW_DB_REBUILD=true');
+        try { await dbHolder.db.$disconnect(); } catch {}
+        process.exit(1);
+      }
+
+      logger.warn({ db: dbFile }, '[数据库] 数据库文件不可用，将备份原文件后重建');
+      try {
+        archiveCorruptedDb(dbFile);
+      } catch {
+        try { await dbHolder.db.$disconnect(); } catch {}
+        process.exit(1);
+      }
 
       if (!fs.existsSync(dbDir)) {
         fs.mkdirSync(dbDir, { recursive: true });
@@ -230,16 +276,17 @@ export async function ensureDatabase(): Promise<void> {
     }
   }
 
-  // 验证数据库 schema 与代码中的 DDL 一致
-  await verifySchemaConsistency();
+  // 迁移前先清理历史重复反馈，确保唯一索引可以创建
+  await dedupeRuleFeedback();
 
   try {
     // 使用异步 execFile 替代 execSync，避免阻塞事件循环
     const { execFile } = await import('child_process');
     await new Promise<void>((resolve, reject) => {
-      execFile('npx', ['prisma', 'db', 'push'], {
+       const prismaCli = path.resolve(APP_ROOT, 'node_modules', 'prisma', 'build', 'index.js');
+      execFile(process.execPath, [prismaCli, 'db', 'push'], {
         env: { ...process.env, DATABASE_URL: databaseUrl },
-        cwd: process.cwd(),
+         cwd: APP_ROOT,
       }, (err) => {
         if (err) reject(err);
         else resolve();
@@ -252,9 +299,9 @@ export async function ensureDatabase(): Promise<void> {
     try {
       // SECURITY: DDL 语句为硬编码常量，严禁在此处拼接任何变量，防止 SQL 注入
       const ddl: readonly string[] = [
-        `CREATE TABLE IF NOT EXISTS MemberProfile (memberName TEXT PRIMARY KEY, memberId TEXT NOT NULL DEFAULT '', evalCount INTEGER NOT NULL DEFAULT 0, highRiskCount INTEGER NOT NULL DEFAULT 0, maxRiskLevel TEXT NOT NULL DEFAULT '', lastEvalAt DATETIME, lastEvalScore INTEGER NOT NULL DEFAULT 0, topRules TEXT NOT NULL DEFAULT '{}', totalWithdrawAmount REAL NOT NULL DEFAULT 0, recentWithdrawTrend TEXT NOT NULL DEFAULT '[]', updatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)`,
-        `CREATE TABLE IF NOT EXISTS AgentProfile (proxyCode TEXT PRIMARY KEY, memberCount INTEGER NOT NULL DEFAULT 0, evalCount INTEGER NOT NULL DEFAULT 0, highRiskCount INTEGER NOT NULL DEFAULT 0, totalWithdrawAmount REAL NOT NULL DEFAULT 0, riskScore INTEGER NOT NULL DEFAULT 0, topRules TEXT NOT NULL DEFAULT '{}', updatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)`,
-        `CREATE TABLE IF NOT EXISTS RiskEval (id TEXT PRIMARY KEY, orderId TEXT NOT NULL UNIQUE, memberId TEXT NOT NULL, memberName TEXT NOT NULL DEFAULT '', totalScore INTEGER NOT NULL DEFAULT 0, riskLevel TEXT NOT NULL DEFAULT 'LOW', triggeredRules TEXT NOT NULL DEFAULT '[]', detail TEXT NOT NULL DEFAULT '{}', notified INTEGER NOT NULL DEFAULT 0, finalStatus TEXT NOT NULL DEFAULT '', feedback TEXT NOT NULL DEFAULT '', notifyMsgId INTEGER, notifiedAt DATETIME, createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)`,
+        `CREATE TABLE IF NOT EXISTS MemberProfile (memberName TEXT PRIMARY KEY, memberId TEXT NOT NULL DEFAULT '', evalCount INTEGER NOT NULL DEFAULT 0, highRiskCount INTEGER NOT NULL DEFAULT 0, maxRiskLevel TEXT NOT NULL DEFAULT '', lastEvalAt DATETIME, lastEvalScore INTEGER NOT NULL DEFAULT 0, topRules TEXT NOT NULL DEFAULT '{}', totalWithdrawAmount REAL NOT NULL DEFAULT 0, recentWithdrawTrend TEXT NOT NULL DEFAULT '[]', lastWithdrawMethod TEXT NOT NULL DEFAULT '', createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)`,
+        `CREATE TABLE IF NOT EXISTS AgentProfile (proxyCode TEXT PRIMARY KEY, memberCount INTEGER NOT NULL DEFAULT 0, evalCount INTEGER NOT NULL DEFAULT 0, highRiskCount INTEGER NOT NULL DEFAULT 0, totalWithdrawAmount REAL NOT NULL DEFAULT 0, riskScore INTEGER NOT NULL DEFAULT 0, topRules TEXT NOT NULL DEFAULT '{}', createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)`,
+        `CREATE TABLE IF NOT EXISTS RiskEval (id TEXT PRIMARY KEY, orderId TEXT NOT NULL UNIQUE, memberId TEXT NOT NULL, memberName TEXT NOT NULL DEFAULT '', totalScore INTEGER NOT NULL DEFAULT 0, riskLevel TEXT NOT NULL DEFAULT 'LOW', triggeredRules TEXT NOT NULL DEFAULT '[]', detail TEXT NOT NULL DEFAULT '{}', notified INTEGER NOT NULL DEFAULT 0, finalStatus TEXT NOT NULL DEFAULT '', feedback TEXT NOT NULL DEFAULT '', notifyMsgId INTEGER, notifiedAt DATETIME, notifyLeaseAt DATETIME, createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)`,
         `CREATE INDEX IF NOT EXISTS RiskEval_memberId_idx ON RiskEval(memberId)`,
         `CREATE INDEX IF NOT EXISTS RiskEval_createdAt_idx ON RiskEval(createdAt)`,
         `CREATE INDEX IF NOT EXISTS RiskEval_riskLevel_idx ON RiskEval(riskLevel)`,
@@ -266,8 +313,13 @@ export async function ensureDatabase(): Promise<void> {
         `CREATE INDEX IF NOT EXISTS RuleFeedback_memberId_feedback_createdAt_idx ON RuleFeedback(memberId, feedback, createdAt)`,
         `CREATE INDEX IF NOT EXISTS RuleFeedback_memberId_feedback_ruleId_idx ON RuleFeedback(memberId, feedback, ruleId)`,
         `CREATE INDEX IF NOT EXISTS RuleFeedback_createdAt_idx ON RuleFeedback(createdAt)`,
+        `CREATE UNIQUE INDEX IF NOT EXISTS RuleFeedback_evalId_ruleId_key ON RuleFeedback(evalId, ruleId)`,
         `CREATE TABLE IF NOT EXISTS BotConfig (id TEXT PRIMARY KEY, key TEXT NOT NULL UNIQUE, value TEXT NOT NULL DEFAULT '')`,
         `CREATE INDEX IF NOT EXISTS BotConfig_key_idx ON BotConfig(key)`,
+        `CREATE TABLE IF NOT EXISTS SuccessfulWithdrawal (orderId TEXT PRIMARY KEY, memberId TEXT NOT NULL, memberName TEXT NOT NULL, amount REAL NOT NULL DEFAULT 0, receivingBank TEXT NOT NULL DEFAULT '', receivingName TEXT NOT NULL DEFAULT '', receivingCardNo TEXT NOT NULL DEFAULT '', receivingFingerprint TEXT NOT NULL DEFAULT '', createTime DATETIME NOT NULL, recordedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)`,
+        `CREATE INDEX IF NOT EXISTS SuccessfulWithdrawal_memberId_createTime_idx ON SuccessfulWithdrawal(memberId, createTime)`,
+        `CREATE INDEX IF NOT EXISTS SuccessfulWithdrawal_memberName_createTime_idx ON SuccessfulWithdrawal(memberName, createTime)`,
+        `CREATE INDEX IF NOT EXISTS SuccessfulWithdrawal_receivingFingerprint_createTime_idx ON SuccessfulWithdrawal(receivingFingerprint, createTime)`,
       ] as const;
       // 运行时安全检查：确保无模板插值
       for (const sql of ddl) {
@@ -280,6 +332,15 @@ export async function ensureDatabase(): Promise<void> {
     } catch (ddlErr) {
       logger.error({ err: (ddlErr as Error).message }, '[数据库] DDL 兜底也失败，请手动执行 prisma db push');
     }
+  }
+
+  // 即使 prisma CLI 不可用，也要让历史库获得通知去重所需的追加字段。
+  await ensureRiskEvalNotificationLeaseColumn();
+
+  // 迁移/兜底完成后再校验，避免新增字段时启动前误报
+  const schemaIssues = await verifySchemaConsistency();
+  if (schemaIssues.length > 0) {
+    throw new Error(`数据库结构不完整，拒绝启动：${schemaIssues.join('；')}`);
   }
 }
 

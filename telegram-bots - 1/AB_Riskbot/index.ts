@@ -1,17 +1,18 @@
 import { createServer } from './server';
 import path from 'path';
+import crypto from 'crypto';
 import dotenv from 'dotenv';
 import { LRUCache } from 'lru-cache';
 import { apiClient } from './api-client';
-import { evaluateOrder, cleanupStaleCaches, updateMemberProfile, updateAgentProfile, getCacheStats } from './evaluator';
-import { extractProxyCode, formatBeijingTime, getTzOffsetMs, getTzOffsetMinutes } from './utils';
-import { startTelegramBot, sendRiskAlert, getBot, autoReviewExpiredOrders } from './telegram';
+import { evaluateOrder, recordEvaluationProfile, getCacheStats, recordSuccessfulWithdrawal } from './evaluator';
+import { extractProxyCode, formatBeijingTime, getTzOffsetMs, getTzOffsetMinutes, parseTimeStr } from './utils';
+import { startTelegramBot, sendRiskAlert, autoReviewExpiredOrders } from './telegram';
 import { dbHolder, ensureDatabase } from './db';
 import { getActiveRuleIds, applyRuleStates } from './rule-engine';
 import type { EvaluationResult } from './rule-types';
 import { logger } from './logger';
 import type { WithdrawOrder } from './types';
-import { reloadConstantsFromDB } from './constants';
+import { reloadConstantsFromDB, reloadConstantsFromEnv } from './constants';
 import type { TriggeredRule } from './types';
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -39,6 +40,7 @@ function buildDetailJson(order: WithdrawOrder, result?: EvaluationResult | null,
     daysSinceReg: result?.daysSinceReg,
     isEarlyMorning: result?.isEarlyMorning || false,
     topGameTypes: result?.topGameTypes || '',
+    remark: result?.remark || String(order.memberRemark || ''),
     groupScores: result?.groupScores || {},
   };
   if (result?.triggeredRules) {
@@ -54,6 +56,48 @@ function buildDetailJson(order: WithdrawOrder, result?: EvaluationResult | null,
   }
   if (extra) Object.assign(detail, extra);
   return JSON.stringify(detail);
+}
+
+const EVAL_FAILED_RULE_ID = 'EVAL_FAILED';
+const SYNTHETIC_RULE_IDS = new Set([EVAL_FAILED_RULE_ID]);
+
+function buildFallbackResult(order: WithdrawOrder, orderNo?: string, reason = '风控数据查询失败，需人工复核'): EvaluationResult {
+  const no = orderNo || String(order.orderNo || order.id || '');
+  return {
+    orderId: no,
+    memberId: String(order.memberId || order.member_id || ''),
+    memberName: order.memberName || order.member_name || '',
+    totalScore: 30,
+    riskLevel: 'HIGH',
+    triggeredRules: [{
+      id: EVAL_FAILED_RULE_ID,
+      name: '风控评估失败',
+      severity: 'HIGH',
+      group: 'environment',
+      reason,
+      score: 30,
+    }],
+    groupScores: { environment: 30 },
+    depositCount: 0,
+    withdrawCount: 0,
+    registerTime: '',
+    daysSinceReg: undefined,
+    rechargeWithdrawDiff: 0,
+    totalRecharge: 0,
+    totalWithdraw: 0,
+    proxyCode: extractProxyCode(order),
+    orderAmount: String(order.amount ?? ''),
+    balance: String(order.balance ?? ''),
+    remark: String(order.memberRemark || ''),
+    isEarlyMorning: false,
+  };
+}
+
+function getReplayableRules(
+  rawRules: { id: string; name: string; reason: string; score: number; severity?: string; group?: string }[],
+  activeRuleIds: Set<string>,
+): { id: string; name: string; reason: string; score: number; severity?: string; group?: string }[] {
+  return rawRules.filter((r) => activeRuleIds.has(r.id) || SYNTHETIC_RULE_IDS.has(r.id));
 }
 
 /** upsert 写入评估结果。notifyMsgId / notifiedAt 在通知发送后才写入，此处无需保留。 */
@@ -87,6 +131,26 @@ async function upsertRiskEval(
       notified: false,
     },
   });
+}
+
+/** 防止部署时误换 HMAC 密钥，使旧收款指纹产生错误关联或错误变更提示。 */
+async function ensureFingerprintSecretConsistency(): Promise<void> {
+  const secret = (process.env.RISK_FINGERPRINT_SECRET || '').trim();
+  const keyId = crypto.createHash('sha256').update(`AB_Riskbot:fingerprint-key:${secret}`).digest('hex');
+  const configKey = 'RISK_FINGERPRINT_KEY_ID';
+  const existing = await dbHolder.db.botConfig.findUnique({ where: { key: configKey } });
+
+  if (existing?.value && existing.value !== keyId) {
+    throw new Error('RISK_FINGERPRINT_SECRET 已变更。请恢复原密钥；更换密钥会破坏既有收款指纹比较。');
+  }
+  if (existing?.value === keyId) return;
+
+  await dbHolder.db.botConfig.upsert({
+    where: { key: configKey },
+    update: { value: keyId },
+    create: { key: configKey, value: keyId },
+  });
+  logger.info('[配置] 收款指纹密钥标识已初始化；后续不得修改 RISK_FINGERPRINT_SECRET');
 }
 
 let POLL_INTERVAL = 60 * 1000;
@@ -163,7 +227,6 @@ async function handleNotification(order: WithdrawOrder, result: EvaluationResult
     }
   }
 
-  let dbOk = false;       // DB 读取成功（可信任 existing 字段）
   let dbReadFailed = false; // DB 读取失败（需走乐观路径）
 
   const doNotify = async (): Promise<NotifyResult> => {
@@ -173,14 +236,12 @@ async function handleNotification(order: WithdrawOrder, result: EvaluationResult
     }
 
     if (precheckedNotified === false) {
-      dbOk = true;
     } else {
       try {
         const existing = await dbHolder.db.riskEval.findUnique({
           where: { orderId: orderNo },
           select: { notified: true },
         });
-        dbOk = true;
         if (existing?.notified) {
           markRecentlyNotified(orderNo);
           return 'skipped';
@@ -198,31 +259,25 @@ async function handleNotification(order: WithdrawOrder, result: EvaluationResult
 
     markRecentlyNotified(orderNo);
 
-    // 通知发送成功后，CAS 标记（防止并发重复通知）
+    // 通知发送成功后，以一次 CAS 同时保存通知状态、时间和消息 ID。
+    // 不能先单独标记 notified，否则第二次写入失败会导致自动审核永远没有 notifiedAt。
     try {
       const r = await dbHolder.db.riskEval.updateMany({
         where: { orderId: orderNo, notified: false },
-        data: { notified: true },
+        data: {
+          notified: true,
+          notifiedAt: new Date(),
+          ...(messageId ? { notifyMsgId: messageId } : {}),
+        },
       });
       if (r.count === 0) {
-        logger.info({ orderNo }, '[通知] CAS显示已被其他进程通知，跳过标记');
+        logger.warn(
+          { orderNo, dbReadFailed },
+          '[通知] 消息已发送但 CAS 未写入记录；该告警可能无法自动审核，请检查数据库状态',
+        );
       }
     } catch (err) {
-      logger.warn({ orderNo, err: (err as Error).message }, '[通知] CAS标记notified失败，但通知已发送');
-    }
-
-    if (messageId) {
-      try {
-        const ev = await dbHolder.db.riskEval.findUnique({ where: { orderId: orderNo }, select: { detail: true } });
-        if (ev) {
-          const d = JSON.parse(ev.detail || '{}');
-          d.notifyMsgId = messageId;
-          d.notifiedAt = Date.now();
-          await dbHolder.db.riskEval.update({ where: { orderId: orderNo }, data: { detail: JSON.stringify(d) } });
-        } else if (!dbReadFailed) {
-          logger.warn({ orderNo }, '[通知] 通知已发送但DB记录不存在，无法保存 notifiedAt，该订单将无法自动审核');
-        }
-      } catch (err) { logger.warn({ orderNo, err: (err as Error).message }, '[通知] 保存 notifyMsgId 失败'); }
+      logger.warn({ orderNo, err: (err as Error).message }, '[通知] 通知状态 CAS 写入失败，但消息已发送');
     }
 
     return 'sent';
@@ -237,27 +292,32 @@ async function handleNotification(order: WithdrawOrder, result: EvaluationResult
   }
 }
 
-let isTrackingStatus = false;
+let isRetryingUnsentNotifications = false;
 
-async function trackOrderStatus(): Promise<void> {
-  if (isTrackingStatus) return;
-  isTrackingStatus = true;
+async function retryUnsentNotifications(): Promise<void> {
+  if (isRetryingUnsentNotifications) return;
+  isRetryingUnsentNotifications = true;
   try {
     const BATCH_SIZE = 50;
     const MAX_PER_RUN = 500;
     let totalProcessed = 0;
-    let lastCreatedAt: Date | undefined;
+    // createdAt 只有秒级精度时，多笔订单可能完全相同；连同主键作为游标，
+    // 避免某一笔持续发送失败而卡住同一秒内其后的待通知订单。
+    let lastCursor: { createdAt: Date; id: string } | undefined;
 
     // 顺序处理最旧的未通知订单（asc），基于游标分页避免 offset 偏移
     while (true) {
       const whereClause: any = { notified: false, finalStatus: '' };
-      if (lastCreatedAt) {
-        whereClause.createdAt = { gt: lastCreatedAt };
+      if (lastCursor) {
+        whereClause.OR = [
+          { createdAt: { gt: lastCursor.createdAt } },
+          { createdAt: lastCursor.createdAt, id: { gt: lastCursor.id } },
+        ];
       }
       const unnotifiedEvals = await dbHolder.db.riskEval.findMany({
         where: whereClause,
         take: BATCH_SIZE,
-        orderBy: { createdAt: 'asc' },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
       });
 
       if (unnotifiedEvals.length === 0) break;
@@ -271,7 +331,7 @@ async function trackOrderStatus(): Promise<void> {
           try { detail = JSON.parse(evalRecord.detail || '{}'); } catch {}
           let rawRules: { id: string; name: string; reason: string; score: number; severity?: string; group?: string }[] = [];
           try { rawRules = JSON.parse(evalRecord.triggeredRules || '[]'); } catch { rawRules = []; }
-          const validRules = rawRules.filter((r) => activeRuleIds.has(r.id));
+          const validRules = getReplayableRules(rawRules, activeRuleIds);
           return handleNotification(
             {
               orderNo: evalRecord.orderId,
@@ -280,6 +340,7 @@ async function trackOrderStatus(): Promise<void> {
               member_name: evalRecord.memberName,
               memberId: evalRecord.memberId,
               member_id: evalRecord.memberId,
+              memberRemark: (detail.remark as string) || '',
               amount: (detail.orderAmount as string | number) || 0,
               proxyCode: (detail.proxyCode as string) || '',
               receivingBank: (detail.receivingBank as string) || '',
@@ -305,6 +366,7 @@ async function trackOrderStatus(): Promise<void> {
               groupScores: {},
               daysSinceReg: (detail.daysSinceReg as number) ?? 0,
               isEarlyMorning: (detail.isEarlyMorning as boolean) || false,
+              remark: (detail.remark as string) || '',
             } as EvaluationResult,
             false
           );
@@ -333,25 +395,32 @@ async function trackOrderStatus(): Promise<void> {
 
       totalProcessed += unnotifiedEvals.length;
       if (totalProcessed >= MAX_PER_RUN) break;
-      // 更新游标为当前批次最后一条记录的 createdAt
+      // 使用 createdAt + id 复合游标，避免相同时间戳的记录被跳过或饿死。
       const lastEval = unnotifiedEvals[unnotifiedEvals.length - 1];
-      if (lastEval?.createdAt) lastCreatedAt = lastEval.createdAt;
+      if (lastEval?.createdAt) lastCursor = { createdAt: lastEval.createdAt, id: lastEval.id };
       // 批次间释放事件循环，避免长时间阻塞其他异步任务
       await new Promise(resolve => setImmediate(resolve));
     }
   } catch (err) {
     logger.error({ err: (err as Error).message }, '[追踪] 补发通知检查失败');
   } finally {
-    isTrackingStatus = false;
+    isRetryingUnsentNotifications = false;
   }
 }
 
 let isPolling = false;
 let lastPollTime = 0;
 let consecutiveFailures = 0;
-let idleHeartbeatCounter = 0;
-const IDLE_HEARTBEAT_INTERVAL = 6; // 每6次空闲周期输出一次心跳日志
+let lastIdleHeartbeatAt = 0;
+const IDLE_HEARTBEAT_INTERVAL_MS = 5 * 60 * 1000;
 const MAX_CONSECUTIVE_FAILURES = 5;
+
+function logIdleHeartbeat(message: string): void {
+  const now = Date.now();
+  if (now - lastIdleHeartbeatAt < IDLE_HEARTBEAT_INTERVAL_MS) return;
+  lastIdleHeartbeatAt = now;
+  logger.info(`[轮询] 心跳 ${formatBeijingTime(undefined, 'time')} — ${message}`);
+}
 
 async function notifyRiskOrders(items: Array<{ order: WithdrawOrder; result: EvaluationResult }>): Promise<void> {
   if (items.length === 0) return;
@@ -414,11 +483,11 @@ async function recoverPendingOrders(): Promise<void> {
       end: localNow.getTime() - offset,
     };
 
-    const completedOrders = await apiClient.getAllWithdrawOrdersByStatuses([1, 2], dateRange);
-    if (!completedOrders || completedOrders.length === 0) return;
+    const pendingOrders = await apiClient.getAllWithdrawOrdersByStatuses([1, 2], dateRange);
+    if (!pendingOrders || pendingOrders.length === 0) return;
 
     const unevaluated: string[] = [];
-    for (const o of completedOrders) {
+    for (const o of pendingOrders) {
       const no = String(o.orderNo || o.id);
       if (evaluatedOrderCache.has(no)) continue;
       unevaluated.push(no);
@@ -464,7 +533,6 @@ async function recoverPendingOrders(): Promise<void> {
         if (result) {
           const memberName = order.memberName || order.member_name || '';
           const memberId = String(order.memberId || order.member_id || '');
-          const proxyCode = extractProxyCode(order) || result.proxyCode || '';
 
           await upsertRiskEval(result.orderId || orderNo, {
             totalScore: result.totalScore,
@@ -474,6 +542,7 @@ async function recoverPendingOrders(): Promise<void> {
             memberId: result.memberId || memberId,
             memberName,
           });
+          await recordEvaluationProfile(order, result);
 
           const notifyResult = await handleNotification(order, result);
           if (notifyResult === 'failed') {
@@ -485,16 +554,21 @@ async function recoverPendingOrders(): Promise<void> {
           const retries = incrementEvalRetry(orderNo, 'recovery');
           if (retries >= MAX_EVAL_RETRY) {
             try {
+              const fallback = buildFallbackResult(order, orderNo);
               await upsertRiskEval(orderNo, {
-                totalScore: 0,
-                riskLevel: 'LOW',
-                triggeredRules: '[]',
-                detail: buildDetailJson(order, null, { evalFailed: true, retries, source: 'recovery' }),
-                memberId: String(order.memberId || order.member_id || ''),
-                memberName: order.memberName || order.member_name || '',
+                totalScore: fallback.totalScore,
+                riskLevel: fallback.riskLevel,
+                triggeredRules: JSON.stringify(fallback.triggeredRules),
+                detail: buildDetailJson(order, fallback, { evalFailed: true, retries, source: 'recovery' }),
+                memberId: fallback.memberId,
+                memberName: fallback.memberName,
               });
+              const notifyResult = await handleNotification(order, fallback);
+              if (notifyResult === 'failed') {
+                logger.warn({ orderNo }, '[补查] 评估失败复核通知发送失败');
+              }
               markEvaluated(orderNo);
-              logger.warn({ orderNo, retries }, '[补查] 遗漏订单重试耗尽，写入兜底记录（不通知：评估失败无法确定风险等级）');
+              logger.warn({ orderNo, retries }, '[补查] 遗漏订单重试耗尽，写入评估失败复核记录');
             } catch (e) {
               logger.error({ orderNo, err: (e as Error).message }, '[补查] 兜底记录写入失败');
             }
@@ -521,6 +595,7 @@ async function recoverPendingOrders(): Promise<void> {
               detail: buildDetailJson(order, result, { source: 'recovery-retry' }),
             },
           });
+          await recordEvaluationProfile(order, result);
           const notifyResult = await handleNotification(order, result);
           if (notifyResult === 'failed') {
             logger.warn({ orderNo }, '[补查] 通知发送失败');
@@ -531,19 +606,24 @@ async function recoverPendingOrders(): Promise<void> {
           const retries = incrementEvalRetry(orderNo, 'recovery-retry');
           if (retries >= MAX_EVAL_RETRY) {
             try {
+              const fallback = buildFallbackResult(order, orderNo);
               await dbHolder.db.riskEval.update({
                 where: { orderId: orderNo },
                 data: {
-                  totalScore: 0,
-                  riskLevel: 'LOW',
-                  triggeredRules: '[]',
-                  detail: buildDetailJson(order, null, { evalFailed: true, retries, source: 'recovery-retry' }),
+                  totalScore: fallback.totalScore,
+                  riskLevel: fallback.riskLevel,
+                  triggeredRules: JSON.stringify(fallback.triggeredRules),
+                  detail: buildDetailJson(order, fallback, { evalFailed: true, retries, source: 'recovery-retry' }),
                 },
               });
+              const notifyResult = await handleNotification(order, fallback);
+              if (notifyResult === 'failed') {
+                logger.warn({ orderNo }, '[补查] 评估失败复核通知发送失败');
+              }
               markEvaluated(orderNo);
-              logger.warn({ orderNo, retries }, '[补查] 重试订单重试耗尽，写入兜底记录（不通知：评估失败无法确定风险等级）');
+              logger.warn({ orderNo, retries }, '[补查] 重试订单重试耗尽，写入评估失败复核记录');
             } catch (e) {
-              logger.error({ orderNo, err: (e as Error).message }, '[补查] 重试兜底记录写入失败');
+              logger.error({ orderNo, err: (e as Error).message }, '[补查] 评估失败复核记录写入失败');
             }
           } else {
             logger.debug({ orderNo, retries }, '[补查] 重新评估失败订单仍失败，保留重试机会');
@@ -556,8 +636,8 @@ async function recoverPendingOrders(): Promise<void> {
 
     if (missedSet.size > 0) {
       const missedArr = [...missedSet];
-      logger.warn({ count: missedArr.length, sample: missedArr.slice(0, 5) }, `[补查] 发现 ${missedArr.length} 笔已完成但未评估的订单`);
-      const missedOrders = completedOrders.filter(o => missedSet.has(String(o.orderNo || o.id)));
+      logger.warn({ count: missedArr.length, sample: missedArr.slice(0, 5) }, `[补查] 发现 ${missedArr.length} 笔待处理但未评估的订单`);
+      const missedOrders = pendingOrders.filter(o => missedSet.has(String(o.orderNo || o.id)));
       // P1: 滑动窗口替代固定批次
       let missedIdx = 0;
       const missedWorkers = Array.from({ length: Math.min(RECOVERY_CONCURRENCY, missedOrders.length) }, async () => {
@@ -570,7 +650,7 @@ async function recoverPendingOrders(): Promise<void> {
 
     if (retryCandidateSet.size > 0) {
       logger.info({ count: retryCandidateSet.size }, `[补查] 重新评估 ${retryCandidateSet.size} 笔之前失败的订单`);
-      const retryOrders = completedOrders.filter(o => retryCandidateSet.has(String(o.orderNo || o.id)));
+      const retryOrders = pendingOrders.filter(o => retryCandidateSet.has(String(o.orderNo || o.id)));
       // P1: 滑动窗口替代固定批次
       let retryIdx = 0;
       const retryWorkers = Array.from({ length: Math.min(RECOVERY_CONCURRENCY, retryOrders.length) }, async () => {
@@ -583,7 +663,82 @@ async function recoverPendingOrders(): Promise<void> {
   } catch (err) {
     // 补查失败时重置节流时间，允许更快重试
     lastRecoveryTime = 0;
-    logger.debug({ err: (err as Error).message }, '[补查] 已完成订单补查失败');
+    logger.debug({ err: (err as Error).message }, '[补查] 待处理订单补查失败');
+  }
+}
+
+interface TrackedOpenOrder {
+  order: WithdrawOrder;
+  firstSeenAt: number;
+}
+
+// 平台 A：0处理中、1未受理、2已受理、3已出款、4已取消、5已拒绝。
+// 仅运行期见过的 1/2 状态订单会被跟踪，重启不会扫描历史已完成订单。
+const trackedOpenOrders = new Map<string, TrackedOpenOrder>();
+const FINAL_STATUS_LABELS: Record<number, string> = {
+  3: 'success',
+  4: 'cancelled',
+  5: 'rejected',
+};
+let lastFinalStatusCheck = 0;
+
+function trackOpenOrder(order: WithdrawOrder): void {
+  if (order.status !== 1 && order.status !== 2) return;
+  const orderNo = String(order.orderNo || order.id || '');
+  if (!orderNo) return;
+  const existing = trackedOpenOrders.get(orderNo);
+  trackedOpenOrders.set(orderNo, {
+    order: { ...(existing?.order || {}), ...order },
+    firstSeenAt: existing?.firstSeenAt || Date.now(),
+  });
+}
+
+async function finalizeTrackedOrder(order: WithdrawOrder): Promise<void> {
+  const orderNo = String(order.orderNo || order.id || '');
+  const finalStatus = FINAL_STATUS_LABELS[Number(order.status)];
+  if (!orderNo || !finalStatus) return;
+
+  await dbHolder.db.riskEval.updateMany({
+    where: { orderId: orderNo, finalStatus: '' },
+    data: { finalStatus },
+  });
+  if (Number(order.status) === 3) {
+    const recorded = await recordSuccessfulWithdrawal(order);
+    if (!recorded) {
+      logger.warn({ orderNo }, '[状态] 成功提款历史写入失败，保留订单跟踪并在下轮重试');
+      return;
+    }
+  }
+  trackedOpenOrders.delete(orderNo);
+}
+
+async function reconcileTrackedOrderStatuses(pendingOrders: WithdrawOrder[]): Promise<void> {
+  const pendingById = new Map(pendingOrders.map(order => [String(order.orderNo || order.id || ''), order]));
+  for (const [orderNo, tracked] of trackedOpenOrders) {
+    const pending = pendingById.get(orderNo);
+    if (pending) trackedOpenOrders.set(orderNo, { ...tracked, order: { ...tracked.order, ...pending } });
+  }
+
+  const missing = [...trackedOpenOrders.entries()].filter(([orderNo]) => !pendingById.has(orderNo));
+  if (missing.length === 0 || Date.now() - lastFinalStatusCheck < 60_000) return;
+  lastFinalStatusCheck = Date.now();
+
+  const now = Date.now();
+  const oldestOrderTime = Math.min(...missing.map(([, tracked]) => parseTimeStr(tracked.order.createTime) || tracked.firstSeenAt));
+  const start = Math.max(now - 24 * 60 * 60 * 1000, oldestOrderTime - 5 * 60 * 1000);
+  const finalOrders = await apiClient.getAllWithdrawOrdersByStatuses([3, 4, 5], { start, end: now });
+  const finalById = new Map(finalOrders.map(order => [String(order.orderNo || order.id || ''), order]));
+
+  for (const [orderNo, tracked] of missing) {
+    const finalOrder = finalById.get(orderNo);
+    if (finalOrder) {
+      await finalizeTrackedOrder({ ...tracked.order, ...finalOrder });
+      continue;
+    }
+    if (now - tracked.firstSeenAt > 24 * 60 * 60 * 1000) {
+      trackedOpenOrders.delete(orderNo);
+      logger.warn({ orderNo }, '[状态] 运行期订单超过24小时仍未取得最终状态，停止跟踪');
+    }
   }
 }
 
@@ -593,16 +748,18 @@ async function pollOrders() {
 
   try {
     const orders: WithdrawOrder[] = await apiClient.getPendingWithdrawOrders();
+    // 仅在成功取得待处理订单后更新健康时间；失败轮询不能伪装成成功。
+    lastPollTime = Date.now();
+    await reconcileTrackedOrderStatuses(orders).catch((err) => {
+      logger.warn({ err: (err as Error).message }, '[状态] 运行期订单最终状态查询失败，将稍后重试');
+    });
+    for (const order of orders) trackOpenOrder(order);
 
     if (!orders || orders.length === 0) {
-      idleHeartbeatCounter++;
-      if (idleHeartbeatCounter % IDLE_HEARTBEAT_INTERVAL === 0) {
-        logger.info(`[轮询] 心跳 ${formatBeijingTime(undefined, 'time')} — 无待审核/处理中订单（近${IDLE_HEARTBEAT_INTERVAL}轮空闲）`);
-      }
+      logIdleHeartbeat('无待审核/处理中订单');
       consecutiveFailures = 0;
       return;
     }
-    idleHeartbeatCounter = 0;
 
     const statusLabel = (s: number) => s === 1 ? '待审核' : s === 2 ? '处理中' : `status=${s}`;
     const statusCount: Record<number, number> = {};
@@ -611,7 +768,7 @@ async function pollOrders() {
       statusCount[s] = (statusCount[s] || 0) + 1;
     }
     const statusSummary = Object.entries(statusCount).map(([s, c]) => `${statusLabel(Number(s))}${c}个`).join('，');
-    logger.info({ count: orders.length, summary: statusSummary }, `[轮询] 获取到 ${orders.length} 个订单（${statusSummary}）`);
+    logger.debug({ count: orders.length, summary: statusSummary }, `[轮询] 获取到 ${orders.length} 个订单（${statusSummary}）`);
 
     const orderNos = orders.map(o => String(o.orderNo || o.id));
     const memHitSet = new Set<string>();
@@ -628,16 +785,13 @@ async function pollOrders() {
     const newOrders = orders.filter(o => !memHitSet.has(String(o.orderNo || o.id)));
 
     if (newOrders.length === 0) {
-      idleHeartbeatCounter++;
-      if (idleHeartbeatCounter % IDLE_HEARTBEAT_INTERVAL === 0) {
-        logger.info(`[轮询] 心跳 ${formatBeijingTime(undefined, 'time')} — ${orders.length}个订单已全部评估（近${IDLE_HEARTBEAT_INTERVAL}轮无新单）`);
-      }
+      logIdleHeartbeat(`${orders.length}个订单已全部评估`);
       consecutiveFailures = 0;
       return;
     }
-    idleHeartbeatCounter = 0;
 
-    logger.info({ newCount: newOrders.length, total: orders.length }, `[轮询] 其中 ${newOrders.length} 个为新订单，开始并发评估`);
+    lastIdleHeartbeatAt = 0;
+    logger.info({ newCount: newOrders.length, total: orders.length, summary: statusSummary }, `[轮询] 其中 ${newOrders.length} 个为新订单，开始并发评估`);
 
     // M1 修复：批量预加载 ruleFeedback（按订单级别），减少 N+1 查询
     try {
@@ -665,7 +819,9 @@ async function pollOrders() {
       logger.warn({ err: (err as Error).message }, '[轮询] 批量预加载 ruleFeedback 失败，降级为逐条查询');
     }
 
-    const CONCURRENCY = newOrders.length > 30 ? 8 : newOrders.length > 15 ? 5 : newOrders.length > 5 ? 4 : 3;
+    // 单笔评估会并行请求多个上游接口；限制外层并发，避免把 auth-service 队列堆满并触发 30 秒超时。
+    const configuredConcurrency = Math.min(Math.max(parseInt(process.env.EVALUATION_CONCURRENCY || '3', 10) || 3, 1), 6);
+    const CONCURRENCY = Math.min(configuredConcurrency, newOrders.length);
 
     const evalResults = new Map<string, EvaluationResult>();
 
@@ -679,15 +835,22 @@ async function pollOrders() {
           const retries = incrementEvalRetry(orderId, 'polling');
           if (retries >= MAX_EVAL_RETRY) {
             try {
+              const fallback = buildFallbackResult(order, orderId);
               const memberName = order.memberName || order.member_name || '';
               await upsertRiskEval(orderId, {
-                totalScore: 0, riskLevel: 'LOW', triggeredRules: '[]',
-                detail: buildDetailJson(order, null, { evalFailed: true, retries }),
-                memberId: String(order.memberId || order.member_id || ''),
-                memberName,
+                totalScore: fallback.totalScore,
+                riskLevel: fallback.riskLevel,
+                triggeredRules: JSON.stringify(fallback.triggeredRules),
+                detail: buildDetailJson(order, fallback, { evalFailed: true, retries, source: 'polling' }),
+                memberId: fallback.memberId,
+                memberName: fallback.memberName || memberName,
               });
+              const notifyResult = await handleNotification(order, fallback);
+              if (notifyResult === 'failed') {
+                logger.warn({ orderId }, '[评估] 评估失败复核通知发送失败');
+              }
               markEvaluated(orderId);
-              logger.warn({ orderNo: order.orderNo || order.id, retries }, '[评估] 重试耗尽，写入兜底记录（不通知：评估失败无法确定风险等级）');
+              logger.warn({ orderNo: order.orderNo || order.id, retries }, '[评估] 重试耗尽，写入评估失败复核记录');
             } catch (err) {
               logger.error({ orderNo: order.orderNo || order.id, err: (err as Error).message }, '[评估] 兜底记录写入失败');
             }
@@ -699,12 +862,7 @@ async function pollOrders() {
 
         const memberName = order.memberName || order.member_name || '';
 
-        evalResults.set(String(order.orderNo || order.id), result);
-
         try {
-          const memberId = String(order.memberId || order.member_id || '');
-          const proxyCode = extractProxyCode(order) || result.proxyCode || '';
-
           await upsertRiskEval(result.orderId || String(order.orderNo || order.id), {
             totalScore: result.totalScore,
             riskLevel: result.riskLevel,
@@ -714,20 +872,14 @@ async function pollOrders() {
             memberName,
           });
 
-          // DB 持久化成功后才标记为已评估
-          if (result.triggeredRules.length > 0) {
-            markEvaluated(String(order.orderNo || order.id));
-          } else {
-            // 零违规订单写入主缓存(2h TTL)，与有违规订单一致
-            markEvaluated(String(order.orderNo || order.id));
-          }
+          await recordEvaluationProfile(order, result);
 
-          await Promise.all([
-            updateMemberProfile(memberName, memberId, result, order),
-            proxyCode ? updateAgentProfile(proxyCode, memberName, result, order).catch((err) => {
-              logger.warn({ proxyCode, err: (err as Error).message }, '[评估] 更新代理画像失败');
-            }) : Promise.resolve(),
-          ]);
+          // 风险结果和画像贡献均已持久化后才标记，失败时下轮可以安全重试。
+          markEvaluated(String(order.orderNo || order.id));
+
+          // 仅让已持久化的评估进入通知队列，避免数据库故障时发出
+          // 无法自动审核、也无法可靠去重的孤立 Telegram 告警。
+          evalResults.set(String(order.orderNo || order.id), result);
 
           logger.info({ orderNo: order.orderNo || order.id, level: result.riskLevel, score: result.totalScore, rules: result.triggeredRules.length }, `[评估] 订单 ${order.orderNo || order.id}: ${result.riskLevel} (${result.totalScore}分, ${result.triggeredRules.length}条规则)`);
         } catch (err) {
@@ -760,29 +912,20 @@ async function pollOrders() {
       await notifyRiskOrders(notifyOrders);
     }
 
-    cleanupStaleCaches();
 
     recoverPendingOrders().catch(err => logger.error({ err: (err as Error).message }, '[补查] 异步补查异常'));
 
     consecutiveFailures = 0;
   } catch (err) {
     const errMsg = (err as Error).message || '';
-    const isApiError = errMsg.includes('Token') || errMsg.includes('401') || errMsg.includes('API') ||
-      errMsg.includes('ECONNREFUSED') || errMsg.includes('ETIMEDOUT') || errMsg.includes('ENOTFOUND') ||
-      errMsg.includes('网络') || errMsg.includes('限流') || errMsg.includes('429');
-    if (isApiError) {
-      consecutiveFailures++;
-    }
+    consecutiveFailures++;
     logger.error({ consecutiveFailures, max: MAX_CONSECUTIVE_FAILURES, err: errMsg }, `[轮询] 执行失败 (${consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES})`);
 
     if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-      logger.error('[轮询] 连续失败次数过多，清除 Token 等待重新认证');
-      // auth-service 管理 Token，失败重试即可
-      // 不重置 consecutiveFailures：token 仍无效，退避应持续到成功轮询为止
+      logger.error('[轮询] 连续失败次数过多，保持退避并等待 auth-service 恢复');
     }
   } finally {
     isPolling = false;
-    lastPollTime = Date.now();
   }
 }
 
@@ -793,16 +936,33 @@ const server = createServer({
 });
 
 async function main() {
+  process.on('unhandledRejection', (reason) => {
+    logger.fatal({ err: reason }, '[全局] 未捕获的 Promise 拒绝');
+    process.exit(1);
+  });
+  process.on('uncaughtException', (err) => {
+    logger.fatal({ err }, '[全局] 未捕获异常');
+    process.exit(1);
+  });
+
   logger.info('========================================');
   logger.info('  🤖 风控提醒机器人 v5.0');
   logger.info('========================================');
 
   const envPath = path.resolve(process.cwd(), '.env');
   dotenv.config({ path: envPath });
+  logger.level = (process.env.LOG_LEVEL || 'info').toLowerCase();
+  reloadConstantsFromEnv();
   logger.info('[Env] 已通过 dotenv 加载 .env 文件');
 
-  POLL_INTERVAL = Math.max(parseInt(process.env.POLL_INTERVAL || '15', 10) * 1000, 10000);
-  PORT = parseInt(process.env.PORT || '0', 10);
+  const configuredPollInterval = parseInt(process.env.POLL_INTERVAL || '15', 10);
+  POLL_INTERVAL = Number.isFinite(configuredPollInterval)
+    ? Math.max(configuredPollInterval * 1000, 10_000)
+    : 15_000;
+  const configuredPort = parseInt(process.env.PORT || '0', 10);
+  PORT = Number.isInteger(configuredPort) && configuredPort >= 0 && configuredPort <= 65535
+    ? configuredPort
+    : 0;
 
   const missingEnvs: string[] = [];
   // AUTH_SERVICE_URL 和 TELEGRAM_BOT_TOKEN 为必需；AUTH_API_KEY 为必需（连接 auth-service）；
@@ -810,6 +970,9 @@ async function main() {
   if (!process.env.AUTH_SERVICE_URL) missingEnvs.push('AUTH_SERVICE_URL');
   if (!process.env.AUTH_API_KEY) missingEnvs.push('AUTH_API_KEY');
   if (!process.env.TELEGRAM_BOT_TOKEN) missingEnvs.push('TELEGRAM_BOT_TOKEN');
+  if ((process.env.RISK_FINGERPRINT_SECRET || '').trim().length < 32) {
+    missingEnvs.push('RISK_FINGERPRINT_SECRET（至少32字符）');
+  }
   if (missingEnvs.length > 0) {
     logger.fatal({ missing: missingEnvs }, `[配置] 缺少关键环境变量: ${missingEnvs.join(', ')}，无法启动`);
     process.exit(1);
@@ -829,6 +992,7 @@ async function main() {
   logger.info({ baseUrl: process.env.API_BASE_URL || '(未设置)', tzOffset: tzOffsetHours, pollInterval: POLL_INTERVAL / 1000 }, '[配置] 启动参数');
 
   await ensureDatabase();
+  await ensureFingerprintSecretConsistency();
 
   // auth-service 已接管 Token 管理
   logger.info('[启动] auth-service 已接管 Token 管理');
@@ -846,9 +1010,13 @@ async function main() {
     logger.warn({ err: (err as Error).message }, '[启动] 加载规则开关配置失败');
   }
 
-  server.listen(PORT, () => {
-    logger.info({ port: PORT }, `[HTTP] 服务器运行在 http://localhost:${PORT}`);
-  });
+  if (PORT > 0) {
+    server.listen(PORT, '127.0.0.1', () => {
+      logger.info({ host: '127.0.0.1', port: PORT }, `[HTTP] 管理接口仅监听 http://127.0.0.1:${PORT}`);
+    });
+  } else {
+    logger.info('[HTTP] 内置 HTTP 服务已禁用（PORT=0）');
+  }
 
   // 启动后从数据库加载动态配置（白名单等），必须在首次 pollOrders 之前
   await reloadConstantsFromDB().catch(err => logger.warn({ err: (err as Error).message }, '[启动] 加载动态配置失败'));
@@ -878,8 +1046,8 @@ async function main() {
   }
   scheduleNextPoll();
 
-  const statusTrackTimer = setInterval(async () => {
-    await trackOrderStatus();
+  const notificationRetryTimer = setInterval(async () => {
+    await retryUnsentNotifications();
   }, 5 * 60 * 1000);
 
   const autoReviewTimer = setInterval(async () => {
@@ -894,72 +1062,6 @@ async function main() {
       pollOrders().catch(() => {});
     }
   }, 2 * 60 * 1000);
-
-  const dailyReportTimer = setInterval(async () => {
-    try {
-      const now = new Date();
-      const tzOffsetHours = getTzOffsetMinutes() / 60;
-      const localHour = Math.floor((now.getUTCHours() + tzOffsetHours + 24) % 24);
-      if (localHour < 9 || localHour >= 10) return;
-
-      const lastReport = await dbHolder.db.botConfig.findUnique({ where: { key: 'LAST_DAILY_REPORT' } });
-      const localDateStr = new Date(now.getTime() + getTzOffsetMs()).toISOString().slice(0, 10);
-      if (lastReport?.value === localDateStr) return;
-
-      const { start: todayStart } = apiClient.getTimezoneDateRange();
-      const yesterdayStart = todayStart - 86400000;
-      const yesterdayWhere = { createdAt: { gte: new Date(yesterdayStart), lt: new Date(todayStart) } };
-
-      const [total, highRisk, mediumRisk] = await Promise.all([
-        dbHolder.db.riskEval.count({ where: yesterdayWhere }),
-        dbHolder.db.riskEval.count({ where: { ...yesterdayWhere, riskLevel: { in: ['HIGH', 'CRITICAL'] } } }),
-        dbHolder.db.riskEval.count({ where: { ...yesterdayWhere, riskLevel: 'MEDIUM' } }),
-      ]);
-
-      let topRules = '无';
-      try {
-        const nonLowEvals = await dbHolder.db.riskEval.findMany({
-          where: {
-            createdAt: { gte: new Date(yesterdayStart), lt: new Date(todayStart) },
-            riskLevel: { not: 'LOW' },
-          },
-          select: { triggeredRules: true },
-        });
-        const ruleCount: Record<string, number> = {};
-        for (const row of nonLowEvals) {
-          try {
-            const rules = JSON.parse(row.triggeredRules || '[]');
-            for (const r of rules) {
-              ruleCount[r.id] = (ruleCount[r.id] || 0) + 1;
-            }
-          } catch {}
-        }
-        topRules = Object.entries(ruleCount).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([id, c]) => `${id}(${c}次)`).join('、') || '无';
-      } catch {}
-
-      const text = [
-        `📊 每日风控报告（${formatBeijingTime(yesterdayStart, 'date')}）`,
-        ``,
-        `总评估：${total} 笔`,
-        `高风险：${highRisk} 笔`,
-        `中风险：${mediumRisk} 笔`,
-        `TOP5规则：${topRules || '无'}`,
-      ].join('\n');
-
-      const chatId = await dbHolder.db.botConfig.findUnique({ where: { key: 'NOTIFY_CHAT_ID' } });
-      if (chatId?.value) {
-        try { await getBot().api.sendMessage(chatId.value, text); } catch {}
-      }
-
-      await dbHolder.db.botConfig.upsert({
-        where: { key: 'LAST_DAILY_REPORT' },
-        update: { value: localDateStr },
-        create: { key: 'LAST_DAILY_REPORT', value: localDateStr },
-      });
-    } catch (err) {
-      logger.error({ err: (err as Error).message }, '[报告] 每日风控报告生成失败');
-    }
-  }, 10 * 60 * 1000);
 
   const cleanupTimer = setInterval(async () => {
     try {
@@ -1016,8 +1118,24 @@ async function main() {
         where: { createdAt: { lt: new Date(Date.now() - 90 * 86400000) } },
       });
 
-      if (lowDeleted.count > 0 || oldDeleted.count > 0 || highDeleted.count > 0 || staleUnnotified.count > 0 || feedbackInfoDeleted.count > 0) {
-        logger.info({ lowDeleted: lowDeleted.count, oldDeleted: oldDeleted.count, highDeleted: highDeleted.count, staleUnnotified: staleUnnotified.count, feedbackDeleted: feedbackInfoDeleted.count }, `[清理] 删除 ${lowDeleted.count}条LOW(30d) ${oldDeleted.count}条MEDIUM(90d) ${highDeleted.count}条HIGH/CRITICAL(180d) ${staleUnnotified.count}条超期未通知(180d) ${feedbackInfoDeleted.count}条审核反馈(90d)`);
+      // 同收款关联只需要近期窗口；每个会员仍保留一笔最旧以外的最新成功提款供 R41 比较。
+      const confirmedHistoryCutoff = new Date(Date.now() - 365 * 86400000);
+      const successfulWithdrawalDeleted = await dbHolder.db.$executeRaw`
+        DELETE FROM "SuccessfulWithdrawal" AS old
+        WHERE old."createTime" < ${confirmedHistoryCutoff}
+          AND EXISTS (
+            SELECT 1
+            FROM "SuccessfulWithdrawal" AS newer
+            WHERE newer."memberName" = old."memberName"
+              AND newer."createTime" > old."createTime"
+          )
+      `;
+      const profileContributionDeleted = await dbHolder.db.profileContribution.deleteMany({
+        where: { createdAt: { lt: confirmedHistoryCutoff } },
+      });
+
+      if (lowDeleted.count > 0 || oldDeleted.count > 0 || highDeleted.count > 0 || staleUnnotified.count > 0 || feedbackInfoDeleted.count > 0 || successfulWithdrawalDeleted > 0 || profileContributionDeleted.count > 0) {
+        logger.info({ lowDeleted: lowDeleted.count, oldDeleted: oldDeleted.count, highDeleted: highDeleted.count, staleUnnotified: staleUnnotified.count, feedbackDeleted: feedbackInfoDeleted.count, successfulWithdrawalDeleted, profileContributionDeleted: profileContributionDeleted.count }, `[清理] 删除 ${lowDeleted.count}条LOW(30d) ${oldDeleted.count}条MEDIUM(90d) ${highDeleted.count}条HIGH/CRITICAL(180d) ${staleUnnotified.count}条超期未通知(180d) ${feedbackInfoDeleted.count}条审核反馈(90d) ${successfulWithdrawalDeleted}条过期成功提款 ${profileContributionDeleted.count}条画像幂等记录`);
       }
     } catch (err) {
       logger.error({ err: (err as Error).message }, '[清理] 数据自动清理失败');
@@ -1032,9 +1150,8 @@ async function main() {
   const shutdown = async (signal: string) => {
     logger.info({ signal }, `[关闭] 收到 ${signal}，正在优雅关闭...`);
     clearTimeout(pollTimer);
-    clearInterval(statusTrackTimer);
+    clearInterval(notificationRetryTimer);
     clearInterval(watchdogTimer);
-    clearInterval(dailyReportTimer);
     clearInterval(cleanupTimer);
     clearInterval(autoReviewTimer);
     // 排空进行中的通知，避免 Telegram 消息只发一半
@@ -1045,7 +1162,9 @@ async function main() {
       logger.info('[关闭] 所有进行中的通知已完成');
     }
 
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    if (server.listening) {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
     try { await dbHolder.db.$disconnect(); } catch {}
     logger.info('[关闭] 风控机器人已停止');
     process.exit(0);

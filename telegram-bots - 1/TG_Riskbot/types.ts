@@ -10,9 +10,20 @@ export interface ApiResponse<T = unknown> {
   totalPage?: string;
   totalNum?: string;
   total?: string | number;
+  quality?: QueryQuality;
 }
 
 export type PagedResponse<T = unknown> = ApiResponse<T>;
+
+export type QueryStatus = 'complete' | 'partial' | 'failed' | 'skipped';
+
+export interface QueryQuality {
+  source: string;
+  status: QueryStatus;
+  fetched: number;
+  total: number;
+  message?: string;
+}
 
 /* ===== 会员相关 ===== */
 
@@ -33,8 +44,6 @@ export interface MemberInfo {
   balance?: string | number;
   vipLevel?: number | string;
   remark?: string;
-  latestRechargeTime?: string | number;
-  latestRechargeOrder?: RechargeOrder[];
   agencyMemberName?: string;
   proxyCode?: string;
   proxy_code?: string;
@@ -45,17 +54,14 @@ export interface MemberInfo {
   lastLoginIp?: string;
   lastLoginDeviceClientId?: string;
   registerIp?: string;
-}
-
-export interface RechargeOrder {
-  paywayName?: string;
-  payPlatformCode?: string;
-  payPlatformName?: string;
+  profitAndLoss?: string | number;
 }
 
 /* ===== 投注记录 ===== */
 
 export interface BetRecord {
+  orderNo?: string;
+  status?: number;
   lotteryName?: string;
   issue?: string;
   playClassName?: string;
@@ -122,8 +128,30 @@ export interface ThirdGameOrder {
 /* ===== 提现记录（历史） ===== */
 
 export interface WithdrawalRecord {
+  orderNo?: string;
+  status?: number;
+  memberName?: string;
   createTime?: string | number;
   amount?: string | number;
+  receivingBank?: string;
+  receivingName?: string;
+  receivingCardNo?: string;
+}
+
+export interface AccountChangeRecord {
+  id?: string;
+  memberId?: string;
+  memberName?: string;
+  transType?: number;
+  amount?: string | number;
+  oldBalance?: string | number;
+  newBalance?: string | number;
+  operatorRemark?: string;
+  operatorName?: string;
+  createTime?: string | number;
+  transSeq?: string;
+  transDesc?: string;
+  transDetail?: string;
 }
 
 /* ===== 支付订单 ===== */
@@ -135,6 +163,8 @@ export interface PaymentOrder {
   remark?: string;
   operatorName?: string;
   payPlatformName?: string;
+  paywayName?: string;
+  payPlatformCode?: string;
 }
 
 /* ===== 登录日志 ===== */
@@ -143,6 +173,7 @@ export interface LoginLogItem {
   memberName?: string;
   loginIp?: string;
   device?: string;
+  loginTime?: string | number;
   [key: string]: unknown;
 }
 
@@ -171,9 +202,13 @@ export interface MemberCacheData {
   thirdPartyRecharge3Day: number;
   thirdPartyRecharge7Day: number;
   agentRiskScore: number | null;
-  lastWithdrawMethod: { bank: string; card: string; name: string } | null;
+  lastWithdrawMethod: { bank: string; card: string; name: string; time?: number } | null;
   mainGameType?: string;        // 近7天主投游戏类型（如"电子类游戏"）
   inOutReport?: MemberInOutReport | null;  // 近7天进出报表原始数据
+  accountChanges?: AccountChangeRecord[];
+  latestRechargeTime?: number;
+  latestRechargeAmount?: number;
+  dataQuality?: QueryQuality[];
 }
 
 /* ===== 会员详情 API 响应 ===== */
@@ -191,6 +226,7 @@ export interface UserDetailsResponse {
 export interface RechargeSumResponse {
   data?: { amount?: string | number; sumAmount?: string | number } | string | number;
   sumAmount?: string | number;
+  quality?: QueryQuality;
 }
 
 /* ===== 触发规则 ===== */
@@ -203,4 +239,5 @@ export interface TriggeredRule {
   group: string;
   score: number;
   weight?: number;
+  presentation?: 'core' | 'support';
 }

@@ -1,30 +1,29 @@
 import crypto from 'crypto';
 import { apiClient } from './api-client';
-import type { RuleContext, EvaluationResult } from './rule-types';
-import { evaluateRules } from './rule-engine';
+import type { RuleContext, EvaluationResult, LoginAssociationSummary } from './rule-types';
+import { evaluateRules, getActiveRuleIds } from './rule-engine';
 import { dbHolder } from './db';
 import { logger } from './logger';
-import { AGENT_WHITELIST } from './constants';
-import { parseTimeStr, absFloat, fmtNum, extractProxyCode, formatBeijingTime } from './utils';
+import { isAgentWhitelisted } from './constants';
+import { parseTimeStr, extractProxyCode } from './utils';
 import { type WithdrawOrder } from './ws-client';
-import type { MemberInfo, BetRecord, WithdrawalRecord, ThirdGameOrder, PaymentOrder, BetsCount, LoginLogItem, MemberCacheData, UserDetailsResponse, RechargeSumResponse, ApiResponse, PagedResponse, MemberInOutReport } from './types';
+import type { MemberInfo, LoginLogItem, MemberCacheData, UserDetailsResponse, ApiResponse, PagedResponse, QueryQuality } from './types';
 import { LRUCache } from 'lru-cache';
+import { buildRiskDataWindows, loadRiskData, type RiskDataSnapshot } from './risk-data-loader';
 
 const MAX_MEMBER_CACHE = 500;
 const MAX_RECEIVING_CACHE = 5000;
-const MAX_PAY_CHANNEL_CACHE = 5000;
 
 const CACHE_TTL = 5 * 60 * 1000;
 const BET_CACHE_TTL = 120 * 1000;
 
-const memberCache = new LRUCache<string, { data: MemberCacheData; betExpire: number; dateRangeStart?: number }>({
+const memberCache = new LRUCache<string, { data: MemberCacheData; betExpire: number; queryEnd?: number }>({
   max: MAX_MEMBER_CACHE,
   ttl: CACHE_TTL,
 });
 
 const RECEIVING_CACHE_TTL = 10 * 60 * 1000;
 const AGENT_CACHE_TTL = 30 * 60 * 1000;
-const PAY_CHANNEL_CACHE_TTL = 10 * 60 * 1000;
 
 const receivingInfoCache = new LRUCache<string, { data: Set<string> }>({
   max: MAX_RECEIVING_CACHE,
@@ -36,38 +35,283 @@ const agentWithdrawCache = new LRUCache<string, { count: number; memberIds: Set<
   ttl: AGENT_CACHE_TTL,
 });
 
-const payChannelCache = new LRUCache<string, { data: Set<string> }>({
-  max: MAX_PAY_CHANNEL_CACHE,
-  ttl: PAY_CHANNEL_CACHE_TTL,
-});
-
 const IP_DEVICE_CACHE_TTL = 60 * 60 * 1000;
+const DAILY_LOGIN_ASSOC_CACHE_TTL = 2 * 60 * 1000;
 
-export const ipMemberCache = new LRUCache<string, { members: Set<string> }>({
+interface LoginAssociationCacheEntry {
+  members: Set<string>;
+  latestLoginAtByMember?: Map<string, number>;
+  fetchedCount: number;
+  totalCount: number;
+  truncated: boolean;
+  quality?: QueryQuality;
+}
+
+export const ipMemberCache = new LRUCache<string, LoginAssociationCacheEntry>({
   max: 2000,
   ttl: IP_DEVICE_CACHE_TTL,
 });
 
-export const deviceMemberCache = new LRUCache<string, { members: Set<string> }>({
+export const deviceMemberCache = new LRUCache<string, LoginAssociationCacheEntry>({
   max: 2000,
   ttl: IP_DEVICE_CACHE_TTL,
 });
 
-// 缓存会员的登录日志，避免 /checkuser 每次都调用 API
-export const memberLoginLogsCache = new LRUCache<string, { ips: string[]; devices: string[] }>({
-  max: 500,
-  ttl: 10 * 60 * 1000,
+interface DailyLoginAssociations {
+  relatedByLoginIp: LoginLogItem[];
+  relatedByLoginDevice: LoginLogItem[];
+  relatedByLoginIpCount: number;
+  relatedByLoginDeviceCount: number;
+  dailyLoginIpAssociations: LoginAssociationSummary[];
+  dailyLoginDeviceAssociations: LoginAssociationSummary[];
+  quality?: QueryQuality;
+}
+
+const dailyLoginAssociationCache = new LRUCache<string, DailyLoginAssociations>({
+  max: 2000,
+  ttl: DAILY_LOGIN_ASSOC_CACHE_TTL,
 });
 
-function getCachedMember(memberId: string, dateRangeStart?: number): { data: MemberCacheData; betStale: boolean } | null {
+function latestLoginTimesFromLogs(logs: LoginLogItem[]): Map<string, number> {
+  const times = new Map<string, number>();
+  for (const log of logs) {
+    const name = String(log.memberName || '').trim();
+    if (!name) continue;
+    const ts = parseTimeStr(log.loginTime);
+    const prev = times.get(name) || 0;
+    if (ts > prev) times.set(name, ts);
+    if (!times.has(name)) times.set(name, 0);
+  }
+  return times;
+}
+
+function sortedNamesByLatestTime(members: Set<string>, latestLoginAtByMember?: Map<string, number>): string[] {
+  return [...members].sort((a, b) => {
+    const tb = latestLoginAtByMember?.get(b) || 0;
+    const ta = latestLoginAtByMember?.get(a) || 0;
+    return tb - ta || a.localeCompare(b);
+  });
+}
+
+function toLatestLoginRecord(latestLoginAtByMember?: Map<string, number>): Record<string, number> {
+  return Object.fromEntries([...(latestLoginAtByMember || new Map<string, number>()).entries()]);
+}
+
+function associationCacheKey(kind: 'ip' | 'device', value: string, dayStart: number): string {
+  return `today:${dayStart}:${kind}:${value}`;
+}
+
+function parsePositiveInt(value: string | undefined, fallback: number): number {
+  const n = parseInt(String(value || ''), 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+function failedQuality(source: string, message: string): QueryQuality {
+  return { source, status: 'failed', fetched: 0, total: 0, message };
+}
+
+const QUALITY_SOURCE_LABELS: Record<string, string> = {
+  memberInfo: '会员详情',
+  lotteryBets: '近7日彩票注单',
+  betsCount: '当日投注汇总',
+  withdrawals: '成功提款历史',
+  paymentOrders: '成功充值订单',
+  accountChanges: '人工加款明细',
+  manualRechargeToday: '当日人工充值汇总',
+  manualRecharge3Day: '近3日人工充值汇总',
+  manualRecharge7Day: '近7日人工充值汇总',
+  thirdGameOrders: '三方游戏注单',
+  loginAssociations: '当天同IP/同设备',
+  receivingAssociations: '历史同收款信息',
+};
+
+function skippedQuality(source: string): QueryQuality {
+  return { source, status: 'skipped', fetched: 0, total: 0 };
+}
+
+function getDailyLoginFetchOptions(signal?: AbortSignal): { maxPages: number; pageSize: number; signal?: AbortSignal } {
+  return {
+    maxPages: parsePositiveInt(process.env.DAILY_LOGIN_MAX_PAGES, 3),
+    pageSize: parsePositiveInt(process.env.DAILY_LOGIN_PAGE_SIZE, 50),
+    signal,
+  };
+}
+
+function getPagedTotalCount<T>(res: PagedResponse<T> | ApiResponse<T> | null | undefined, fallback: number): number {
+  const n = parseInt(String(res?.totalNum || ''), 10);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+
+async function getDailyLoginAssociations(
+  member: MemberInfo,
+  memberName: string,
+  orderTime: number,
+  abortSignal?: AbortSignal,
+): Promise<DailyLoginAssociations> {
+  const empty: DailyLoginAssociations = {
+    relatedByLoginIp: [],
+    relatedByLoginDevice: [],
+    relatedByLoginIpCount: 0,
+    relatedByLoginDeviceCount: 0,
+    dailyLoginIpAssociations: [],
+    dailyLoginDeviceAssociations: [],
+    quality: skippedQuality('loginAssociations'),
+  };
+  if (!memberName || isAgentWhitelisted(memberName)) return empty;
+
+  const activeRuleIds = getActiveRuleIds();
+  const needIpAssociations = activeRuleIds.has('R02D') || activeRuleIds.has('R02');
+  const needDeviceAssociations = activeRuleIds.has('R03D') || activeRuleIds.has('R03');
+  if (!needIpAssociations && !needDeviceAssociations) return empty;
+
+  const qualityParts: QueryQuality[] = [];
+
+  const todayRange = apiClient.getTimezoneDateRange(orderTime, true);
+  const memberKey = `today:${todayRange.start}:${memberName}:${needIpAssociations ? 'ip' : 'noip'}:${needDeviceAssociations ? 'dev' : 'nodev'}`;
+  const cachedDaily = dailyLoginAssociationCache.get(memberKey);
+  if (cachedDaily) return cachedDaily;
+
+  try {
+    if (abortSignal?.aborted) return empty;
+    const fetchOptions = getDailyLoginFetchOptions(abortSignal);
+    const ownLogsRes = await apiClient.getLoginLogsByMember(memberName, todayRange, fetchOptions);
+    if (ownLogsRes.quality) qualityParts.push(ownLogsRes.quality);
+    if (abortSignal?.aborted) return empty;
+
+    // 当前会员当天的登录日志都未能取得时，最后登录 IP/设备可能属于其他日期。
+    // 不再发起基于历史值的反查：既避免误关联，也避免权限/网络故障时额外阻塞评估。
+    if (ownLogsRes.quality?.status === 'failed') {
+      const result: DailyLoginAssociations = {
+        ...empty,
+        quality: failedQuality('loginAssociations', '当天同IP/同设备登录日志查询不完整'),
+      };
+      dailyLoginAssociationCache.set(memberKey, result);
+      return result;
+    }
+
+    const ownLogs = extractList<LoginLogItem>(ownLogsRes);
+    const ownIps = new Set(ownLogs.map(l => String(l.loginIp || '').trim()).filter(Boolean));
+    const ownDevices = new Set(ownLogs.map(l => String(l.device || '').trim()).filter(Boolean));
+
+    // getLoginLogsByMember 偶发为空时，用会员详情里的最后登录 IP/设备作为候选；
+    // 但只有在当天日志反查中确实包含当前会员时才计入，避免拿历史设备误判为当天关联。
+    if (member.lastLoginIp) ownIps.add(member.lastLoginIp);
+    if (member.lastLoginDeviceClientId) ownDevices.add(member.lastLoginDeviceClientId);
+
+    const ownIpValues = needIpAssociations ? [...ownIps] : [];
+    const ownDeviceValues = needDeviceAssociations ? [...ownDevices] : [];
+    const ipValues = ownIpValues.slice(0, 5);
+    const deviceValues = ownDeviceValues.slice(0, 5);
+    if (ownIpValues.length > ipValues.length || ownDeviceValues.length > deviceValues.length) {
+      qualityParts.push({
+        source: 'loginAssociations',
+        status: 'partial',
+        fetched: ipValues.length + deviceValues.length,
+        total: ownIpValues.length + ownDeviceValues.length,
+        message: '会员当天登录IP/设备数量超过关联查询上限',
+      });
+    }
+
+    const ipResults = await Promise.all(ipValues.map(async (ip): Promise<LoginAssociationSummary | null> => {
+      if (abortSignal?.aborted) return null;
+      const cacheKey = associationCacheKey('ip', ip, todayRange.start);
+      let cached = ipMemberCache.get(cacheKey);
+      let members = cached?.members;
+      let latestLoginAtByMember = cached?.latestLoginAtByMember;
+      let fetchedCount = cached?.fetchedCount ?? 0;
+      let totalCount = cached?.totalCount ?? 0;
+      let truncated = cached?.truncated ?? false;
+      if (cached?.quality) qualityParts.push(cached.quality);
+      if (!members) {
+        const logsRes = await apiClient.getLoginLogsByIp(ip, todayRange, fetchOptions);
+        if (logsRes.quality) qualityParts.push(logsRes.quality);
+        if (abortSignal?.aborted) return null;
+        const logs = extractList<LoginLogItem>(logsRes);
+        latestLoginAtByMember = latestLoginTimesFromLogs(logs);
+        members = new Set(latestLoginAtByMember.keys());
+        fetchedCount = logs.length;
+        totalCount = getPagedTotalCount(logsRes, fetchedCount);
+        truncated = totalCount > fetchedCount;
+        ipMemberCache.set(cacheKey, { members, latestLoginAtByMember, fetchedCount, totalCount, truncated, quality: logsRes.quality });
+      }
+      if (!members.has(memberName)) return null;
+      const memberNames = sortedNamesByLatestTime(members, latestLoginAtByMember)
+        .filter(n => n === memberName || !isAgentWhitelisted(n));
+      const otherMemberNames = memberNames.filter(n => n !== memberName);
+      return { value: ip, memberNames, otherMemberNames, latestLoginAtByMember: toLatestLoginRecord(latestLoginAtByMember), accountCount: memberNames.length, fetchedCount, totalCount, truncated };
+    }));
+
+    const deviceResults = await Promise.all(deviceValues.map(async (device): Promise<LoginAssociationSummary | null> => {
+      if (abortSignal?.aborted) return null;
+      const cacheKey = associationCacheKey('device', device, todayRange.start);
+      let cached = deviceMemberCache.get(cacheKey);
+      let members = cached?.members;
+      let latestLoginAtByMember = cached?.latestLoginAtByMember;
+      let fetchedCount = cached?.fetchedCount ?? 0;
+      let totalCount = cached?.totalCount ?? 0;
+      let truncated = cached?.truncated ?? false;
+      if (cached?.quality) qualityParts.push(cached.quality);
+      if (!members) {
+        const logsRes = await apiClient.getLoginLogsByDevice(device, todayRange, fetchOptions);
+        if (logsRes.quality) qualityParts.push(logsRes.quality);
+        if (abortSignal?.aborted) return null;
+        const logs = extractList<LoginLogItem>(logsRes);
+        latestLoginAtByMember = latestLoginTimesFromLogs(logs);
+        members = new Set(latestLoginAtByMember.keys());
+        fetchedCount = logs.length;
+        totalCount = getPagedTotalCount(logsRes, fetchedCount);
+        truncated = totalCount > fetchedCount;
+        deviceMemberCache.set(cacheKey, { members, latestLoginAtByMember, fetchedCount, totalCount, truncated, quality: logsRes.quality });
+      }
+      if (!members.has(memberName)) return null;
+      const memberNames = sortedNamesByLatestTime(members, latestLoginAtByMember)
+        .filter(n => n === memberName || !isAgentWhitelisted(n));
+      const otherMemberNames = memberNames.filter(n => n !== memberName);
+      return { value: device, memberNames, otherMemberNames, latestLoginAtByMember: toLatestLoginRecord(latestLoginAtByMember), accountCount: memberNames.length, fetchedCount, totalCount, truncated };
+    }));
+
+    const ipSummaries = ipResults.filter((s): s is LoginAssociationSummary => !!s);
+    const deviceSummaries = deviceResults.filter((s): s is LoginAssociationSummary => !!s);
+    const relatedByLoginIp = ipSummaries.flatMap(s => s.otherMemberNames.map(memberName => ({ memberName, loginIp: s.value })));
+    const relatedByLoginDevice = deviceSummaries.flatMap(s => s.otherMemberNames.map(memberName => ({ memberName, device: s.value })));
+
+    const worstStatus = qualityParts.some(q => q.status === 'failed')
+      ? 'failed'
+      : qualityParts.some(q => q.status === 'partial') ? 'partial' : 'complete';
+    const quality: QueryQuality = {
+      source: 'loginAssociations',
+      status: worstStatus,
+      fetched: qualityParts.reduce((sum, q) => sum + q.fetched, 0),
+      total: qualityParts.reduce((sum, q) => sum + q.total, 0),
+      ...(worstStatus === 'complete' ? {} : { message: '当天同IP/同设备登录日志查询不完整' }),
+    };
+    const result = {
+      relatedByLoginIp,
+      relatedByLoginDevice,
+      relatedByLoginIpCount: Math.max(0, ...ipSummaries.map(s => s.accountCount)),
+      relatedByLoginDeviceCount: Math.max(0, ...deviceSummaries.map(s => s.accountCount)),
+      dailyLoginIpAssociations: ipSummaries,
+      dailyLoginDeviceAssociations: deviceSummaries,
+      quality,
+    };
+    dailyLoginAssociationCache.set(memberKey, result);
+    return result;
+  } catch (err) {
+    logger.debug({ memberName, err: (err as Error).message }, '[评估器] 查询当天登录关联会员失败');
+    return { ...empty, quality: failedQuality('loginAssociations', (err as Error).message || '当天登录关联会员查询失败') };
+  }
+}
+
+function getCachedMember(memberId: string, queryEnd?: number): { data: MemberCacheData; betStale: boolean } | null {
   const entry = memberCache.get(memberId);
   if (!entry) return null;
-  const betStale = Date.now() > entry.betExpire || (dateRangeStart !== undefined && entry.dateRangeStart !== dateRangeStart);
+  // 风控快照严格绑定提款发生时间，禁止复用包含该笔提款之后数据的快照。
+  const betStale = Date.now() > entry.betExpire || (queryEnd !== undefined && entry.queryEnd !== queryEnd);
   return { data: entry.data, betStale };
 }
 
-function setCachedMember(memberId: string, data: MemberCacheData, dateRangeStart?: number): void {
-  memberCache.set(memberId, { data, betExpire: Date.now() + BET_CACHE_TTL, dateRangeStart });
+function setCachedMember(memberId: string, data: MemberCacheData, queryEnd?: number): void {
+  memberCache.set(memberId, { data, betExpire: Date.now() + BET_CACHE_TTL, queryEnd });
 }
 
 export function clearMemberCache(): void {
@@ -82,56 +326,79 @@ function extractList<T>(res: PagedResponse<T> | ApiResponse<T> | null | undefine
   return Array.isArray(list) ? list : [];
 }
 
-function extractSumAmount(res: RechargeSumResponse | null): number {
-  if (!res) return 0;
-  const d = res.data;
-  if (d && typeof d === 'object') return parseFloat(String(d.sumAmount || d.amount || '0'));
-  if (typeof d === 'string' || typeof d === 'number') return parseFloat(String(d)) || 0;
-  return parseFloat(String(res.sumAmount || '0'));
-}
-
 export function updateReceivingCache(order: WithdrawOrder): void {
   const receivingName = order?.receivingName;
   const receivingCardNo = order?.receivingCardNo;
-  const memberId = String(order?.memberId || '');
-  if (!receivingName || !receivingCardNo || !memberId) return;
+  const memberName = String(order?.memberName || order?.member_name || '').trim();
+  if (!receivingName || !receivingCardNo || !memberName || isAgentWhitelisted(memberName)) return;
 
   const key = `${receivingName}:${receivingCardNo}`;
   const entry = receivingInfoCache.get(key);
   if (entry) {
-    entry.data.add(memberId);
+    entry.data.add(memberName);
     receivingInfoCache.set(key, entry);
   } else {
-    receivingInfoCache.set(key, { data: new Set<string>([memberId]) });
+    receivingInfoCache.set(key, { data: new Set<string>([memberName]) });
   }
+}
+
+function receivingFingerprint(order: WithdrawOrder): string {
+  const name = String(order.receivingName || '').trim().replace(/\s+/g, '').toLowerCase();
+  const card = String(order.receivingCardNo || '').trim().replace(/[\s-]+/g, '').toLowerCase();
+  if (!name || !card) return '';
+  const secret = process.env.RISK_FINGERPRINT_SECRET || '';
+  if (!secret) return '';
+  return crypto.createHmac('sha256', secret).update(`${name}|${card}`).digest('hex');
+}
+
+async function getReceivingAssociations(order: WithdrawOrder): Promise<{ names: string[]; quality: QueryQuality }> {
+  const currentName = String(order.memberName || order.member_name || '').trim();
+  if (isAgentWhitelisted(currentName)) {
+    return { names: [], quality: skippedQuality('receivingAssociations') };
+  }
+  const names = new Set<string>();
+  const cacheKey = `${order.receivingName || ''}:${order.receivingCardNo || ''}`;
+  for (const name of receivingInfoCache.get(cacheKey)?.data || []) names.add(name);
+
+  const fingerprint = receivingFingerprint(order);
+  let quality: QueryQuality = fingerprint
+    ? { source: 'receivingAssociations', status: 'complete', fetched: 0, total: 0 }
+    : skippedQuality('receivingAssociations');
+  if (fingerprint) {
+    try {
+      const associationDays = Math.min(parsePositiveInt(process.env.RECEIVING_ASSOCIATION_DAYS, 180), 3650);
+      const orderTime = parseTimeStr(order.createTime) || Date.now();
+      const rows = await dbHolder.db.successfulWithdrawal.findMany({
+        where: {
+          receivingFingerprint: fingerprint,
+          createTime: { gte: new Date(orderTime - associationDays * 86400000), lte: new Date(orderTime) },
+        },
+        select: { memberName: true },
+        orderBy: { createTime: 'desc' },
+        take: 50,
+      });
+      for (const row of rows) names.add(row.memberName);
+      quality = { source: 'receivingAssociations', status: 'complete', fetched: rows.length, total: rows.length };
+    } catch (err) {
+      logger.warn({ err: (err as Error).message }, '[评估器] 查询历史同收款信息失败');
+      quality = failedQuality('receivingAssociations', '历史同收款信息查询失败');
+    }
+  }
+
+  return { names: [...names].filter(name => name && name !== currentName && !isAgentWhitelisted(name)), quality };
 }
 
 function updateAgentCache(order: WithdrawOrder): void {
   const proxyCode = extractProxyCode(order);
   const memberName = String(order?.memberName || order?.member_name || '');
   if (!proxyCode || !memberName) return;
-  if (AGENT_WHITELIST.has(proxyCode)) return;
+  if (isAgentWhitelisted(proxyCode)) return;
 
   const entry = agentWithdrawCache.get(proxyCode) || { count: 0, memberIds: new Set<string>(), lastUpdate: 0 };
   entry.memberIds.add(memberName);
   entry.count++;
   entry.lastUpdate = Date.now();
   agentWithdrawCache.set(proxyCode, entry);
-}
-
-function updatePayChannelCache(memberId: string, memberDetail: MemberInfo): void {
-  const rechargeOrders = memberDetail?.latestRechargeOrder || [];
-  for (const order of rechargeOrders) {
-    const channel = order.paywayName || order.payPlatformCode;
-    if (!channel) continue;
-    const entry = payChannelCache.get(channel);
-    if (entry) {
-      entry.data.add(memberId);
-      payChannelCache.set(channel, entry);
-    } else {
-      payChannelCache.set(channel, { data: new Set<string>([memberId]) });
-    }
-  }
 }
 
 export function getReceivingInfoCache(): LRUCache<string, { data: Set<string> }> {
@@ -142,11 +409,6 @@ export function getAgentWithdrawCache(): LRUCache<string, { count: number; membe
   return agentWithdrawCache;
 }
 
-export function cleanupStaleCaches(): void {
-  // LRU with TTL handles eviction automatically.
-  // Kept as explicit API for future manual cleanup needs.
-}
-
 /** 获取所有缓存的容量统计（用于监控和调试） */
 export function getCacheStats(): Record<string, { size: number; max: number; utilization: string }> {
   const stats: Record<string, { size: number; max: number; utilization: string }> = {};
@@ -154,9 +416,9 @@ export function getCacheStats(): Record<string, { size: number; max: number; uti
     ['memberCache', memberCache],
     ['receivingInfoCache', receivingInfoCache],
     ['agentWithdrawCache', agentWithdrawCache],
-    ['payChannelCache', payChannelCache],
     ['ipMemberCache', ipMemberCache],
     ['deviceMemberCache', deviceMemberCache],
+    ['dailyLoginAssociationCache', dailyLoginAssociationCache],
   ] as const) {
     stats[name] = {
       size: cache.size,
@@ -201,70 +463,8 @@ export async function evaluateOrder(order: WithdrawOrder): Promise<EvaluationRes
 
   const existing = evaluatingMembers.get(memberId);
   if (existing) {
-    consumePrefetchedDetail(String(order.orderNo || order.id));
-    const result = await existing;
-    if (result) {
-      // 复用数据获取结果，但使用当前订单的上下文重新评估规则
-      // 避免不同金额的订单复用相同的风险等级
-      const orderCtx = { ...order };
-      updateReceivingCache(order);
-      updateAgentCache(order);
-
-      const orderCreateTime = parseTimeStr(order.createTime || (order as Record<string, unknown>).createdAt as string | number | undefined);
-      const effectiveDateRange = apiClient.getEffectiveDateRange(orderCreateTime);
-      const { isEarlyMorning } = effectiveDateRange;
-
-      // 从缓存获取该会员的数据
-      const cached = getCachedMember(memberId, effectiveDateRange.start);
-      if (cached) {
-        const ctx: RuleContext = {
-          order: orderCtx,
-          member: cached.data.member,
-          bets: cached.data.bets,
-          withdrawals: cached.data.withdrawals,
-          relatedByLoginIp: [],
-          relatedByLoginDevice: [],
-          relatedByLoginIpCount: 0,
-          relatedByLoginDeviceCount: 0,
-          receivingInfoCache,
-          agentWithdrawCache,
-          payChannelCache,
-          thirdGameBets: cached.data.thirdGames || [],
-          paymentOrders: cached.data.paymentOrders || [],
-          betsCount: cached.data.betsCount || null,
-          manualRechargeToday: cached.data.manualRechargeToday || 0,
-          manualRecharge3Day: cached.data.manualRecharge3Day || 0,
-          manualRecharge7Day: cached.data.manualRecharge7Day || 0,
-          thirdPartyRechargeToday: cached.data.thirdPartyRechargeToday || 0,
-          thirdPartyRecharge3Day: cached.data.thirdPartyRecharge3Day || 0,
-          thirdPartyRecharge7Day: cached.data.thirdPartyRecharge7Day || 0,
-          agentRiskScore: cached.data.agentRiskScore ?? 0,
-      tzOffset: parseInt(process.env.TZ_OFFSET || '8', 10) || 8,
-      associatedMemberBets: new Map(),
-      isEarlyMorning,
-      traceId: crypto.randomUUID(),
-      lastWithdrawMethod: cached.data.lastWithdrawMethod,
-    };
-        const reevalResult = await evaluateRules(ctx);
-        reevalResult.isEarlyMorning = isEarlyMorning;
-        return {
-          ...reevalResult,
-          orderId: String(order.orderNo || order.id),
-          orderAmount: String(order.amount ?? reevalResult.orderAmount),
-          balance: String(order.balance ?? reevalResult.balance),
-        };
-      }
-      // 缓存不可用时，返回复用结果（仅覆盖订单特定字段）
-      return {
-        ...result,
-        orderId: String(order.orderNo || order.id),
-        orderAmount: String(order.amount ?? result.orderAmount),
-        balance: String(order.balance ?? result.balance),
-        triggeredRules: result.triggeredRules.map(r => ({ ...r })),
-      };
-    }
-    // 共享评估结果为 null（超时/失败），但 evaluatingMembers 中已被旧 IIFE 的 finally 清理。
-    // 此时 memberId 不在 map 中，可以安全地重新注册。
+    // 同一会员的多笔提款串行评估，复用刚写入的缓存，但每笔订单独立执行规则。
+    await existing;
   }
 
   let resolveEval!: (value: EvaluationResult | null) => void;
@@ -305,348 +505,209 @@ export async function evaluateOrder(order: WithdrawOrder): Promise<EvaluationRes
 async function evaluateOrderInner(order: WithdrawOrder, memberId: string, startTime: number, isCancelled?: () => boolean, abortSignal?: AbortSignal, traceId?: string): Promise<EvaluationResult | null> {
   const tid = traceId || crypto.randomUUID();
   try {
-    // 创建浅拷贝，避免修改原始 order 对象
     const orderCtx = { ...order };
     updateReceivingCache(order);
     updateAgentCache(order);
 
-    const orderCreateTime = parseTimeStr(order.createTime || (order as Record<string, unknown>).createdAt as string | number | undefined);
-    const effectiveDateRange = apiClient.getEffectiveDateRange(orderCreateTime);
-    const { start: effectiveStart, end: effectiveEnd, isEarlyMorning } = effectiveDateRange;
-    const betsMaxPages = isEarlyMorning ? 5 : 3;
-    const withdrawalsMaxPages = isEarlyMorning ? 3 : 2;
-
-    const cached = getCachedMember(memberId, effectiveStart);
+    const orderTime = parseTimeStr(order.createTime || (order as Record<string, unknown>).createdAt as string | number | undefined) || Date.now();
+    const orderId = String(order.orderNo || order.id || '');
     const memberName = order.memberName || order.member_name || '';
-    const queryName = memberName || order.memberName || memberId;
-    let member: MemberInfo = { memberId, memberName: queryName };
-    let betsData: BetRecord[];
-    let withdrawalsData: WithdrawalRecord[];
-    let thirdGameData: ThirdGameOrder[];
-    let paymentOrdersData: PaymentOrder[];
-    let betsCountData: BetsCount | null;
-    let manualRechargeToday: number;
-    let manualRecharge3Day: number;
-    let manualRecharge7Day: number;
-    let thirdPartyRechargeToday: number;
-    let thirdPartyRecharge3Day: number;
-    let thirdPartyRecharge7Day: number;
+    const queryName = memberName || memberId;
+    const activeRuleIds = getActiveRuleIds();
+    const cached = getCachedMember(memberId, orderTime);
+    const prefetched = consumePrefetchedDetail(orderId);
 
-    if (!memberName && memberId) {
-      logger.warn({ orderNo: order.orderNo || order.id, memberId }, '[评估器] 订单缺少 memberName，使用 memberId 作为查询参数，部分 API 可能返回空数据');
-    }
+    const detailPromise = prefetched
+      || (!cached ? apiClient.getUserDetails(queryName, abortSignal ? { signal: abortSignal } : undefined).catch(() => null) : Promise.resolve(null));
 
-    let agentRiskScore: number | null = null;
-    let lastWithdrawMethod: { bank: string; card: string; name: string } | null = null;
-    let mainGameType: string | null = null;
-
-    if (cached) {
-      member = cached.data.member;
-
-      if (!cached.betStale) {
-        betsData = cached.data.bets;
-        withdrawalsData = cached.data.withdrawals;
-        thirdGameData = cached.data.thirdGames || [];
-        paymentOrdersData = cached.data.paymentOrders || [];
-        betsCountData = cached.data.betsCount || null;
-        manualRechargeToday = cached.data.manualRechargeToday || 0;
-        manualRecharge3Day = cached.data.manualRecharge3Day || 0;
-        manualRecharge7Day = cached.data.manualRecharge7Day || 0;
-        thirdPartyRechargeToday = cached.data.thirdPartyRechargeToday || 0;
-        thirdPartyRecharge3Day = cached.data.thirdPartyRecharge3Day || 0;
-        thirdPartyRecharge7Day = cached.data.thirdPartyRecharge7Day || 0;
-        agentRiskScore = cached.data.agentRiskScore ?? null;
-        lastWithdrawMethod = cached.data.lastWithdrawMethod ?? null;
-        mainGameType = cached.data.mainGameType ?? null;
-      } else {
-        const sevenDayStart = effectiveStart - 6 * 24 * 3600 * 1000;
-        const threeDayStart = effectiveStart - 2 * 24 * 3600 * 1000;
-
-        const proxyCode = extractProxyCode(orderCtx, member);
-        const agentProfilePromise = proxyCode
-          ? dbHolder.db.agentProfile.findUnique({ where: { proxyCode } }).then(ap => ({ proxyCode, agentRiskScore: ap?.riskScore || 0 })).catch(() => ({ proxyCode, agentRiskScore: 0 }))
-          : Promise.resolve({ proxyCode: '', agentRiskScore: 0 });
-
-        const memberRefreshPromise = apiClient.getUserDetails(queryName).catch(() => null);
-
-        const [
-          betsResult, thirdGameResult, betsCountResult,
-          withdrawalsResult, paymentOrders7DayResult,
-          manual7DayRes, manual3DayRes, manualTodayRes,
-          agentProfileRes, memberRefreshRes,
-          inOutReportRes,
-        ] = await Promise.all([
-          memberName ? apiClient.getMemberBetsToday(queryName, 1, effectiveDateRange, betsMaxPages).then(res => extractList<BetRecord>(res)).catch(() => [] as BetRecord[]) : Promise.resolve([] as BetRecord[]),
-          memberName ? apiClient.getThirdGameOrders(queryName, 1, effectiveDateRange).then(res => extractList<ThirdGameOrder>(res)).catch(() => [] as ThirdGameOrder[]) : Promise.resolve([] as ThirdGameOrder[]),
-          memberName ? apiClient.getBetsCountToday(queryName, effectiveDateRange).catch(() => null) : Promise.resolve(null as ApiResponse<BetsCount> | null),
-          memberName ? apiClient.getMemberWithdrawals(queryName, 1, effectiveDateRange, withdrawalsMaxPages).then(res => extractList<WithdrawalRecord>(res)).catch(() => [] as WithdrawalRecord[]) : Promise.resolve([] as WithdrawalRecord[]),
-          memberName ? apiClient.getPaymentOrders(queryName, 1, { start: sevenDayStart, end: effectiveEnd }).then(res => extractList<PaymentOrder>(res)).catch(() => [] as PaymentOrder[]) : Promise.resolve([] as PaymentOrder[]),
-          memberName ? apiClient.getManualRechargeSum(queryName, sevenDayStart, effectiveEnd).catch(() => null) : Promise.resolve(null as RechargeSumResponse | null),
-          memberName ? apiClient.getManualRechargeSum(queryName, threeDayStart, effectiveEnd).catch(() => null) : Promise.resolve(null as RechargeSumResponse | null),
-          memberName ? apiClient.getManualRechargeSum(queryName, effectiveStart, effectiveEnd).catch(() => null) : Promise.resolve(null as RechargeSumResponse | null),
-          agentProfilePromise,
-          memberRefreshPromise,
-          memberName ? apiClient.getMemberInOutReport(queryName).catch(() => ({ report: null, mainGameType: null })) : Promise.resolve({ report: null, mainGameType: null }),
-        ]);
-        betsData = betsResult;
-        thirdGameData = thirdGameResult;
-        betsCountData = (betsCountResult as ApiResponse<BetsCount> | null)?.data || null;
-        withdrawalsData = withdrawalsResult;
-        paymentOrdersData = paymentOrders7DayResult;
-        mainGameType = inOutReportRes?.mainGameType ?? null;
-
-        if (memberRefreshRes) {
-          const arr = memberRefreshRes?.items || memberRefreshRes?.data;
-          const refreshed = Array.isArray(arr) ? arr[0] : (arr && !(arr as unknown as Record<string, unknown>).code ? arr : null);
-          if (refreshed && (refreshed.memberName || refreshed.userName)) {
-            member = refreshed;
-          }
-        }
-        manualRecharge7Day = extractSumAmount(manual7DayRes);
-        manualRecharge3Day = extractSumAmount(manual3DayRes);
-        manualRechargeToday = extractSumAmount(manualTodayRes);
-
-        let todaySum = 0, threeDaySum = 0, sevenDaySum = 0;
-        for (const o of paymentOrders7DayResult) {
-          const amt = parseFloat(String(o.amount || '0'));
-          sevenDaySum += amt;
-          const t = parseTimeStr(o.createTime || o.createdAt);
-          if (t >= threeDayStart) threeDaySum += amt;
-          if (t >= effectiveStart && t <= effectiveEnd) todaySum += amt;
-        }
-        thirdPartyRechargeToday = todaySum;
-        thirdPartyRecharge3Day = threeDaySum;
-        thirdPartyRecharge7Day = sevenDaySum;
-
-        agentRiskScore = agentProfileRes?.agentRiskScore ?? null;
-
-        if (isCancelled?.()) return null;
-        setCachedMember(memberId, { member, bets: betsData, withdrawals: withdrawalsData, thirdGames: thirdGameData, paymentOrders: paymentOrdersData, betsCount: betsCountData, manualRechargeToday, manualRecharge3Day, manualRecharge7Day, thirdPartyRechargeToday, thirdPartyRecharge3Day, thirdPartyRecharge7Day, agentRiskScore, lastWithdrawMethod, mainGameType: mainGameType ?? undefined, inOutReport: inOutReportRes?.report ?? null }, effectiveStart);
-      }
-    } else {
-      const sevenDayStart = effectiveStart - 6 * 24 * 3600 * 1000;
-      const threeDayStart = effectiveStart - 2 * 24 * 3600 * 1000;
-
-      const t0 = Date.now();
-
-      const prefetched = consumePrefetchedDetail(String(order.orderNo || order.id));
-      const userDetailsPromise = prefetched || apiClient.getUserDetails(queryName).catch(() => null);
-      const betsPromise = memberName
-        ? apiClient.getMemberBetsToday(queryName, 1, effectiveDateRange, betsMaxPages).then(res => extractList<BetRecord>(res)).catch(() => [] as BetRecord[])
-        : Promise.resolve([] as BetRecord[]);
-      const thirdGamePromise = memberName
-        ? apiClient.getThirdGameOrders(queryName, 1, effectiveDateRange).then(res => extractList<ThirdGameOrder>(res)).catch(() => [] as ThirdGameOrder[])
-        : Promise.resolve([] as ThirdGameOrder[]);
-      const betsCountPromise = memberName
-        ? apiClient.getBetsCountToday(queryName, effectiveDateRange).catch(() => null)
-        : Promise.resolve(null as BetsCount | null);
-      const withdrawalsPromise = memberName
-        ? apiClient.getMemberWithdrawals(queryName, 1, effectiveDateRange, withdrawalsMaxPages).then(res => extractList<WithdrawalRecord>(res)).catch(() => [] as WithdrawalRecord[])
-        : Promise.resolve([] as WithdrawalRecord[]);
-      const paymentOrdersPromise = memberName
-        ? apiClient.getPaymentOrders(queryName, 1, { start: sevenDayStart, end: effectiveEnd }).then(res => extractList<PaymentOrder>(res)).catch(() => [] as PaymentOrder[])
-        : Promise.resolve([] as PaymentOrder[]);
-      const manual7DayPromise = memberName
-        ? apiClient.getManualRechargeSum(queryName, sevenDayStart, effectiveEnd).catch(() => null)
-        : Promise.resolve(null as RechargeSumResponse | null);
-      const manual3DayPromise = memberName
-        ? apiClient.getManualRechargeSum(queryName, threeDayStart, effectiveEnd).catch(() => null)
-        : Promise.resolve(null as RechargeSumResponse | null);
-      const manualTodayPromise = memberName
-        ? apiClient.getManualRechargeSum(queryName, effectiveStart, effectiveEnd).catch(() => null)
-        : Promise.resolve(null as RechargeSumResponse | null);
-      const inOutReportPromise = memberName
-        ? apiClient.getMemberInOutReport(queryName).catch(() => ({ report: null, mainGameType: null }))
-        : Promise.resolve({ report: null as MemberInOutReport | null, mainGameType: null as string | null });
-
-      const earlyProxyCode = extractProxyCode(orderCtx);
-      const earlyAgentProfilePromise = earlyProxyCode
-        ? dbHolder.db.agentProfile.findUnique({ where: { proxyCode: earlyProxyCode } }).then(ap => ({ proxyCode: earlyProxyCode, agentRiskScore: ap?.riskScore || 0 })).catch(() => ({ proxyCode: earlyProxyCode, agentRiskScore: 0 }))
-        : Promise.resolve({ proxyCode: '', agentRiskScore: 0 });
-
-      const userDetailsSideEffect = userDetailsPromise.then(details => {
-        const detail = details?.data || null;
-        if (detail) member = detail;
-        if (detail) {
-          if (orderCtx.sumRecharge == null && detail.sumRecharge != null) orderCtx.sumRecharge = Math.abs(parseFloat(String(detail.sumRecharge))) || 0;
-          if (orderCtx.sumWithdraw == null && detail.sumWithdraw != null) orderCtx.sumWithdraw = Math.abs(parseFloat(String(detail.sumWithdraw))) || 0;
-          if (orderCtx.balance == null && detail.balance != null) orderCtx.balance = detail.balance;
-          if (orderCtx.sumBet == null && detail.sumRolling != null) orderCtx.sumBet = detail.sumRolling;
-        }
-        return details;
-      });
-
-      const [
-        userDetails, betsResult, thirdGameResult, betsCountResult,
-        withdrawalsResult, paymentOrders7DayResult, manual7DayRes, manual3DayRes, manualTodayRes,
-        agentProfileRes, inOutReportRes,
-      ] = await Promise.all([
-        userDetailsSideEffect, betsPromise, thirdGamePromise, betsCountPromise,
-        withdrawalsPromise, paymentOrdersPromise, manual7DayPromise, manual3DayPromise, manualTodayPromise,
-        earlyAgentProfilePromise, inOutReportPromise,
-      ]);
-
-      const t1 = Date.now();
-
-      betsData = betsResult;
-      thirdGameData = thirdGameResult;
-      betsCountData = (betsCountResult as ApiResponse<BetsCount> | null)?.data || null;
-      withdrawalsData = withdrawalsResult;
-      paymentOrdersData = paymentOrders7DayResult;
-      manualRecharge7Day = extractSumAmount(manual7DayRes);
-      manualRecharge3Day = extractSumAmount(manual3DayRes);
-      manualRechargeToday = extractSumAmount(manualTodayRes);
-      mainGameType = inOutReportRes?.mainGameType ?? null;
-
-      let todaySum = 0, threeDaySum = 0, sevenDaySum = 0;
-      for (const o of paymentOrders7DayResult) {
-        const amt = parseFloat(String(o.amount || '0'));
-        sevenDaySum += amt;
-        const t = parseTimeStr(o.createTime || o.createdAt);
-        if (t >= threeDayStart) threeDaySum += amt;
-        if (t >= effectiveStart && t <= effectiveEnd) todaySum += amt;
-      }
-      thirdPartyRechargeToday = todaySum;
-      thirdPartyRecharge3Day = threeDaySum;
-      thirdPartyRecharge7Day = sevenDaySum;
-
-      if (!member) member = userDetails?.data || { memberId, memberName: queryName };
-
-      agentRiskScore = agentProfileRes?.agentRiskScore ?? null;
-
-      if (!agentProfileRes?.proxyCode && member) {
-        const lateProxyCode = extractProxyCode(orderCtx, member);
-        if (lateProxyCode) {
-          try {
-            const ap = await dbHolder.db.agentProfile.findUnique({ where: { proxyCode: lateProxyCode } });
-            agentRiskScore = ap?.riskScore || 0;
-          } catch (err) {
-            logger.debug({ proxyCode: lateProxyCode, err: (err as Error).message }, '[评估器] 延迟查询代理画像失败');
-          }
-        }
-      }
-
-      if (t1 - t0 > 3000) {
-        logger.warn({
-          traceId: tid,
-          orderNo: order.orderNo || order.id,
+    const dataPromise: Promise<RiskDataSnapshot> = cached && !cached.betStale
+      ? Promise.resolve({
+          bets: cached.data.bets,
+          dailyBets: cached.data.bets.filter((bet) => {
+            const time = parseTimeStr(bet.betTime);
+            const range = buildRiskDataWindows(orderTime).orderDay;
+            return time >= range.start && time <= orderTime;
+          }),
+          withdrawals: cached.data.withdrawals,
+          thirdGames: cached.data.thirdGames || [],
+          paymentOrders: cached.data.paymentOrders || [],
+          accountChanges: cached.data.accountChanges || [],
+          betsCount: cached.data.betsCount || null,
+          manualRechargeToday: cached.data.manualRechargeToday || 0,
+          manualRecharge3Day: cached.data.manualRecharge3Day || 0,
+          manualRecharge7Day: cached.data.manualRecharge7Day || 0,
+          thirdPartyRechargeToday: cached.data.thirdPartyRechargeToday || 0,
+          thirdPartyRecharge3Day: cached.data.thirdPartyRecharge3Day || 0,
+          thirdPartyRecharge7Day: cached.data.thirdPartyRecharge7Day || 0,
+          latestRechargeTime: cached.data.latestRechargeTime,
+          latestRechargeAmount: cached.data.latestRechargeAmount,
+          mainGameType: cached.data.mainGameType || null,
+          inOutReport: cached.data.inOutReport || null,
+          quality: cached.data.dataQuality || [],
+          windows: buildRiskDataWindows(orderTime),
+        })
+      : loadRiskData({
           memberName: queryName,
-          pipelineMs: t1 - t0,
-          betsCount: betsData.length,
-          thirdGameCount: thirdGameData.length,
-          withdrawalsCount: withdrawalsData.length,
-          paymentOrdersCount: paymentOrdersData.length,
-        }, `[评估器] 流水线耗时 ${t1 - t0}ms`);
-      }
+          orderId,
+          orderTime,
+          activeRuleIds,
+          signal: abortSignal,
+        });
 
-      if (isCancelled?.()) return null;
-      setCachedMember(memberId, { member, bets: betsData, withdrawals: withdrawalsData, thirdGames: thirdGameData, paymentOrders: paymentOrdersData, betsCount: betsCountData, manualRechargeToday, manualRecharge3Day, manualRecharge7Day,
-        thirdPartyRechargeToday, thirdPartyRecharge3Day, thirdPartyRecharge7Day, agentRiskScore, lastWithdrawMethod, mainGameType: mainGameType ?? undefined, inOutReport: inOutReportRes?.report ?? null }, effectiveStart);
+    const [snapshot, details] = await Promise.all([dataPromise, detailPromise]);
+    if (isCancelled?.()) return null;
+
+    let member: MemberInfo = cached?.data.member || { memberId, memberName: queryName };
+    const detail = details?.data || details?.items?.[0];
+    if (detail) member = detail;
+
+    if (orderCtx.sumRecharge == null && member.sumRecharge != null) orderCtx.sumRecharge = Math.abs(Number(member.sumRecharge)) || 0;
+    if (orderCtx.sumWithdraw == null && member.sumWithdraw != null) orderCtx.sumWithdraw = Math.abs(Number(member.sumWithdraw)) || 0;
+    if (orderCtx.balance == null && member.balance != null) orderCtx.balance = member.balance;
+    if (orderCtx.sumBet == null && member.sumRolling != null) orderCtx.sumBet = member.sumRolling;
+
+    const memberInfoQuality: QueryQuality = detail || cached
+      ? { source: 'memberInfo', status: 'complete', fetched: 1, total: 1 }
+      : failedQuality('memberInfo', '会员详情查询失败');
+
+    const proxyCode = extractProxyCode(orderCtx, member);
+    const loginMemberName = member.memberName || memberName || queryName;
+    const [agentRiskScore, loginAssociations, receivingAssociationResult] = await Promise.all([
+      proxyCode
+        ? dbHolder.db.agentProfile.findUnique({ where: { proxyCode } }).then(profile => profile?.riskScore || 0).catch((err) => {
+            logger.debug({ proxyCode, err: (err as Error).message }, '[评估器] 查询代理风险评分失败');
+            return 0;
+          })
+        : Promise.resolve(0),
+      getDailyLoginAssociations(member, loginMemberName, orderTime, abortSignal),
+      getReceivingAssociations(orderCtx),
+    ]);
+    if (isCancelled?.()) return null;
+
+    const latestSuccessfulWithdrawal = snapshot.withdrawals[0];
+    let lastWithdrawMethod: { bank: string; card: string; name: string; time?: number } | null = latestSuccessfulWithdrawal
+      ? {
+          bank: String(latestSuccessfulWithdrawal.receivingBank || '').trim(),
+          card: String(latestSuccessfulWithdrawal.receivingCardNo || '').trim(),
+          name: String(latestSuccessfulWithdrawal.receivingName || '').trim(),
+          time: parseTimeStr(latestSuccessfulWithdrawal.createTime),
+        }
+      : null;
+
+    if (!lastWithdrawMethod || (!lastWithdrawMethod.bank && !lastWithdrawMethod.card && !lastWithdrawMethod.name)) {
+      try {
+        const profile = await dbHolder.db.memberProfile.findUnique({ where: { memberName: queryName } });
+        if (profile?.lastWithdrawMethod) {
+          const parsed = JSON.parse(profile.lastWithdrawMethod) as { bank: string; card: string; name: string; time?: number };
+          if (!parsed.time || parsed.time <= orderTime) lastWithdrawMethod = parsed;
+        }
+      } catch {
+        lastWithdrawMethod = null;
+      }
     }
 
-    if (agentRiskScore === null) {
-      const proxyCode = extractProxyCode(orderCtx, member);
-      if (proxyCode) {
-        try {
-          const agentProfile = await dbHolder.db.agentProfile.findUnique({ where: { proxyCode } });
-          agentRiskScore = agentProfile?.riskScore || 0;
-        } catch (err) {
-          logger.debug({ proxyCode, err: (err as Error).message }, '[评估器] 查询代理风险评分失败');
-        }
-      }
-    }
-
-    // 查询登录IP和设备关联会员，用于 R02/R03 规则
-    let relatedByLoginIp: LoginLogItem[] = [];
-    let relatedByLoginDevice: LoginLogItem[] = [];
-    try {
-      const memberIp = member?.lastLoginIp || '';
-      const memberDevice = member?.lastLoginDeviceClientId || '';
-      if (memberIp) {
-        const ipMembers = ipMemberCache.get(memberIp);
-        if (ipMembers) {
-          relatedByLoginIp = [...ipMembers.members].filter(m => m !== memberName).map(m => ({ memberName: m, loginIp: memberIp }));
-        } else {
-          const ipLogs = await apiClient.getLoginLogsByIp(memberIp);
-          const ipMemberSet = new Set<string>();
-          const ipLogItems: LoginLogItem[] = extractList(ipLogs);
-          for (const log of ipLogItems) {
-            if (log.memberName && log.memberName !== memberName) {
-              ipMemberSet.add(log.memberName);
-            }
-          }
-          relatedByLoginIp = ipLogItems.filter(l => l.memberName !== memberName);
-          ipMemberCache.set(memberIp, { members: new Set([memberName, ...ipMemberSet]) });
-        }
-      }
-      if (memberDevice) {
-        const deviceMembers = deviceMemberCache.get(memberDevice);
-        if (deviceMembers) {
-          relatedByLoginDevice = [...deviceMembers.members].filter(m => m !== memberName).map(m => ({ memberName: m, device: memberDevice }));
-        } else {
-          const deviceLogs = await apiClient.getLoginLogsByDevice(memberDevice);
-          const deviceMemberSet = new Set<string>();
-          const deviceLogItems: LoginLogItem[] = extractList(deviceLogs);
-          for (const log of deviceLogItems) {
-            if (log.memberName && log.memberName !== memberName) {
-              deviceMemberSet.add(log.memberName);
-            }
-          }
-          relatedByLoginDevice = deviceLogItems.filter(l => l.memberName !== memberName);
-          deviceMemberCache.set(memberDevice, { members: new Set([memberName, ...deviceMemberSet]) });
-        }
-      }
-    } catch (err) {
-      logger.debug({ memberName, err: (err as Error).message }, '[评估器] 查询登录关联会员失败');
-    }
-
-    try {
-      const profile = await dbHolder.db.memberProfile.findUnique({ where: { memberName: queryName } });
-      if (profile?.lastWithdrawMethod) {
-        lastWithdrawMethod = JSON.parse(profile.lastWithdrawMethod);
-      }
-    } catch { /* 首次评估时可能无记录 */ }
+    const dataQuality = [
+      ...snapshot.quality,
+      memberInfoQuality,
+      ...(loginAssociations.quality ? [loginAssociations.quality] : []),
+      receivingAssociationResult.quality,
+    ];
 
     const ctx: RuleContext = {
       order: orderCtx,
       member,
-      bets: betsData,
-      withdrawals: withdrawalsData,
-      relatedByLoginIp,
-      relatedByLoginDevice,
-      relatedByLoginIpCount: relatedByLoginIp.length,
-      relatedByLoginDeviceCount: relatedByLoginDevice.length,
-      receivingInfoCache,
+      bets: snapshot.bets,
+      dailyBets: snapshot.dailyBets,
+      withdrawals: snapshot.withdrawals,
+      relatedByLoginIp: loginAssociations.relatedByLoginIp,
+      relatedByLoginDevice: loginAssociations.relatedByLoginDevice,
+      relatedByLoginIpCount: loginAssociations.relatedByLoginIpCount,
+      relatedByLoginDeviceCount: loginAssociations.relatedByLoginDeviceCount,
+      dailyLoginIpAssociations: loginAssociations.dailyLoginIpAssociations,
+      dailyLoginDeviceAssociations: loginAssociations.dailyLoginDeviceAssociations,
+      receivingAssociations: receivingAssociationResult.names,
       agentWithdrawCache,
-      payChannelCache,
-      thirdGameBets: thirdGameData,
-      paymentOrders: paymentOrdersData,
-      betsCount: betsCountData,
-      manualRechargeToday,
-      manualRecharge3Day,
-      manualRecharge7Day,
-      thirdPartyRechargeToday,
-      thirdPartyRecharge3Day,
-      thirdPartyRecharge7Day,
-      agentRiskScore: agentRiskScore ?? 0,
+      thirdGameBets: snapshot.thirdGames,
+      paymentOrders: snapshot.paymentOrders,
+      accountChanges: snapshot.accountChanges,
+      betsCount: snapshot.betsCount,
+      manualRechargeToday: snapshot.manualRechargeToday,
+      manualRecharge3Day: snapshot.manualRecharge3Day,
+      manualRecharge7Day: snapshot.manualRecharge7Day,
+      thirdPartyRechargeToday: snapshot.thirdPartyRechargeToday,
+      thirdPartyRecharge3Day: snapshot.thirdPartyRecharge3Day,
+      thirdPartyRecharge7Day: snapshot.thirdPartyRecharge7Day,
+      latestRechargeTime: snapshot.latestRechargeTime,
+      latestRechargeAmount: snapshot.latestRechargeAmount,
+      agentRiskScore,
       tzOffset: parseInt(process.env.TZ_OFFSET || '8', 10) || 8,
       associatedMemberBets: new Map(),
-      isEarlyMorning,
+      isEarlyMorning: snapshot.windows.orderDay.isEarlyMorning,
       traceId: tid,
       lastWithdrawMethod,
-      mainGameType: mainGameType ?? undefined,
+      mainGameType: snapshot.mainGameType || undefined,
+      dataQuality,
     };
 
     const result = await evaluateRules(ctx);
-    result.isEarlyMorning = isEarlyMorning;
+    result.isEarlyMorning = snapshot.windows.orderDay.isEarlyMorning;
+    result.dataQuality = dataQuality;
 
-    if (member) {
-      updatePayChannelCache(String(memberId), member);
+    const dataIssues = [...new Set(
+      dataQuality
+        .filter(item => item.status === 'failed' || item.status === 'partial')
+        .map(item => `${QUALITY_SOURCE_LABELS[item.source] || item.source}查询不完整`)
+    )];
+    result.dataIssues = dataIssues;
+
+    // 数据不完整只作为告警中的复核提示，不能凭空抬高风险等级或制造一条风险规则。
+
+    const explicitProfitLoss = Number(member.profitAndLoss);
+    if (member.profitAndLoss != null && Number.isFinite(explicitProfitLoss)) {
+      result.profitLoss = explicitProfitLoss;
+      result.estimatedProfitLoss = false;
+    } else {
+      const balance = Number(member.balance ?? orderCtx.balance ?? 0) || 0;
+      result.profitLoss = balance - result.rechargeWithdrawDiff;
+      result.estimatedProfitLoss = true;
+    }
+
+    if (!cached || cached.betStale) {
+      setCachedMember(memberId, {
+        member,
+        bets: snapshot.bets,
+        withdrawals: snapshot.withdrawals,
+        thirdGames: snapshot.thirdGames,
+        paymentOrders: snapshot.paymentOrders,
+        accountChanges: snapshot.accountChanges,
+        betsCount: snapshot.betsCount,
+        manualRechargeToday: snapshot.manualRechargeToday,
+        manualRecharge3Day: snapshot.manualRecharge3Day,
+        manualRecharge7Day: snapshot.manualRecharge7Day,
+        thirdPartyRechargeToday: snapshot.thirdPartyRechargeToday,
+        thirdPartyRecharge3Day: snapshot.thirdPartyRecharge3Day,
+        thirdPartyRecharge7Day: snapshot.thirdPartyRecharge7Day,
+        agentRiskScore,
+        lastWithdrawMethod,
+        mainGameType: snapshot.mainGameType || undefined,
+        inOutReport: snapshot.inOutReport,
+        latestRechargeTime: snapshot.latestRechargeTime,
+        latestRechargeAmount: snapshot.latestRechargeAmount,
+        dataQuality: snapshot.quality,
+      }, orderTime);
     }
 
     const elapsed = Date.now() - startTime;
     if (elapsed > 3000) {
-      logger.warn({ traceId: tid, orderNo: order.orderNo || order.id, elapsedMs: elapsed, memberName: order.memberName }, `[评估器] 订单评估耗时 ${elapsed}ms`);
+      logger.warn({
+        traceId: tid,
+        orderNo: orderId,
+        elapsedMs: elapsed,
+        memberName: queryName,
+        betsCount: snapshot.bets.length,
+        withdrawalsCount: snapshot.withdrawals.length,
+        dataIssues: dataIssues.length,
+      }, `[评估器] 订单评估耗时 ${elapsed}ms`);
     }
 
     return result;
@@ -656,16 +717,9 @@ async function evaluateOrderInner(order: WithdrawOrder, memberId: string, startT
   }
 }
 
-export async function updateMemberProfile(memberName: string, memberId: string, result: EvaluationResult, order: WithdrawOrder): Promise<void> {
+export async function updateMemberProfile(memberName: string, memberId: string, result: EvaluationResult, _order: WithdrawOrder): Promise<void> {
   try {
-    const amount = parseFloat(String(order?.amount || '0'));
     const isHighRisk = ['HIGH', 'CRITICAL'].includes(result.riskLevel);
-
-    const lastWithdrawMethod = JSON.stringify({
-      bank: String(order?.receivingBank || '').trim(),
-      card: String(order?.receivingCardNo || '').trim(),
-      name: String(order?.receivingName || '').trim(),
-    });
 
     // 使用事务 + 乐观锁避免 TOCTOU 竞态
     await dbHolder.db.$transaction(async (tx) => {
@@ -676,12 +730,6 @@ export async function updateMemberProfile(memberName: string, memberId: string, 
       for (const r of result.triggeredRules) {
         topRules[r.id] = (topRules[r.id] || 0) + 1;
       }
-
-      let trend: { time: number; amount: number }[] = [];
-      try { trend = existing ? JSON.parse(existing.recentWithdrawTrend || '[]') : []; } catch { trend = []; }
-      trend.push({ time: Date.now(), amount });
-      const sevenDaysAgo = Date.now() - 7 * 86400000;
-      const recentTrend = trend.filter(t => t.time > sevenDaysAgo).slice(-20);
 
       const maxRiskLevel = existing
         ? (riskLevelPriority(result.riskLevel) > riskLevelPriority(existing.maxRiskLevel || '') ? result.riskLevel : existing.maxRiskLevel || result.riskLevel)
@@ -699,9 +747,6 @@ export async function updateMemberProfile(memberName: string, memberId: string, 
           lastEvalAt: new Date(),
           lastEvalScore,
           topRules: JSON.stringify(topRules),
-          totalWithdrawAmount: { increment: amount },
-          recentWithdrawTrend: JSON.stringify(recentTrend),
-          lastWithdrawMethod,
         },
         create: {
           memberName,
@@ -712,9 +757,6 @@ export async function updateMemberProfile(memberName: string, memberId: string, 
           lastEvalAt: new Date(),
           lastEvalScore: result.totalScore,
           topRules: JSON.stringify(topRules),
-          totalWithdrawAmount: amount,
-          recentWithdrawTrend: JSON.stringify(recentTrend),
-          lastWithdrawMethod,
         },
       });
     });
@@ -723,11 +765,83 @@ export async function updateMemberProfile(memberName: string, memberId: string, 
   }
 }
 
-export async function updateAgentProfile(proxyCode: string, memberName: string, result: EvaluationResult, order: WithdrawOrder): Promise<void> {
-  if (!proxyCode) return;
-  if (AGENT_WHITELIST.has(proxyCode)) return;
+export async function recordSuccessfulWithdrawal(order: WithdrawOrder): Promise<void> {
+  const orderId = String(order.orderNo || order.id || '');
+  const memberId = String(order.memberId || order.member_id || '');
+  const memberName = String(order.memberName || order.member_name || '').trim();
+  if (!orderId || !memberId || !memberName) return;
+
+  const amount = parseFloat(String(order.amount || '0')) || 0;
+  const createTimeMs = parseTimeStr(order.createTime) || Date.now();
+  const method = {
+    bank: String(order.receivingBank || '').trim(),
+    card: String(order.receivingCardNo || '').trim(),
+    name: String(order.receivingName || '').trim(),
+    time: createTimeMs,
+  };
+  const fingerprint = receivingFingerprint(order);
+  const proxyCode = extractProxyCode(order);
+
   try {
-    const amount = parseFloat(String(order?.amount || '0'));
+    await dbHolder.db.$transaction(async (tx) => {
+      const existingWithdrawal = await tx.successfulWithdrawal.findUnique({ where: { orderId } });
+      if (existingWithdrawal) return;
+
+      await tx.successfulWithdrawal.create({
+        data: {
+          orderId,
+          memberId,
+          memberName,
+          amount,
+          receivingBank: method.bank,
+          receivingName: method.name,
+          receivingCardNo: method.card,
+          receivingFingerprint: fingerprint,
+          createTime: new Date(createTimeMs),
+        },
+      });
+
+      const existingProfile = await tx.memberProfile.findUnique({ where: { memberName } });
+      let trend: { time: number; amount: number }[] = [];
+      try { trend = existingProfile ? JSON.parse(existingProfile.recentWithdrawTrend || '[]') : []; } catch { trend = []; }
+      trend.push({ time: createTimeMs, amount });
+      const sevenDaysAgo = createTimeMs - 7 * 86400000;
+      const recentTrend = trend.filter(item => item.time >= sevenDaysAgo).slice(-20);
+
+      await tx.memberProfile.upsert({
+        where: { memberName },
+        update: {
+          memberId,
+          totalWithdrawAmount: { increment: amount },
+          recentWithdrawTrend: JSON.stringify(recentTrend),
+          lastWithdrawMethod: JSON.stringify(method),
+        },
+        create: {
+          memberName,
+          memberId,
+          totalWithdrawAmount: amount,
+          recentWithdrawTrend: JSON.stringify(recentTrend),
+          lastWithdrawMethod: JSON.stringify(method),
+        },
+      });
+
+      if (proxyCode && !isAgentWhitelisted(proxyCode)) {
+        await tx.agentProfile.upsert({
+          where: { proxyCode },
+          update: { totalWithdrawAmount: { increment: amount } },
+          create: { proxyCode, memberCount: 1, totalWithdrawAmount: amount },
+        });
+      }
+    });
+  } catch (err) {
+    logger.error({ orderId, err: (err as Error).message }, '[画像] 记录成功提款失败');
+  }
+}
+
+export async function updateAgentProfile(proxyCode: string, _memberName: string, result: EvaluationResult, _order: WithdrawOrder): Promise<void> {
+  if (!proxyCode) return;
+  if (isAgentWhitelisted(proxyCode)) return;
+  try {
     const isHighRisk = ['HIGH', 'CRITICAL'].includes(result.riskLevel);
 
     // 使用事务避免 TOCTOU 竞态
@@ -752,7 +866,6 @@ export async function updateAgentProfile(proxyCode: string, memberName: string, 
         update: {
           evalCount: { increment: 1 },
           highRiskCount: { increment: isHighRisk ? 1 : 0 },
-          totalWithdrawAmount: { increment: amount },
           riskScore: newRiskScore,
           topRules: JSON.stringify(topRules),
           updatedAt: new Date(),
@@ -762,7 +875,6 @@ export async function updateAgentProfile(proxyCode: string, memberName: string, 
           memberCount: 1,
           evalCount: 1,
           highRiskCount: isHighRisk ? 1 : 0,
-          totalWithdrawAmount: amount,
           riskScore: isHighRisk ? 5 : 0,
           topRules: JSON.stringify(topRules),
         },
@@ -780,33 +892,6 @@ function riskLevelPriority(level: string): number {
     case 'MEDIUM': return 2;
     case 'LOW': return 1;
     default: return 0;
-  }
-}
-
-export async function getMemberProfileText(memberName: string): Promise<string | null> {
-  try {
-    const profile = await dbHolder.db.memberProfile.findUnique({ where: { memberName } });
-    if (!profile) return null;
-
-    const topRules: Record<string, number> = JSON.parse(profile.topRules || '{}');
-    const sortedRules = Object.entries(topRules).sort((a, b) => b[1] - a[1]).slice(0, 3);
-    const rulesText = sortedRules.map(([id, count]) => `${id}(${count}次)`).join('、') || '无';
-
-    const lastEval = profile.lastEvalAt ? formatBeijingTime(profile.lastEvalAt) : '无';
-
-    return [
-      `📊 会员风险画像：${memberName}`,
-      ``,
-      `评估次数：${profile.evalCount}`,
-      `高风险次数：${profile.highRiskCount}`,
-      `最高风险：${profile.maxRiskLevel || '无'}`,
-      `最高评分：${profile.lastEvalScore}`,
-      `累计提现：${fmtNum(profile.totalWithdrawAmount)}`,
-      `最近评估：${lastEval}`,
-      `高频规则：${rulesText}`,
-    ].join('\n');
-  } catch {
-    return null;
   }
 }
 

@@ -90,6 +90,11 @@ config/sessions/*.json
 # AI 文件
 .claude/
 */.claude/
+.agents/
+.codex-tmp/
+
+# 本地会话快照（含敏感登录资料）
+API/新建 文本文档.txt
 
 # 其他
 *.pid

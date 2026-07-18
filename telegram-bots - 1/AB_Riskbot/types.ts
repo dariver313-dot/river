@@ -511,20 +511,16 @@ export interface BetsCount {
   topGameTypes?: string;
 }
 
-/* ===== 三方游戏订单 ===== */
-
-export interface ThirdGameOrder {
-  allbet?: string | number;
-  bet?: string | number;
-  betTime?: string | number;
-  profit?: string | number;
-}
-
 /* ===== 提现记录（历史） ===== */
 
 export interface WithdrawalRecord {
+  orderNo?: string;
+  status?: number;
   createTime?: string | number;
   amount?: string | number;
+  receivingBank?: string;
+  receivingName?: string;
+  receivingCardNo?: string;
 }
 
 /* ===== 支付订单 ===== */
@@ -553,7 +549,6 @@ export interface MemberCacheData {
   member: MemberInfo;
   bets: BetRecord[];
   withdrawals: WithdrawalRecord[];
-  thirdGames: unknown[];
   paymentOrders: PaymentOrder[];
   betsCount: BetsCount | null;
   manualRechargeToday: number;
@@ -563,7 +558,6 @@ export interface MemberCacheData {
   thirdPartyRecharge3Day: number;
   thirdPartyRecharge7Day: number;
   agentRiskScore: number | null;
-  lastWithdrawMethod: { bank: string; card: string; name: string } | null;
 }
 
 /* ===== 会员详情 API 响应 ===== */

@@ -49,6 +49,7 @@ model RiskEval {
   feedback       String   @default("")
   notifyMsgId    Int?
   notifiedAt     DateTime?
+  notifyLeaseAt  DateTime?
   createdAt      DateTime @default(now())
 
   @@index([memberId])
@@ -81,4 +82,21 @@ model BotConfig {
   value String @default("")
 
   @@index([key])
+}
+
+model SuccessfulWithdrawal {
+  orderId              String   @id
+  memberId             String
+  memberName           String
+  amount               Float    @default(0)
+  receivingBank        String   @default("")
+  receivingName        String   @default("")
+  receivingCardNo      String   @default("")
+  receivingFingerprint String   @default("")
+  createTime           DateTime
+  recordedAt           DateTime @default(now())
+
+  @@index([memberId, createTime])
+  @@index([memberName, createTime])
+  @@index([receivingFingerprint, createTime])
 }

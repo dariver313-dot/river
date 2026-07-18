@@ -25,7 +25,50 @@ function safeParseInt(val: unknown, defaultVal: number = 0): number {
   return isNaN(n) ? defaultVal : n;
 }
 
+function getWithdrawPageLimit(): number {
+  return Math.min(Math.max(safeParseInt(process.env.WITHDRAW_ORDER_MAX_PAGES, 1), 1), 200);
+}
+
+const withdrawTruncationWarnAt = new Map<number, number>();
+
+function warnWithdrawTruncation(status: number, maxPages: number): void {
+  const now = Date.now();
+  const last = withdrawTruncationWarnAt.get(status) || 0;
+  if (now - last < 5 * 60 * 1000) return;
+  withdrawTruncationWarnAt.set(status, now);
+  logger.warn({ status, maxPages }, '[API] 提现订单达到分页上限，本轮只处理最新订单；请根据负载调整 WITHDRAW_ORDER_MAX_PAGES');
+}
+
 function getTzOffset(): number { return getTzOffsetMinutes() / 60; }
+
+interface ApiRequestOptions {
+  signal?: AbortSignal;
+}
+
+interface LoginLogFetchOptions extends ApiRequestOptions {
+  maxPages?: number;
+  pageSize?: number;
+}
+
+function formatLocalDate(ms: number): string {
+  const tzMs = getTzOffset() * 3600000;
+  return new Date(ms + tzMs).toISOString().slice(0, 10);
+}
+
+function formatLocalDateTime(ms: number): string {
+  const tzMs = getTzOffset() * 3600000;
+  return new Date(ms + tzMs).toISOString().replace('T', ' ').slice(0, 19);
+}
+
+function dateRangeToDateStrings(dateRange?: { start: number; end: number }): { startDate?: string; endDate?: string } | undefined {
+  if (!dateRange) return undefined;
+  return { startDate: formatLocalDate(dateRange.start), endDate: formatLocalDate(dateRange.end) };
+}
+
+function dateRangeToDateTimeStrings(dateRange?: { start: number; end: number }): { beginTime?: string; endTime?: string } {
+  if (!dateRange) return {};
+  return { beginTime: formatLocalDateTime(dateRange.start), endTime: formatLocalDateTime(dateRange.end) };
+}
 
 function mapWithdrawOrder(n: any): WithdrawOrder {
   return {
@@ -94,7 +137,34 @@ function mapRechargeOrder(n: any): PaymentOrder {
 }
 
 function mapLoginLog(n: any): LoginLogItem {
-  return { memberName: n.account, loginIp: n.ipAddress, device: n.deviceClientId };
+  return {
+    memberName: n.account || n.memberName,
+    loginIp: n.ipAddress || n.loginIp,
+    device: n.deviceClientId || n.device,
+    loginTime: n.loginTime || n.createTime || n.loginDate,
+  };
+}
+
+async function fetchLoginLogs(params: Record<string, unknown>, options: LoginLogFetchOptions = {}): Promise<PagedResponse<LoginLogItem>> {
+  const maxPages = Math.max(1, options.maxPages ?? 10);
+  const pageSize = Math.min(Math.max(1, options.pageSize ?? 50), 100);
+  const allItems: LoginLogItem[] = [];
+  let totalNum = 0;
+
+  for (let page = 1; page <= maxPages; page++) {
+    const raw = await auth.getLoginLogs({
+      current: page,
+      size: pageSize,
+      ...params,
+    }, { signal: options.signal });
+    const data = raw?.data || raw;
+    const records: any[] = data?.records || [];
+    if (page === 1) totalNum = safeParseInt(data?.total, records.length);
+    for (const item of records) allItems.push(mapLoginLog(item));
+    if (records.length < pageSize) break;
+  }
+
+  return { items: allItems, totalNum: String(totalNum || allItems.length) };
 }
 
 // ============================================================
@@ -117,21 +187,21 @@ export class ApiClient {
   // ===== 提现订单 =====
 
   async getPendingWithdrawOrders(): Promise<WithdrawOrder[]> {
-    const offset = getTzOffset() * 3600000;
     const now = new Date();
-    const localNow = new Date(now.getTime() + offset);
-    const startOfDay = new Date(localNow); startOfDay.setUTCHours(0, 0, 0, 0);
-    const endOfDay = new Date(localNow); endOfDay.setUTCHours(23, 59, 59, 999);
+    const lookbackHours = Math.min(Math.max(safeParseInt(process.env.PENDING_ORDER_LOOKBACK_HOURS, 12), 1), 72);
     return this.getAllWithdrawOrdersByStatuses([1, 2], {
-      start: startOfDay.getTime() - offset, end: endOfDay.getTime() - offset,
+      start: now.getTime() - lookbackHours * 3600000,
+      end: now.getTime(),
     });
   }
 
   async getAllWithdrawOrdersByStatuses(statuses: number[], dateRange?: { start: number; end: number }): Promise<WithdrawOrder[]> {
     const seenOrderNos = new Set<string>();
+    const maxPages = getWithdrawPageLimit();
     const statusResults = await Promise.all(statuses.map(async (status) => {
       const statusOrders: WithdrawOrder[] = [];
-      let page = 1; const pageSize = 50; const maxPages = 200;
+      let page = 1;
+      const pageSize = 100;
       while (page <= maxPages) {
         try {
           const tzMs = getTzOffset() * 3600000;
@@ -148,8 +218,15 @@ export class ApiClient {
             if (!seenOrderNos.has(key)) { seenOrderNos.add(key); statusOrders.push(mapWithdrawOrder(r)); }
           }
           if (records.length < pageSize) break;
+          if (page === maxPages) {
+            warnWithdrawTruncation(status, maxPages);
+            break;
+          }
           page++;
-        } catch (err) { logger.error({ status, page, err: (err as Error).message }, `[API] 获取提现订单失败`); break; }
+        } catch (err) {
+          logger.error({ status, page, err: (err as Error).message }, `[API] 获取提现订单失败`);
+          throw err;
+        }
       }
       return statusOrders;
     }));
@@ -165,15 +242,15 @@ export class ApiClient {
     return { items: records.map(mapMemberInfo), totalNum: String(data?.total || records.length) };
   }
 
-  async getMemberInfoByName(memberName: string): Promise<ApiResponse<MemberInfo>> {
-    const raw = await auth.getMemberInfo(memberName);
+  async getMemberInfoByName(memberName: string, options?: ApiRequestOptions): Promise<ApiResponse<MemberInfo>> {
+    const raw = await auth.getMemberInfo(memberName, options);
     const data = raw?.data || raw;
     const records: any[] = Array.isArray(data?.records) ? data.records : [data].filter(Boolean);
     return { items: records.map(mapMemberInfo), totalNum: String(data?.total || records.length) };
   }
 
-  async getUserDetails(account: string): Promise<UserDetailsResponse> {
-    const raw = await auth.getMemberInfo(account);
+  async getUserDetails(account: string, options?: ApiRequestOptions): Promise<UserDetailsResponse> {
+    const raw = await auth.getMemberInfo(account, options);
     const data = raw?.data || raw;
     const records: any[] = Array.isArray(data?.records) ? data.records : [data].filter(Boolean);
     if (records.length > 0) {
@@ -185,148 +262,192 @@ export class ApiClient {
 
   // ===== 投注记录 =====
 
-  async getMemberBetsToday(account: string, startPage = 1, dateRange?: { start: number; end: number }, maxPages = 3): Promise<PagedResponse<BetRecord>> {
+  /** 查询指定时间范围的彩票注单；调用方负责按提款时刻传入窗口。 */
+  async getMemberBets(account: string, startPage = 1, dateRange?: { start: number; end: number }, maxPages = 3, options?: ApiRequestOptions): Promise<PagedResponse<BetRecord>> {
     const allBets: BetRecord[] = [];
     for (let page = startPage; page < startPage + maxPages; page++) {
       try {
         const raw = await auth.getMemberBets({
           account, page, size: 500,
           startTime: dateRange?.start, endTime: dateRange?.end,
-        });
+        }, options);
         const data = raw?.data || raw;
         const pageData = data?.page || data;
         const records: any[] = pageData?.records || [];
         for (const r of records) allBets.push(mapBetRecord(r));
         if (records.length < 500) break;
-      } catch (err) { logger.warn({ page, account, err: (err as Error).message }, '[API] 获取投注记录失败'); break; }
+      } catch (err) {
+        logger.warn({ page, account, err: (err as Error).message }, '[API] 获取投注记录失败');
+        throw err;
+      }
     }
     return { items: allBets, totalNum: String(allBets.length) };
   }
 
-  async getBetsCountToday(account: string, _dateRange?: { start: number; end: number }): Promise<ApiResponse<BetsCount>> {
+  async getBetsCountToday(account: string, dateRange?: { start: number; end: number }, options?: ApiRequestOptions): Promise<ApiResponse<BetsCount>> {
     try {
-      const raw = await auth.getBetsCount(account);
+      const raw = await auth.getBetsCount(account, dateRangeToDateStrings(dateRange), options);
       const data = raw?.data || raw;
       if (data && data.lotteryValidAmount != null) {
         const result = mapBetAnalysis(data);
-        logger.info({ account, topGameTypes: result.topGameTypes }, '[API] 投注分析结果');
+        logger.debug({ account, topGameTypes: result.topGameTypes }, '[API] 投注分析结果');
         return { data: result };
       }
-    } catch (err) { logger.warn({ account, err: (err as Error).message }, '[API] 获取投注分析失败'); }
+    } catch (err) {
+      logger.warn({ account, err: (err as Error).message }, '[API] 获取投注分析失败');
+      throw err;
+    }
     return { data: undefined };
   }
 
   // ===== 提现历史 =====
 
-  async getMemberWithdrawals(account: string, startPage = 1, dateRange?: { start: number; end: number }, maxPages = 2): Promise<PagedResponse<WithdrawalRecord>> {
+  async getMemberWithdrawals(account: string, startPage = 1, dateRange?: { start: number; end: number }, maxPages = 2, options?: ApiRequestOptions): Promise<PagedResponse<WithdrawalRecord>> {
     const allItems: WithdrawalRecord[] = [];
     for (let page = startPage; page < startPage + maxPages; page++) {
       try {
-        const raw = await auth.getMemberWithdrawals({ account, page, startTime: dateRange?.start, endTime: dateRange?.end });
+        const raw = await auth.getMemberWithdrawals({ account, page, startTime: dateRange?.start, endTime: dateRange?.end }, options);
         const data = raw?.data || raw;
         const records: any[] = data?.records || [];
-        for (const r of records) allItems.push({ createTime: r.createTime, amount: r.cashMoney });
+        for (const r of records) {
+          // 递增/频率等历史规则只认平台已确认出款，拒绝和取消申请不能计入。
+          if (Number(r.cashStatus ?? r.status) !== 3) continue;
+          allItems.push({
+            orderNo: r.cashOrderNo || r.orderNo,
+            status: r.cashStatus ?? r.status,
+            createTime: r.createTime,
+            amount: r.cashMoney ?? r.amount,
+            receivingBank: r.bankName,
+            receivingName: r.realName,
+            receivingCardNo: r.bankCard,
+          });
+        }
         if (records.length < 200) break;
-      } catch (err) { logger.warn({ page, account }, '[API] 获取提现历史失败'); break; }
+      } catch (err) {
+        logger.warn({ page, account, err: (err as Error).message }, '[API] 获取提现历史失败');
+        throw err;
+      }
     }
     return { items: allItems, totalNum: String(allItems.length) };
   }
 
   // ===== 充值订单 =====
 
-  async getPaymentOrders(account: string, startPage = 1, timeRange?: { start: number; end: number }, maxPages = 3): Promise<PagedResponse<PaymentOrder>> {
+  async getPaymentOrders(account: string, startPage = 1, timeRange?: { start: number; end: number }, maxPages = 3, options?: ApiRequestOptions): Promise<PagedResponse<PaymentOrder>> {
     const allItems: PaymentOrder[] = [];
     for (let page = startPage; page < startPage + maxPages; page++) {
       try {
-        const raw = await auth.getPaymentOrders(account, page, timeRange);
+        const raw = await auth.getPaymentOrders(account, page, timeRange, options);
         const data = raw?.data || raw;
         const records: any[] = data?.records || [];
         for (const r of records) allItems.push(mapRechargeOrder(r));
         if (records.length < 200) break;
-      } catch (err) { logger.warn({ page, account }, '[API] 获取充值订单失败'); break; }
+      } catch (err) {
+        logger.warn({ page, account, err: (err as Error).message }, '[API] 获取充值订单失败');
+        throw err;
+      }
     }
     return { items: allItems, totalNum: String(allItems.length) };
   }
 
   // ===== 充值汇总/历史 =====
 
-  async getRechReport(account: string, start: number, end: number): Promise<NewRechReport | null> {
+  async getRechReport(account: string, start: number, end: number, options?: ApiRequestOptions): Promise<NewRechReport | null> {
     try {
-      const raw = await auth.getRechReport(account, start, end);
+      const raw = await auth.getRechReport(account, start, end, options);
       const data = raw?.data || raw;
       return (data as NewRechReport) || null;
-    } catch (err) { logger.warn({ account }, '[API] 获取充值汇总失败'); return null; }
+    } catch (err) {
+      logger.warn({ account, err: (err as Error).message }, '[API] 获取充值汇总失败');
+      throw err;
+    }
   }
 
-  async getRechargeOrderHistory(account: string, start: number, end: number): Promise<NewRechargeOrderHistory[]> {
+  async getRechargeOrderHistory(account: string, start: number, end: number, options?: ApiRequestOptions): Promise<NewRechargeOrderHistory[]> {
     try {
       const tzMs = getTzOffset() * 3600000;
       const beginStr = new Date(start + tzMs).toISOString().replace('T', ' ').slice(0, 19);
       const endStr = new Date(end + tzMs).toISOString().replace('T', ' ').slice(0, 19);
-      const raw = await auth.getRechargeHistory(account, beginStr, endStr);
+      const raw = await auth.getRechargeHistory(account, beginStr, endStr, options);
       const data = raw?.data || raw;
       const records: any[] = data?.records || [];
       return records as NewRechargeOrderHistory[];
-    } catch (err) { logger.warn({ account }, '[API] 获取充值历史失败'); return []; }
+    } catch (err) {
+      logger.warn({ account, err: (err as Error).message }, '[API] 获取充值历史失败');
+      throw err;
+    }
   }
 
   // ===== 登录日志 =====
 
-  async getLoginLogsByMember(account: string): Promise<PagedResponse<LoginLogItem>> {
+  async getLoginLogsByMember(account: string, dateRange?: { start: number; end: number }, options?: LoginLogFetchOptions): Promise<PagedResponse<LoginLogItem>> {
     try {
-      const raw = await auth.getLoginLogs({ account });
-      const data = raw?.data || raw;
-      const records: any[] = data?.records || [];
-      return { items: records.map(mapLoginLog), totalNum: String(records.length) };
-    } catch (err) { logger.warn({ account }, '[API] 获取登录日志失败'); return { items: [], totalNum: '0' }; }
+      return await fetchLoginLogs({
+        account,
+        ...dateRangeToDateTimeStrings(dateRange),
+      }, options);
+    } catch (err) {
+      logger.warn({ account, err: (err as Error).message }, '[API] 获取登录日志失败');
+      throw err;
+    }
   }
 
-  async getLoginLogsByIp(ip: string): Promise<PagedResponse<LoginLogItem>> {
+  async getLoginLogsByIp(ip: string, dateRange?: { start: number; end: number }, options?: LoginLogFetchOptions): Promise<PagedResponse<LoginLogItem>> {
     try {
-      const raw = await auth.getLoginLogs({ loginIp: ip });
-      const data = raw?.data || raw;
-      const records: any[] = data?.records || [];
-      return { items: records.map(mapLoginLog), totalNum: String(data?.total || records.length) };
-    } catch (err) { return { items: [], totalNum: '0' }; }
+      return await fetchLoginLogs({
+        loginIp: ip,
+        ...dateRangeToDateTimeStrings(dateRange),
+      }, options);
+    } catch (err) {
+      logger.warn({ ip, err: (err as Error).message }, '[API] 获取IP登录日志失败');
+      throw err;
+    }
   }
 
-  async getLoginLogsByDevice(device: string): Promise<PagedResponse<LoginLogItem>> {
+  async getLoginLogsByDevice(device: string, dateRange?: { start: number; end: number }, options?: LoginLogFetchOptions): Promise<PagedResponse<LoginLogItem>> {
     try {
-      const raw = await auth.getLoginLogs({ deviceClientId: device });
-      const data = raw?.data || raw;
-      const records: any[] = data?.records || [];
-      return { items: records.map(mapLoginLog), totalNum: String(data?.total || records.length) };
-    } catch (err) { return { items: [], totalNum: '0' }; }
+      return await fetchLoginLogs({
+        deviceClientId: device,
+        ...dateRangeToDateTimeStrings(dateRange),
+      }, options);
+    } catch (err) {
+      logger.warn({ device, err: (err as Error).message }, '[API] 获取设备登录日志失败');
+      throw err;
+    }
   }
 
   // ===== 日期范围工具（保留 api-client 旧接口兼容） =====
 
   getEffectiveDateRange(orderCreateTime?: number): { start: number; end: number; isEarlyMorning: boolean } {
-    if (orderCreateTime) {
-      const offset = getTzOffset() * 3600000;
-      const localTime = new Date(orderCreateTime + offset);
-      if (localTime.getUTCHours() < 6) return { ...this.getTwoDayDateRange(), isEarlyMorning: true };
-    }
-    return { ...this.getTimezoneDateRange(), isEarlyMorning: false };
+    const referenceTime = orderCreateTime && Number.isFinite(orderCreateTime) ? orderCreateTime : Date.now();
+    const localTime = new Date(referenceTime + getTzOffset() * 3600000);
+    if (localTime.getUTCHours() < 6) return { ...this.getTwoDayDateRange(referenceTime, true), isEarlyMorning: true };
+    return { ...this.getTimezoneDateRange(referenceTime, true), isEarlyMorning: false };
   }
 
-  getTimezoneDateRange(): { start: number; end: number } {
-    const now = new Date();
+  getTimezoneDateRange(referenceTime = Date.now(), endAtReference = false): { start: number; end: number } {
+    const now = new Date(referenceTime);
     const offset = getTzOffset() * 3600000;
     const localNow = new Date(now.getTime() + offset);
     const startOfDay = new Date(localNow); startOfDay.setUTCHours(0, 0, 0, 0);
     const endOfDay = new Date(localNow); endOfDay.setUTCHours(23, 59, 59, 999);
-    return { start: startOfDay.getTime() - offset, end: endOfDay.getTime() - offset };
+    return { start: startOfDay.getTime() - offset, end: endAtReference ? referenceTime : endOfDay.getTime() - offset };
   }
 
-  getTwoDayDateRange(): { start: number; end: number } {
-    const now = new Date();
+  getTwoDayDateRange(referenceTime = Date.now(), endAtReference = false): { start: number; end: number } {
+    const now = new Date(referenceTime);
     const offset = getTzOffset() * 3600000;
     const localNow = new Date(now.getTime() + offset);
     const startOfYesterday = new Date(localNow); startOfYesterday.setUTCHours(0, 0, 0, 0);
     startOfYesterday.setDate(startOfYesterday.getDate() - 1);
     const endOfDay = new Date(localNow); endOfDay.setUTCHours(23, 59, 59, 999);
-    return { start: startOfYesterday.getTime() - offset, end: endOfDay.getTime() - offset };
+    return { start: startOfYesterday.getTime() - offset, end: endAtReference ? referenceTime : endOfDay.getTime() - offset };
+  }
+
+  getRollingDateRange(endTime: number, days: number): { start: number; end: number } {
+    const safeEnd = Number.isFinite(endTime) && endTime > 0 ? endTime : Date.now();
+    const safeDays = Math.min(Math.max(Math.trunc(days) || 1, 1), 31);
+    return { start: safeEnd - safeDays * 24 * 3600000, end: safeEnd };
   }
 
   // ===== 健康检查 =====

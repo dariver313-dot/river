@@ -2,7 +2,7 @@ import type { RiskRule, RuleContext, RuleResult, EvaluationResult } from './rule
 import { rules } from './rules';
 import { LRUCache } from 'lru-cache';
 import { logger } from './logger';
-import { parseTimeStr, absFloat, extractProxyCode, formatBeijingTime } from './utils';
+import { parseTimeStr, absFloat, extractProxyCode, formatBeijingTime, combineMemberRemarks } from './utils';
 import { dbHolder } from './db';
 
 // ============================================================
@@ -16,6 +16,31 @@ const GROUP_MAX_SCORES: Record<string, number> = {
   environment: 60,
   marking: 80,
 };
+
+/**
+ * 平台 A 在待受理/已受理阶段会先扣减余额，但会员汇总的 totalWithdraw*
+ * 只累计已出款记录。因此风控通知展示资金快照时，必须将当前提款计入一次。
+ * 该函数只服务于展示结果，不改变规则使用的历史数据。
+ */
+export function calculateCurrentWithdrawalPresentation(
+  totalRecharge: string | number | null | undefined,
+  historicalWithdraw: string | number | null | undefined,
+  historicalWithdrawCount: unknown,
+  currentWithdrawal: string | number | null | undefined,
+): { rechargeAmount: number; withdrawAmount: number; withdrawCount: number; rechargeWithdrawDiff: number } {
+  const rechargeAmount = absFloat(totalRecharge);
+  const currentAmount = absFloat(currentWithdrawal);
+  const withdrawAmount = absFloat(historicalWithdraw) + currentAmount;
+  const historicalCount = Math.max(0, Math.trunc(Number(historicalWithdrawCount) || 0));
+  const withdrawCount = historicalCount + (currentAmount > 0 ? 1 : 0);
+
+  return {
+    rechargeAmount,
+    withdrawAmount,
+    withdrawCount,
+    rechargeWithdrawDiff: rechargeAmount - withdrawAmount,
+  };
+}
 
 const handledRulesCache = new LRUCache<string, { rules: string[]; ts: number }>({
   max: 500,
@@ -83,7 +108,7 @@ async function getMemberReviewedPeriods(memberId: string): Promise<Set<string>> 
     const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000);
 
     const [feedbacks, oldEvals] = await Promise.all([
-      // 1. 手动已审核的期号（来自 RuleFeedback，仅查最近7天）
+      // 1. 已审核的期号（人工或超时自动审核，来自 RuleFeedback，仅查最近7天）
       dbHolder.db.ruleFeedback.findMany({
         where: { memberId, feedback: 'review', ruleId: { in: ['R24', 'R25', 'R26'] }, createdAt: { gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) } },
         select: { periodInfo: true },
@@ -240,15 +265,21 @@ export async function evaluateRules(ctx: RuleContext): Promise<EvaluationResult>
   const memberCreateTime = parseTimeStr(memberCreateTimeRaw);
   const registerTimeStr = memberCreateTime ? formatBeijingTime(memberCreateTime) : '';
 
+  const orderTime = parseTimeStr(
+    ctx.order?.createTime || (ctx.order as Record<string, unknown>)?.createdAt as string | number | undefined,
+  ) || Date.now();
   const daysSinceReg = memberCreateTime
-    ? (Date.now() - memberCreateTime) / 86400000
+    ? Math.max(0, (orderTime - memberCreateTime) / 86400000)
     : undefined;
 
-  const rechargeAmount = absFloat(ctx.member?.sumRecharge);
-  const withdrawAmount = absFloat(ctx.member?.sumWithdraw);
-  const balanceDiff = ctx.member?.balanceDifference;
-  // 优先用 API 返回的 balanceDifference（充值提款差额），否则用 sumRecharge - sumWithdraw
-  const diffValue = balanceDiff != null ? balanceDiff : (rechargeAmount - withdrawAmount);
+  // 平台 A 会员汇总在 1/2 状态尚未写入本次提款，但余额已按申请额扣减。
+  // 通知中展示的是当前提款后的资金快照，因此只在展示结果中补入本单。
+  const funds = calculateCurrentWithdrawalPresentation(
+    ctx.member?.sumRecharge,
+    ctx.member?.sumWithdraw,
+    ctx.member?.sumWithdrawTimes,
+    ctx.order?.amount,
+  );
 
   return {
     orderId: String(ctx.order?.orderNo || ctx.order?.id || ''),
@@ -259,15 +290,16 @@ export async function evaluateRules(ctx: RuleContext): Promise<EvaluationResult>
     triggeredRules,
     groupScores,
     depositCount: ctx.member?.sumRechargeTimes ?? 0,
-    withdrawCount: ctx.member?.sumWithdrawTimes ?? 0,
+    withdrawCount: funds.withdrawCount,
     registerTime: registerTimeStr,
     daysSinceReg,
-    rechargeWithdrawDiff: diffValue,
-    totalRecharge: rechargeAmount,
-    totalWithdraw: withdrawAmount,
+    rechargeWithdrawDiff: funds.rechargeWithdrawDiff,
+    totalRecharge: funds.rechargeAmount,
+    totalWithdraw: funds.withdrawAmount,
     proxyCode: extractProxyCode(ctx.order, ctx.member),
     orderAmount: String(ctx.order?.amount || ''),
     balance: String(ctx.member?.balance ?? ctx.order?.balance ?? ''),
+    remark: combineMemberRemarks([ctx.member?.remark, ctx.order?.memberRemark]),
     periodInfo: [ctx._lhcResult?.periodInfo, ctx._sscResult?.periodInfo, ctx._k3Result?.periodInfo, ctx._pk10Result?.periodInfo].filter(Boolean).join('\n') || '',
     topGameTypes: ctx.betsCount?.topGameTypes || undefined,
     vipLevel: ctx.member?.vipLevel,

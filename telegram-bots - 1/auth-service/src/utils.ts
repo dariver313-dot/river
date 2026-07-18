@@ -25,6 +25,41 @@ export function getTimezoneDateRange(tzOffsetHours: number): { start: number; en
 }
 
 /**
+ * 将明确的 YYYY-MM-DD 解析为指定固定时区的自然日范围。
+ *
+ * 平台 B 的查询参数使用 UTC 毫秒时间戳；这里按配置时区计算当天 00:00:00.000
+ * 至 23:59:59.999，避免服务器时区影响日报边界。
+ */
+export function getDateRangeForTimezone(date: string, tzOffsetHours: number): { start: number; end: number } {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
+  if (!match) throw new RangeError('日期必须为 YYYY-MM-DD');
+
+  const [, yearText, monthText, dayText] = match;
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  if (year < 2000 || year > 2100 || month < 1 || month > 12 || day < 1 || day > daysInMonth) {
+    throw new RangeError('日期无效');
+  }
+
+  const safeOffset = Number.isFinite(tzOffsetHours) && tzOffsetHours >= -12 && tzOffsetHours <= 14
+    ? tzOffsetHours
+    : 8;
+  const offset = safeOffset * 3600000;
+  const start = Date.UTC(year, month - 1, day) - offset;
+  return { start, end: start + 24 * 60 * 60 * 1000 - 1 };
+}
+
+/** 将 UTC 毫秒时间戳转换为平台 A 接受的无时区日期字符串。 */
+export function timestampToPlatformDateTime(timestamp: number, tzOffsetHours: number): string {
+  const safeOffset = Number.isFinite(tzOffsetHours) && tzOffsetHours >= -12 && tzOffsetHours <= 14
+    ? tzOffsetHours
+    : 8;
+  return new Date(timestamp + safeOffset * 3600000).toISOString().replace('T', ' ').slice(0, 19);
+}
+
+/**
  * 创建用户级并发锁工厂
  *
  * 每个平台模块调用 createUserLock() 获得独立的锁 Map 和 withUserLock 函数，

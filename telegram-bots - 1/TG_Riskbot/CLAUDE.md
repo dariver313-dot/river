@@ -38,7 +38,8 @@ The rule system is split across three files for maintainability:
 |------|------|
 | `rule-types.ts` | Interfaces: `RiskRule`, `RuleContext`, `RuleResult`, `EvaluationResult` |
 | `rules.ts` | All rule definitions (~1400 lines) as `export const rules: RiskRule[]`. Each rule has: id, name, severity, weight, group, enabled flag, optional `precondition`, and `evaluate(ctx)` function. Helper functions for two-side detection, channel normalization, association scoring live here too. |
-| `rule-engine.ts` | Execution engine: `evaluateRules()` iterates enabled rules, skips handled ones, aggregates group scores, computes risk level. Also manages `handledRulesCache` (per-order), `memberReviewedPeriodsCache` (per-member, prevents re-triggering R24/R25 for already-reviewed periods), and rule state toggling (`setRuleEnabled`, `getRuleStates`, `applyRuleStates`). |
+| `rule-engine.ts` | Execution engine: `evaluateRules()` iterates enabled rules, skips handled ones, aggregates group scores, computes risk level. Also manages per-order feedback and member periods explicitly cleared by an operator. |
+| `risk-data-loader.ts` | Builds independent order-day, rolling lottery-history, recharge, and successful-withdrawal windows; fetches only data required by enabled rules and reports completeness. |
 
 **Rule groups** and their max per-group score caps: `identity` (80), `association` (80), `behavior` (80), `environment` (60), `marking` (80). Group scores are capped individually, then summed for the total score.
 
@@ -48,18 +49,18 @@ The rule system is split across three files for maintainability:
 
 | File | Role |
 |------|------|
-| `index.ts` | Main entry: env/config loading, HTTP server via `server.ts`, polling loop, WebSocket dispatch via `ws-client.ts`, notification pipeline with dedup (`notifyingLocks` map), daily reports, retry tracking with LRU cache |
-| `telegram.ts` | Telegram bot (grammy): `/start` (bind chat ID), `/info <memberName>` (member lookup), `/hedge <memberName>` (hedge/collusion check across subordinates), `/token` (set API token — must accept security risk first), `/setnotify` (auto-triggered by token message), inline keyboards for "人工审核", circuit breaker on TG failures (3 failures → 5min cooldown), rate limiting (1.5s per user) |
+| `index.ts` | Main entry: env/config loading, HTTP server via `server.ts`, polling loop, WebSocket dispatch via `ws-client.ts`, notification pipeline with dedup (`notifyingLocks` map), retry tracking with LRU cache |
+| `telegram.ts` | Telegram bot (grammy): `/bind` (bind chat ID), inline keyboards for "人工审核", "团体画像", and "团体对打", circuit breaker on TG failures (3 failures → 5min cooldown), rate limiting (1.5s per user) |
 | `evaluator.ts` | Order evaluation pipeline: fetches member info, bets, withdrawals, third-party game orders, payment orders, recharge summaries from platform API. Builds `RuleContext` with all LRU caches. Also updates `MemberProfile`/`AgentProfile` aggregates after evaluation. |
-| `api-client.ts` | HTTP API client for the gambling platform (SM4-encrypted responses, semaphore-limited to 60 concurrent requests with pending queue, keep-alive agents, automatic token lifecycle management) |
+| `api-client.ts` | Compatibility API client that delegates platform calls to `auth-client.ts` / auth-service, with login-log pagination and abort propagation |
 | `ws-client.ts` | WebSocket client for real-time withdrawal push (ping/pong at 30s, exponential backoff 1s→60s, max 30 retries, domain resolution from API) |
 | `server.ts` | HTTP server module extracted from index.ts. Uses `ServerDeps` interface for dependency injection. Provides routes documented below. |
-| `db.ts` | Prisma/SQLite: auto-creates DB dir, migrates from legacy paths, DDL fallback on push failure, auto-rebuilds corrupted DB |
+| `db.ts` | Prisma/SQLite: auto-creates DB dir, migrates from legacy paths, DDL fallback on push failure. Corrupted DB files are archived and startup stops unless `ALLOW_DB_REBUILD=true` is explicitly set |
 | `lhc-checker.ts` | LHC/六合彩 bet analysis: 特码, 正特, 两面, 半波, 尾数, 不中, etc. with per-amount grouping dedup |
 | `ssc-checker.ts` | SSC/时时彩 bet analysis: 两面, 斗牛, 1-5球, 前中后 |
 | `k3-checker.ts` | K3/快三 bet analysis: 和值, 独胆, 二不同号, 三不同号 |
 | `pk10-checker.ts` | PK10/赛车/飞艇 bet analysis: 两面, 冠亚和, 1-5名, 6-10名, 特殊 |
-| `utils.ts` | AES-256-GCM encrypt/decrypt for DB token storage, time parsing (`parseTimeStr`—handles ISO/Unix/legacy formats), numeric formatting, proxy code extraction, Beijing time formatting |
+| `utils.ts` | Time parsing (`parseTimeStr`), numeric formatting, proxy code extraction, and Beijing time formatting. |
 | `sm4-crypto.ts` | SM4 ECB decryption for platform API responses |
 | `constants.ts` | Agent whitelists (defaults + DB-backed reload from `BotConfig`) |
 | `logger.ts` | Pino logger with colorized console output |
@@ -83,7 +84,8 @@ All routes except `/` and `/health` require Bearer token auth (timing-safe compa
 - **RiskEval** — one per order (`orderId` unique). Stores score, risk level, triggered rules JSON, notification status
 - **RuleFeedback** — admin review records. Links to `RiskEval.id` via `evalId`. Used by `handledRules` to skip reviewed rules. Stores `periodInfo` for game-checker rules (R24/R25/R26/R27)
 - **MemberProfile** / **AgentProfile** — aggregated risk statistics
-- **BotConfig** — key-value store for API_TOKEN (encrypted), NOTIFY_CHAT_ID, RULE_STATES, LAST_DAILY_REPORT
+- **BotConfig** — key-value store for notification and rule settings
+- **SuccessfulWithdrawal** — idempotent successful-withdrawal ledger used for receiving-method and same-receiver history
 
 ### Two-Level Review Dedup (Critical for correctness)
 
@@ -119,7 +121,6 @@ The `api-client.ts` uses a semaphore (max 60 concurrent requests) with a pending
 Evaluator has multiple LRU caches, all exported for use by other modules:
 - `memberCache` (500 entries, 5min TTL) — member info
 - `ipMemberCache` / `deviceMemberCache` (2000 entries, 1hr TTL) — IP/device association
-- `memberLoginLogsCache` (500 entries, 10min TTL) — login logs
 - `receivingInfoCache` (5000 entries, 10min TTL) — receiving name+card → memberIds
 - `agentWithdrawCache` (500 entries, 30min TTL) — proxy code → withdrawing members
 - `payChannelCache` (5000 entries, 10min TTL) — payment channel → memberIds
@@ -128,29 +129,42 @@ Evaluator has multiple LRU caches, all exported for use by other modules:
 
 | Command | Description |
 |---------|-------------|
-| `/start` | Bind the current group as notification target |
-| `/info <memberName>` | Show member stats: registration time, recharge/withdraw totals, bet summary, login IPs, associated members, agent info |
-| `/hedge <memberName>` | Hedge/collusion check: fetches subordinates' bets and checks for mutual-exclusion betting across members |
-| `/token <token>` | Set API token (must first acknowledge security warning) |
-| `/setnotify` | Auto-triggered; binds group chat ID |
+| `/bind` | Bind the current group as notification target |
 
 ### Encryption
 
 - **Platform API**: SM4 ECB with PKCS#7 padding, key derived via MD5(token), responses Base64-encoded. Legacy protocol, cannot be changed.
-- **Token at rest**: AES-256-GCM with a 64-char hex key from `ENCRYPTION_KEY` env var. Falls back to plaintext if key not configured.
+- Platform tokens remain in `auth-service`; this bot stores no upstream platform token.
 
 ### Environment Variables
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `TELEGRAM_BOT_TOKEN` | Yes | — | Bot token from @BotFather |
-| `API_BASE_URL` | Yes | — | Platform API base URL |
-| `WS_URL` | If WS enabled | — | WebSocket endpoint |
+| `AUTH_SERVICE_URL` | Yes | `http://localhost:3100/api/platform-b` | auth-service platform-b endpoint |
+| `AUTH_API_KEY` | Yes | — | Bearer key accepted by auth-service |
+| `ADMIN_USER_IDS` | No | `8373296041` | Telegram admin IDs allowed to bind chat, run heavy queries, and click review buttons |
 | `WS_ENABLED` | No | `true` | Enable WebSocket push |
-| `POLL_INTERVAL` | No | `60` | HTTP polling interval in seconds |
+| `POLL_INTERVAL` | No | `25` | HTTP polling interval in seconds |
 | `PORT` | No | `0` (random) | HTTP server port |
+| `HOST` | No | `0.0.0.0` | HTTP bind address; use `127.0.0.1` when only local health checks are needed |
+| `NOTIFY_CHAT_ID` | No | DB binding | Fixed Telegram notification chat; `/bind` persists it when omitted |
+| `DATABASE_URL` | No | project SQLite file | Optional custom SQLite location |
 | `TZ_OFFSET` | No | `8` | Timezone offset (UTC+8) |
-| `ENCRYPTION_KEY` | No | — | 64-char hex AES-256-GCM key for DB token encryption |
+| `RISK_FINGERPRINT_SECRET` | Yes | — | Dedicated HMAC secret for receiving-name/card fingerprints |
+| `ALLOW_DB_REBUILD` | No | `false` | If `true`, archive corrupted SQLite files and rebuild a fresh DB; keep `false` in production unless recovery is intentional |
+| `AUTH_CLIENT_CONCURRENCY` | No | `8` | Max concurrent normal auth-service requests |
+| `AUTH_CLIENT_LOGIN_LOG_CONCURRENCY` | No | `2` | Max concurrent login-log requests |
+| `WS_CONCURRENCY` | No | `3` | Max concurrent WebSocket order evaluations |
+| `POLL_EVAL_MAX_CONCURRENCY` | No | `8` | Max concurrent HTTP polling order evaluations |
+| `NOTIFY_CONCURRENCY` | No | `5` | Max concurrent risk notifications |
+| `REPLAY_NOTIFY_CONCURRENCY` | No | `5` | Max concurrent retries for previously unnotified risk evaluations |
+| `PREFETCH_BATCH_SIZE` | No | `10` | Batch size for member detail prefetch in polling mode |
+| `DAILY_LOGIN_MAX_PAGES` | No | `3` | Pages fetched for automatic same-day IP/device association rules |
+| `DAILY_LOGIN_PAGE_SIZE` | No | `50` | Page size for automatic same-day login association lookup |
+| `PROFILE_LOGIN_MAX_PAGES` | No | `10` | Pages fetched by Telegram group-profile / hedge buttons |
+| `PROFILE_LOGIN_PAGE_SIZE` | No | `50` | Page size for Telegram heavy login queries |
+| `HEAVY_QUERY_CONCURRENCY` | No | `2` | Max concurrent Telegram group-profile / hedge button queries |
 | `PROXY_BLACKLIST` | No | — | Comma-separated high-risk agent codes (R31) |
 | `AGENT_WHITELIST` | No | hardcoded defaults | Comma-separated agent whitelist (overrides defaults) |
 | `RISK_REMARK_KEYWORDS` | No | hardcoded defaults | Comma-separated keywords for suspicious remark detection (R17) |

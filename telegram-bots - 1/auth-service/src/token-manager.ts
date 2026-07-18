@@ -40,11 +40,12 @@ function isPlatformBConfig(config: LoginConfig): config is PlatformBLoginConfig 
   return (config as PlatformBLoginConfig).platform === 'b';
 }
 
-class TokenManager {
+export class TokenManager {
   private cache = new Map<TokenKey, TokenEntry>();
   private refreshTimers = new Map<TokenKey, ReturnType<typeof setTimeout>>();
   private refreshConfigs = new Map<TokenKey, LoginConfig>();
   private refreshCallbacks = new Map<TokenKey, (newToken: string) => void>();
+  private refreshInFlight = new Map<TokenKey, Promise<string | null>>();
   private stopped = new Map<TokenKey, boolean>();
   private consecutiveFailures = new Map<TokenKey, number>();
 
@@ -91,11 +92,6 @@ class TokenManager {
   async invalidateToken(key: TokenKey): Promise<string | null> {
     const entry = this.cache.get(key);
 
-    // 如果已经在刷新中，共享同一个 Promise，避免并发重复登录
-    if (entry?.refreshing && entry.refreshPromise) {
-      return entry.refreshPromise;
-    }
-
     if (entry) {
       entry.expiresAt = Date.now() - 1;
     }
@@ -106,21 +102,7 @@ class TokenManager {
       return null;
     }
 
-    // 创建带重试的刷新 Promise，并存储到 entry 以便并发调用共享
-    const refreshPromise = this._invalidateWithRetry(key, config);
-    if (entry) {
-      entry.refreshing = true;
-      entry.refreshPromise = refreshPromise;
-    }
-
-    try {
-      return await refreshPromise;
-    } finally {
-      if (entry) {
-        entry.refreshing = false;
-        entry.refreshPromise = null;
-      }
-    }
+    return this.runSingleRefresh(key, () => this._invalidateWithRetry(key, config));
   }
 
   /** 带重试的刷新逻辑（最多3次，指数退避） */
@@ -148,11 +130,7 @@ class TokenManager {
   private triggerRefresh(key: TokenKey): void {
     const config = this.refreshConfigs.get(key);
     if (!config) return;
-
-    const entry = this.cache.get(key);
-    if (!entry || entry.refreshing) return;
-
-    entry.refreshing = true;
+    if (this.refreshInFlight.has(key)) return;
     this.refreshToken(key, config).catch((err) => {
       log('warn', '后台刷新失败', { key, err: err?.message?.slice(0, 100) || String(err) });
     });
@@ -160,26 +138,30 @@ class TokenManager {
 
   /** 刷新 Token（自动登录），并发调用共享同一个 Promise */
   async refreshToken(key: TokenKey, config: LoginConfig): Promise<string | null> {
+    return this.runSingleRefresh(key, () => this._doRefresh(key, config));
+  }
+
+  /** 同一平台最多执行一个登录请求；即使首次登录失败、缓存中尚无 Token，也能合并并发刷新。 */
+  private runSingleRefresh(key: TokenKey, task: () => Promise<string | null>): Promise<string | null> {
+    const existing = this.refreshInFlight.get(key);
+    if (existing) return existing;
+
     const entry = this.cache.get(key);
-
-    if (entry?.refreshing && entry.refreshPromise) {
-      return entry.refreshPromise;
-    }
-
-    if (entry) entry.refreshing = true;
-
-    const refreshPromise = this._doRefresh(key, config);
-    if (entry) entry.refreshPromise = refreshPromise;
-
-    try {
-      const newToken = await refreshPromise;
-      return newToken;
-    } finally {
-      if (entry) {
-        entry.refreshing = false;
-        entry.refreshPromise = null;
+    let promise: Promise<string | null>;
+    promise = task().finally(() => {
+      if (this.refreshInFlight.get(key) === promise) this.refreshInFlight.delete(key);
+      const current = this.cache.get(key);
+      if (current) {
+        current.refreshing = false;
+        current.refreshPromise = null;
       }
+    });
+    this.refreshInFlight.set(key, promise);
+    if (entry) {
+      entry.refreshing = true;
+      entry.refreshPromise = promise;
     }
+    return promise;
   }
 
   /** 实际执行登录。平台A 使用平台返回的 tokenExpireIn 作为 TTL */
@@ -254,7 +236,13 @@ class TokenManager {
   /** 启动定时刷新（Token 过期前自动续期）。
    *  刷新失败时自动缩短间隔（5分钟重试），成功后恢复原始间隔。
    *  连续失败超过 MAX_CONSECUTIVE_FAILURES 次时自动停止。 */
-  startAutoRefresh(key: TokenKey, config: LoginConfig, intervalMs: number = REFRESH_INTERVAL, onRefresh?: (newToken: string) => void): void {
+  startAutoRefresh(
+    key: TokenKey,
+    config: LoginConfig,
+    intervalMs: number = REFRESH_INTERVAL,
+    onRefresh?: (newToken: string) => void,
+    initialDelayMs?: number,
+  ): void {
     this.stopAutoRefresh(key);
     this.refreshConfigs.set(key, config);
     if (onRefresh) this.refreshCallbacks.set(key, onRefresh);
@@ -262,14 +250,15 @@ class TokenManager {
     this.consecutiveFailures.set(key, 0);
 
     const RETRY_INTERVAL = 5 * 60 * 1000;
-    let currentInterval = intervalMs;
+    let currentInterval = initialDelayMs ?? intervalMs;
 
     const schedule = () => {
       if (this.stopped.get(key)) return; // 已停止，不再调度
       const timer = setTimeout(async () => {
         if (this.stopped.get(key)) return; // 定时器触发时再次检查
         try {
-          await this.refreshToken(key, config);
+          const newToken = await this.refreshToken(key, config);
+          if (!newToken) throw new Error('自动登录未返回 Token');
           if (currentInterval !== intervalMs) {
             currentInterval = intervalMs;
             log('info', 'refresh ok, reset interval', { key, min: intervalMs / 60000 });

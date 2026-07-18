@@ -1,0 +1,18 @@
+{
+  "name": "macau-balance-sheet",
+  "version": "1.0.0",
+  "private": true,
+  "description": "澳门娱乐城日结报表工具",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node app.js",
+    "dev": "node --watch app.js",
+    "test": "node --test tests"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "jszip": "^3.10.1"
+  }
+}

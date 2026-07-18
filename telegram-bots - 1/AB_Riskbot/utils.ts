@@ -77,6 +77,32 @@ export function fmtNum(n: number | string | undefined | null): string {
   return num.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
 }
 
+/** 规范会员备注，用于通知展示和“无备注”规则，避免空白/符号备注造成噪声。 */
+export function normalizeMemberRemark(value: unknown, maxLength = 80): string {
+  const compact = String(value ?? '')
+    .replace(/[\u0000-\u001F\u007F\u200B-\u200D\uFEFF]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const meaningful = compact.replace(/[\s\p{P}\p{S}]/gu, '');
+  if (!meaningful) return '';
+  return compact.length > maxLength ? `${compact.slice(0, maxLength)}...` : compact;
+}
+
+/** 合并会员与订单备注，去除重复内容后再用于展示和规则判断。 */
+export function combineMemberRemarks(values: unknown[], maxLength = 80): string {
+  const seen = new Set<string>();
+  const remarks: string[] = [];
+  for (const value of values) {
+    const remark = normalizeMemberRemark(value, maxLength);
+    const key = remark.toLocaleLowerCase();
+    if (remark && !seen.has(key)) {
+      seen.add(key);
+      remarks.push(remark);
+    }
+  }
+  return normalizeMemberRemark(remarks.join('；'), maxLength);
+}
+
 /** 支付渠道名标准化映射，消除中英文/简称差异（支付宝支付 ↔ alipay 等） */
 const PAY_CHANNEL_ALIASES: Record<string, string> = {
   '支付宝支付': 'alipay', '支付宝': 'alipay', 'alipay': 'alipay', 'ali': 'alipay',
@@ -103,7 +129,7 @@ export function normalizePayChannel(raw: string): string {
   if (!key) return '';
   const cached = payChannelCache.get(key);
   if (cached !== undefined) return cached;
-  const result = PAY_CHANNEL_ALIASES[key] || key;
+  const result = String(PAY_CHANNEL_ALIASES[key] || key).toLowerCase();
   payChannelCache.set(key, result);
   return result;
 }
@@ -199,5 +225,3 @@ export function getTzOffsetMinutes(): number {
 export function getTzOffsetMs(): number {
   return getTzOffsetMinutes() * 60 * 1000;
 }
-
-

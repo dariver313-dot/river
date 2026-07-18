@@ -8,12 +8,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 npm run build          # TypeScript → dist/ (tsc)
 npm start              # Run built output (node dist/index.js)
 npm run dev            # Dev mode (ts-node src/index.ts)
+npm test               # Token single-flight and API date contract tests
 
 # Encrypt sensitive values for .env
 AUTH_SECRET_KEY=xxx npx ts-node src/encrypt.ts
 ```
 
-There are no tests or lint configured.
+TypeScript strict mode is the primary static check; focused regression tests cover token refresh concurrency and timestamp conversion.
 
 ## Architecture
 
@@ -41,7 +42,7 @@ Robot client → [Bearer API Key auth + rate limit] → Express route → platfo
 
 - `src/index.ts` — Bootstrap: auto-login on startup, start Express, set up graceful shutdown.
 - `src/api.ts` — All routes under `/api/`. Auth middleware (Bearer API key from `BOT_API_KEYS` env), in-memory rate limiting (finance 30/min, query 120/min, setToken 5/min), input validation, error sanitization.
-- `src/token-manager.ts` — In-memory token store with per-platform keys (`platform_a`, `platform_b_robot`, `platform_b_risk`). Auto-refreshes every 2 hours (TTL is 4h). Concurrent refresh requests share a single Promise. Expired tokens trigger background refresh.
+- `src/token-manager.ts` — In-memory token store with per-platform keys (`platform_a`, `platform_b`). Auto-refreshes before expiry. Concurrent refresh requests share a single Promise even when no previous token exists.
 - `src/platforms/platform-a.ts` — Platform A proxied API calls. Uses Bearer JWT, URLSearchParams-style requests, parallel query limit of 3.
 - `src/platforms/platform-b.ts` — Platform B proxied API calls. Uses X-AUTH-TOKEN, SM4 response decryption, retries on 429 with Retry-After, separate base URLs for robot vs risk.
 
@@ -63,4 +64,3 @@ Robot client → [Bearer API Key auth + rate limit] → Express route → platfo
 ### Key environment variables
 
 See `.env.example` for the full list. The `crypto-utils.ts` `env()` function reads `*_ENC` (encrypted) before falling back to plain-text env vars.
-

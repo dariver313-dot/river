@@ -1,8 +1,8 @@
-import type { RiskRule, RuleContext, RuleResult, EvaluationResult } from './rule-types';
+import type { RiskRule, RuleContext, EvaluationResult } from './rule-types';
 import { rules } from './rules';
 import { LRUCache } from 'lru-cache';
 import { logger } from './logger';
-import { parseTimeStr, absFloat, extractProxyCode, formatBeijingTime } from './utils';
+import { parseTimeStr, absFloat, extractProxyCode, formatBeijingTime, combineMemberRemarks } from './utils';
 import { dbHolder } from './db';
 
 // ============================================================
@@ -52,10 +52,13 @@ const memberReviewedPeriodsCache = new LRUCache<string, Set<string>>({
 function parsePeriodKeyFromLine(line: string): string | null {
   const trimmed = line.trim();
   if (!trimmed) return null;
-  // violation line format: "{lotteryName} {issue} {details...}"
+  // violation line format: "{lotteryName} {issue} {cateName}：{details...}"
   const parts = trimmed.split(/\s+/);
   if (parts.length < 2) return null;
-  return `${parts[0]}:::${parts[1]}`;
+  if (parts.length < 3) return `${parts[0]}:::${parts[1]}`;
+  const cateName = parts[2].split(/[：:]/)[0];
+  if (!cateName) return `${parts[0]}:::${parts[1]}`;
+  return `${parts[0]}:::${parts[1]}:::${cateName}`;
 }
 
 function parseReviewedPeriodKeys(periodInfo: string): Set<string> {
@@ -77,11 +80,11 @@ async function getMemberReviewedPeriods(memberId: string): Promise<Set<string>> 
   const allKeys = new Set<string>();
 
   try {
-    // 1. 手动已审核的期号（来自 RuleFeedback）
+    // 1. 已审核的期号（人工或超时自动审核，来自 RuleFeedback）
     const feedbacks = await dbHolder.db.ruleFeedback.findMany({
       where: {
         memberId,
-        feedback: 'review',
+        feedback: { in: ['clear', 'review'] },
         ruleId: { in: ['R24', 'R25', 'R26', 'R27'] },
       },
       select: { periodInfo: true },
@@ -94,32 +97,6 @@ async function getMemberReviewedPeriods(memberId: string): Promise<Set<string>> 
     logger.warn({ memberId, err: (err as Error).message }, '[规则引擎] 查询已审核期号失败');
   }
 
-  try {
-    // 2. 超过 5 分钟的旧订单，期号自动过期（无论是否手动审核过）
-    const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000);
-    const oldEvals = await dbHolder.db.riskEval.findMany({
-      where: {
-        memberId,
-        createdAt: { lt: fiveMinAgo },
-        triggeredRules: { not: '[]' },
-      },
-      select: { detail: true },
-      orderBy: { createdAt: 'desc' },
-      take: 20,
-    });
-    for (const e of oldEvals) {
-      try {
-        const d = JSON.parse(e.detail || '{}');
-        if (d.periodInfo) {
-          const keys = parseReviewedPeriodKeys(d.periodInfo);
-          for (const k of keys) allKeys.add(k);
-        }
-      } catch { /* detail JSON parse 失败则跳过 */ }
-    }
-  } catch (err) {
-    logger.warn({ memberId, err: (err as Error).message }, '[规则引擎] 查询过期期号失败');
-  }
-
   memberReviewedPeriodsCache.set(memberId, allKeys);
   if (allKeys.size > 0) {
     logger.info({ memberId, count: allKeys.size }, '[规则引擎] 已审核期号加载完成');
@@ -127,7 +104,7 @@ async function getMemberReviewedPeriods(memberId: string): Promise<Set<string>> 
   return allKeys;
 }
 
-/** 清除指定会员的已审核期号缓存（人工审核后调用） */
+/** 清除指定会员的已审核期号缓存（人工或自动审核后调用） */
 export function invalidateMemberReviewedPeriods(memberId: string): void {
   memberReviewedPeriodsCache.delete(memberId);
 }
@@ -142,9 +119,10 @@ function needsIssueGroupsCheck(): boolean {
 }
 
 export async function evaluateRules(ctx: RuleContext): Promise<EvaluationResult> {
-  if (needsIssueGroupsCheck() && ctx.bets?.length > 0) {
+  const issueSourceBets = ctx.dailyBets || [];
+  if (needsIssueGroupsCheck() && issueSourceBets.length > 0) {
     const issueGroups = new Map<string, any[]>();
-    for (const b of ctx.bets) {
+    for (const b of issueSourceBets) {
       const key = `${b.lotteryName} ${b.issue} ${b.playClassName}`;
       if (!issueGroups.has(key)) issueGroups.set(key, []);
       issueGroups.get(key)!.push(b);
@@ -156,7 +134,7 @@ export async function evaluateRules(ctx: RuleContext): Promise<EvaluationResult>
   try {
     const orderId = String(ctx.order?.orderNo || ctx.order?.id || '');
     if (orderId) {
-      // 仅跳过当前订单已人工审核的规则，防止跨订单误跳过
+      // 仅跳过当前订单已审核的规则，防止跨订单误跳过
       if (handledRulesCache.has(orderId)) {
         const cached = handledRulesCache.get(orderId)!;
         if (Date.now() - cached.ts < 60 * 1000) {
@@ -174,7 +152,7 @@ export async function evaluateRules(ctx: RuleContext): Promise<EvaluationResult>
           const handled = await dbHolder.db.ruleFeedback.findMany({
             where: {
               evalId: riskEval.id,
-              feedback: 'review',
+              feedback: { in: ['confirm', 'clear', 'review'] },
             },
             select: { ruleId: true },
           });
@@ -204,13 +182,16 @@ export async function evaluateRules(ctx: RuleContext): Promise<EvaluationResult>
     try {
       const result = rule.evaluate(ctx);
       if (result.triggered) {
+        const severity = result.severity || rule.severity;
         triggeredRules.push({
           id: rule.id,
           name: rule.name,
-          severity: rule.severity,
+          severity,
           group: rule.group,
           reason: result.reason || rule.description,
           score: result.score,
+          presentation: result.presentation
+            || (result.score >= 15 || severity === 'CRITICAL' ? 'core' : 'support'),
         });
         const prev = groupScores[rule.group] || 0;
         const groupMax = GROUP_MAX_SCORES[rule.group] || 80;
@@ -228,12 +209,15 @@ export async function evaluateRules(ctx: RuleContext): Promise<EvaluationResult>
   else if (totalScore >= 30) riskLevel = 'HIGH';
   else if (totalScore >= 15) riskLevel = 'MEDIUM';
 
-  const memberCreateTimeRaw = ctx.member?.createTime ?? ctx.order?.createTime;
+  const memberCreateTimeRaw = ctx.member?.createTime;
   const memberCreateTime = parseTimeStr(memberCreateTimeRaw);
+  const orderTime = parseTimeStr(
+    ctx.order?.createTime || (ctx.order as Record<string, unknown>)?.createdAt as string | number | undefined,
+  ) || Date.now();
   const registerTimeStr = memberCreateTime ? formatBeijingTime(memberCreateTime) : '';
 
   const daysSinceReg = memberCreateTime
-    ? (Date.now() - memberCreateTime) / 86400000
+    ? Math.max(0, (orderTime - memberCreateTime) / 86400000)
     : 999;
 
   const rechargeAmount = absFloat(ctx.order?.sumRecharge);
@@ -252,9 +236,12 @@ export async function evaluateRules(ctx: RuleContext): Promise<EvaluationResult>
     registerTime: registerTimeStr,
     daysSinceReg,
     rechargeWithdrawDiff: rechargeAmount - withdrawAmount,
+    rechargeAmount,
+    withdrawAmount,
     proxyCode: extractProxyCode(ctx.order, ctx.member),
     orderAmount: String(ctx.order?.amount || ''),
     balance: String(ctx.member?.balance ?? ctx.order?.balance ?? ''),
+    remark: combineMemberRemarks([ctx.member?.remark, ctx.order?.memberRemark]),
     periodInfo: [ctx._lhcResult?.periodInfo, ctx._sscResult?.periodInfo, ctx._k3Result?.periodInfo, ctx._pk10Result?.periodInfo].filter(Boolean).join('\n') || '',
     mainGameType: ctx.mainGameType,
   };
@@ -298,4 +285,5 @@ export function applyRuleStates(states: Record<string, boolean>): void {
     }
   }
   cachedNeedsIssueGroups = null;
+  invalidateActiveRuleIds();
 }

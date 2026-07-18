@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>日结报表</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand"><span class="brand-mark">账</span><strong>日结报表</strong></div>
+      <nav aria-label="主导航">
+        <button class="nav-button active" data-view="report" type="button">生成报表</button>
+        <button class="nav-button" data-view="settings" type="button">渠道与费率</button>
+      </nav>
+      <span id="connectionState" class="connection-state">正在连接</span>
+    </header>
+
+    <main>
+      <section id="reportView">
+        <form id="reportForm" class="toolbar">
+          <label>报表日期<input id="reportDate" type="date" required></label>
+          <label>上一日已完成报表（可选）<input id="previousWorkbook" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"></label>
+          <div class="toolbar-actions">
+            <button id="manageAdjustments" class="secondary" type="button">补录</button>
+            <button id="previewButton" class="primary" type="submit">查询并生成</button>
+          </div>
+        </form>
+
+        <div id="emptyState" class="workspace-note">
+          <strong id="templateName">正在识别模板</strong>
+          <p>系统按渠道名称匹配成功充值和提款订单；未提交、人工充值、资金转出可在补录中添加。导出前会阻止未匹配渠道和不能安全写入的模板位置。</p>
+        </div>
+
+        <section id="reportResult" class="hidden">
+          <div class="metric-strip">
+            <div><span>会员充值</span><strong id="rechargeTotal">0</strong><small id="rechargeCount">0 笔</small></div>
+            <div><span>会员提款</span><strong id="withdrawTotal">0</strong><small id="withdrawCount">0 笔</small></div>
+            <div><span>手续费</span><strong id="feeTotal">0</strong><small>按渠道费率计算</small></div>
+            <div><span id="reportStatus">待生成</span><strong id="channelCount">0</strong><small id="reportStatusDetail">—</small></div>
+          </div>
+
+          <section class="table-section">
+            <div class="section-heading"><h1>渠道汇总</h1><button id="exportButton" class="primary" type="button" disabled>导出 Excel</button></div>
+            <div class="table-scroll"><table>
+              <thead><tr><th>模板渠道</th><th>会员充值</th><th>会员提款</th><th>手续费</th><th>补录</th><th>备注</th></tr></thead>
+              <tbody id="reportChannels"></tbody>
+            </table></div>
+          </section>
+
+          <section id="issuesSection" class="issues hidden">
+            <div class="section-heading"><h1>待处理</h1><span>处理后重新查询即可导出</span></div>
+            <div id="issuesList"></div>
+          </section>
+        </section>
+      </section>
+
+      <section id="settingsView" class="hidden">
+        <form id="templateForm" class="settings-bar">
+          <div><h1>模板</h1><p>系统会从模板公式自动识别渠道和账本位置，不需要填写单元格坐标。</p></div>
+          <label>当前模板<select id="templateFile"></select></label>
+          <label>单页订单数<select id="pageSize"><option value="50">50</option><option value="100">100</option></select></label>
+          <label>导入新模板<input id="templateUpload" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"></label>
+          <div class="toolbar-actions"><button class="primary" type="submit">保存模板设置</button></div>
+        </form>
+
+        <section class="config-section">
+          <div class="section-heading"><div><h1>渠道名称与费率</h1><span>名称可用逗号分隔。默认按模板渠道名称匹配，名称不同才需要改。</span></div><button id="saveChannels" class="primary" type="button">保存渠道设置</button></div>
+          <div class="table-scroll"><table class="channel-settings-table">
+            <thead><tr><th>模板渠道</th><th>代收名称</th><th>代收费率 %</th><th>固定/笔</th><th>代付名称</th><th>代付费率 %</th><th>固定/笔</th><th>备注</th></tr></thead>
+            <tbody id="channelSettings"></tbody>
+          </table></div>
+        </section>
+      </section>
+    </main>
+
+    <dialog id="adjustmentDialog">
+      <form id="adjustmentForm" method="dialog">
+        <div class="dialog-heading"><h2>补录</h2><button id="closeAdjustmentDialog" class="icon-button" type="button" title="关闭">×</button></div>
+        <div class="form-grid">
+          <label class="wide">渠道<select id="adjustmentChannel"></select></label>
+          <label>未提交<input id="pendingAmount" value="0" inputmode="decimal"></label>
+          <label>人工充值<input id="manualRechargeAmount" value="0" inputmode="decimal"></label>
+          <label>资金转出<input id="transferOutAmount" value="0" inputmode="decimal"></label>
+          <label class="wide">备注<input id="adjustmentNote" maxlength="300"></label>
+        </div>
+        <div class="dialog-actions"><button id="addAdjustment" class="primary" type="button">加入本次报表</button><span></span><button id="finishAdjustments" class="secondary" type="button">完成</button></div>
+        <div id="adjustmentEntries"></div>
+      </form>
+    </dialog>
+
+    <div id="toast" class="toast hidden" role="status"></div>
+    <script src="/app.js"></script>
+  </body>
+</html>

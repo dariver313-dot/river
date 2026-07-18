@@ -24,10 +24,14 @@ const levelColors: Record<string, string> = {
   FATAL: '\x1b[41m\x1b[37m',
 };
 
+function shouldUseColor(): boolean {
+  return process.env.LOG_COLOR === 'true' && !process.env.NO_COLOR && process.stdout.isTTY === true;
+}
+
 function formatLog(o: any): string {
   const lv = levelNames[o.level] || 'INFO';
-  const color = levelColors[lv] || '';
-  const reset = '\x1b[0m';
+  const color = shouldUseColor() ? (levelColors[lv] || '') : '';
+  const reset = color ? '\x1b[0m' : '';
   const time = formatBeijingTime(o.time);
   const msg = o.msg || '';
   const extras = Object.entries(o)

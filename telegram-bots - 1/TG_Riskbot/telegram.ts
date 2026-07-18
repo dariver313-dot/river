@@ -1,21 +1,21 @@
-import { Bot, InlineKeyboard } from 'grammy';
+import { Bot, InlineKeyboard, type Context } from 'grammy';
 import { type WithdrawOrder } from './ws-client';
 import { apiClient } from './api-client';
-import { getAllRules, setRuleEnabled, getRuleStates, invalidateMemberReviewedPeriods } from './rule-engine';
+import { invalidateMemberReviewedPeriods } from './rule-engine';
 import type { EvaluationResult } from './rule-types';
+import type { BetRecord, LoginLogItem } from './types';
 import { dbHolder } from './db';
 import { LRUCache } from 'lru-cache';
-import { getMemberProfileText, ipMemberCache, deviceMemberCache, memberLoginLogsCache } from './evaluator';
 import { logger } from './logger';
-import { fmtNum, extractProxyCode, encrypt, decrypt, formatBeijingTime } from './utils';
+import { fmtNum, extractProxyCode, formatBeijingTime, parseTimeStr, normalizeMemberRemark } from './utils';
 import { extractTwoSideDirection, expandDirections, isMutexDirection } from './rules';
-import { AGENT_WHITELIST } from './constants';
+import { isAgentWhitelisted } from './constants';
 
-const LEVEL_CONFIG: Record<string, { icon: string; label: string; head: string }> = {
-  CRITICAL: { icon: '🔴', label: '严重风险', head: '🔴' },
-  HIGH:     { icon: '🟠', label: '高风险',   head: '⚠️' },
-  MEDIUM:   { icon: '🟡', label: '中等风险', head: '🟡' },
-  LOW:      { icon: '🟢', label: '低风险',   head: '✅' },
+const LEVEL_CONFIG: Record<string, { label: string; head: string }> = {
+  CRITICAL: { label: '严重风险', head: '🔴' },
+  HIGH:     { label: '高风险',   head: '🟡' },
+  MEDIUM:   { label: '中等风险', head: '🟡' },
+  LOW:      { label: '低风险',   head: '✅' },
 };
 
 const SEVERITY_ICON: Record<string, string> = {
@@ -75,344 +75,518 @@ export function getNotifyChatId(): number | string | null {
   return notifyChatId;
 }
 
-const lastActionTime = new LRUCache<number, number>({ max: 10000, ttl: 24 * 3600000 });
-const RATE_LIMIT_MS = 1500;
-const infoQueryLocks = new Set<string>();
-const hedgeQueryLocks = new Set<string>();
-
-function checkRateLimit(userId: number | undefined): boolean {
-  if (!userId || userId <= 0) return false;
-  const now = Date.now();
-  const last = lastActionTime.get(userId) || 0;
-  if (now - last < RATE_LIMIT_MS) return false;
-  lastActionTime.set(userId, now);
-  return true;
+function buildActionKeyboard(orderId: string, reviewed = false): InlineKeyboard {
+  const keyboard = new InlineKeyboard();
+  if (!reviewed) keyboard.text('✅ 人工审核', `feedback:${orderId}:review`);
+  return keyboard
+    .text('👥 团体画像', `feedback:${orderId}:profile`)
+    .text('🎯 团体对打', `feedback:${orderId}:hedge`);
 }
 
-async function querySubordinateHedge(memberName: string): Promise<string> {
-  const HEDGE_TIMEOUT = 25 * 1000;
+export function withReviewStatus(text: string, status: '已人工审核' | '已自动审核'): string {
+  const firstLineEnd = text.indexOf('\n');
+  const title = firstLineEnd === -1 ? text : text.slice(0, firstLineEnd);
+  if (title.includes(`· ${status}`)) return text;
+  const updatedTitle = `${title} · ${status}`;
+  return firstLineEnd === -1 ? updatedTitle : `${updatedTitle}${text.slice(firstLineEnd)}`;
+}
 
-  const doQuery = async (): Promise<string> => {
-    if (AGENT_WHITELIST.has(memberName)) {
-      return `🎯 ${memberName}：白名单代理，无需检查`;
+/** Telegram 将重复的 edit 视为 400；这表示目标消息已经是预期内容。 */
+export function isTelegramMessageNotModified(error: unknown): boolean {
+  return /message is not modified/i.test((error as Error | undefined)?.message || '');
+}
+
+const DEFAULT_ADMIN_USER_IDS = ['8373296041'];
+const infoQueryLocks = new Set<string>();
+const hedgeQueryLocks = new Set<string>();
+// 人工审核与自动审核共用同一把锁，避免并发编辑同一条 Telegram 消息。
+const reviewLocks = new Set<string>();
+const PROFILE_IP_LIMIT = 5;
+const PROFILE_DEVICE_LIMIT = 5;
+const PROFILE_MEMBER_LIMIT = 50;
+const PROFILE_DISPLAY_LIMIT = 20;
+const HEDGE_MEMBER_LIMIT = 40;
+const HEDGE_DISPLAY_LIMIT = 10;
+const PROFILE_CACHE_TTL = 5 * 60 * 1000;
+const PROFILE_EXPAND_DEPTH = 2;
+const PROFILE_EXPAND_MEMBER_LIMIT = 20;
+const PROFILE_PUBLIC_IP_LIMIT = 500;
+const PROFILE_PUBLIC_DEVICE_LIMIT = 100;
+const PROFILE_NOTE_LIMIT = 5;
+
+function parsePositiveInt(value: string | undefined, fallback: number): number {
+  const n = parseInt(String(value || ''), 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+function getProfileLoginFetchOptions(): { maxPages: number; pageSize: number } {
+  return {
+    maxPages: parsePositiveInt(process.env.PROFILE_LOGIN_MAX_PAGES, 5),
+    pageSize: parsePositiveInt(process.env.PROFILE_LOGIN_PAGE_SIZE, 100),
+  };
+}
+
+function getAdminUserIds(): Set<number> {
+  const ids = [
+    ...DEFAULT_ADMIN_USER_IDS,
+    ...(process.env.ADMIN_USER_IDS || '').split(/[,\s]+/),
+  ]
+    .map(id => Number(id.trim()))
+    .filter(id => Number.isSafeInteger(id) && id > 0);
+  return new Set(ids);
+}
+
+function isAdminUser(userId: number | undefined): boolean {
+  return !!userId && getAdminUserIds().has(userId);
+}
+
+async function requireAdminCommand(ctx: Context): Promise<boolean> {
+  if (isAdminUser(ctx.from?.id)) return true;
+  await ctx.reply('⛔ 仅管理员可以操作');
+  return false;
+}
+
+async function requireAdminCallback(ctx: Context): Promise<boolean> {
+  if (isAdminUser(ctx.from?.id)) return true;
+  await ctx.answerCallbackQuery({ text: '仅管理员可以操作', show_alert: true }).catch(() => {});
+  return false;
+}
+
+async function recordFeedbackOutcome(orderId: string, feedback: 'review'): Promise<boolean> {
+  let memberId = '';
+  const recorded = await dbHolder.db.$transaction(async (tx) => {
+    const evalRecord = await tx.riskEval.findUnique({ where: { orderId } });
+    if (!evalRecord || evalRecord.feedback !== '') return false;
+
+    const updated = await tx.riskEval.updateMany({
+      where: { orderId, feedback: '' },
+      data: { feedback },
+    });
+    if (updated.count === 0) return false;
+
+    memberId = evalRecord.memberId || '';
+    let triggeredRules: Array<{ id: string }> = [];
+    try { triggeredRules = JSON.parse(evalRecord.triggeredRules || '[]'); } catch {}
+    const periodInfo = (() => {
+      try { return JSON.parse(evalRecord.detail || '{}').periodInfo || ''; } catch { return ''; }
+    })();
+
+    for (const rule of triggeredRules) {
+      const row = {
+        evalId: evalRecord.id,
+        ruleId: rule.id,
+        feedback,
+        memberId,
+        periodInfo: ['R24', 'R25', 'R26', 'R27'].includes(rule.id) ? periodInfo : '',
+      };
+      await tx.ruleFeedback.upsert({
+        where: { evalId_ruleId: { evalId: row.evalId, ruleId: row.ruleId } },
+        update: { feedback: row.feedback, memberId: row.memberId, periodInfo: row.periodInfo },
+        create: row,
+      });
     }
+    return true;
+  });
 
-    // 从 API 获取会员自身信息，取上级代理
-    let uplineName = '';
+  if (recorded && memberId) invalidateMemberReviewedPeriods(memberId);
+  return recorded;
+}
+
+interface GroupMemberHit {
+  memberName: string;
+  reasons: Set<string>;
+  latestLoginAt: number;
+}
+
+interface GroupProfile {
+  memberName: string;
+  uplineName: string;
+  ips: string[];
+  devices: string[];
+  relatedMembers: GroupMemberHit[];
+  skippedValues: string[];
+}
+
+interface MemberEnvironment {
+  memberName: string;
+  uplineName: string;
+  ips: string[];
+  devices: string[];
+}
+
+const groupProfileCache = new LRUCache<string, GroupProfile>({
+  max: 500,
+  ttl: PROFILE_CACHE_TTL,
+});
+
+function shortDeviceName(device: string): string {
+  return device.split(':')[0] || device;
+}
+
+function getPagedTotalCount(res: { totalNum?: string | number; items?: unknown[] } | null | undefined, fallback: number): number {
+  const n = parseInt(String(res?.totalNum || ''), 10);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+
+function latestLoginTimes(logs: LoginLogItem[]): Map<string, number> {
+  const times = new Map<string, number>();
+  for (const log of logs) {
+    const name = String(log.memberName || '').trim();
+    if (!name) continue;
+    const ts = parseTimeStr(log.loginTime);
+    const prev = times.get(name) || 0;
+    if (ts > prev) times.set(name, ts);
+    if (!times.has(name)) times.set(name, 0);
+  }
+  return times;
+}
+
+function sortValuesByLatestLog(logs: LoginLogItem[], field: 'loginIp' | 'device', limit: number): string[] {
+  const latest = new Map<string, number>();
+  for (const log of logs) {
+    const value = String(log[field] || '').trim();
+    if (!value) continue;
+    const ts = parseTimeStr(log.loginTime);
+    const prev = latest.get(value) || 0;
+    if (ts > prev) latest.set(value, ts);
+    if (!latest.has(value)) latest.set(value, 0);
+  }
+  return [...latest.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, limit)
+    .map(([value]) => value);
+}
+
+function mergeGroupHit(map: Map<string, GroupMemberHit>, name: string, reason: string, latestLoginAt = 0): void {
+  const memberName = String(name || '').trim();
+  if (!memberName) return;
+  const hit = map.get(memberName) || { memberName, reasons: new Set<string>(), latestLoginAt: 0 };
+  hit.reasons.add(reason);
+  if (latestLoginAt > hit.latestLoginAt) hit.latestLoginAt = latestLoginAt;
+  map.set(memberName, hit);
+}
+
+function addProfileNote(notes: string[], note: string): void {
+  if (notes.length >= PROFILE_NOTE_LIMIT || notes.includes(note)) return;
+  notes.push(note);
+}
+
+function createLimiter(max: number) {
+  let active = 0;
+  const queue: Array<() => void> = [];
+
+  const runNext = () => {
+    if (active >= max) return;
+    const next = queue.shift();
+    if (next) next();
+  };
+
+  return async function limit<T>(task: () => Promise<T>): Promise<T> {
+    if (active >= max) {
+      await new Promise<void>(resolve => queue.push(resolve));
+    }
+    active++;
     try {
-      const selfRes = await apiClient.getMemberInfoByName(memberName);
-      const selfItems = selfRes?.items || [];
-      uplineName = selfItems[0]?.agencyMemberName || '';
-    } catch { /* 获取上级失败不影响主流程 */ }
-
-    // 获取下级会员
-    let subMembers: any[] = [];
-    let subPage = 1;
-    const SUB_NEED = 30;
-    while (subPage <= 5) {
-      const subRes = await apiClient.getMembersByAgency(memberName, subPage, 200);
-      const batch = subRes?.items || (Array.isArray(subRes?.data) ? subRes.data : []) || [];
-      subMembers.push(...batch);
-      if (batch.length < 200 || subMembers.length >= SUB_NEED) break;
-      subPage++;
+      return await task();
+    } finally {
+      active--;
+      runNext();
     }
+  };
+}
 
-    const subNames = subMembers
-      .map((m: any) => m.memberName || m.userName || '')
-      .filter((n: string) => n && n !== memberName)
-      .slice(0, 30) as string[];
+type TelegramLimiter = <T>(task: () => Promise<T>) => Promise<T>;
+let heavyTelegramLimiter: TelegramLimiter | null = null;
+
+function limitHeavyTelegramQuery<T>(task: () => Promise<T>): Promise<T> {
+  if (!heavyTelegramLimiter) {
+    heavyTelegramLimiter = createLimiter(parsePositiveInt(process.env.HEAVY_QUERY_CONCURRENCY, 2));
+  }
+  return heavyTelegramLimiter(task);
+}
+
+async function withTimeout(label: string, timeoutMs: number, task: () => Promise<string>): Promise<string> {
+  return new Promise<string>((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        resolve(`⏰ ${label}超时（${timeoutMs / 1000}秒），请稍后重试`);
+      }
+    }, timeoutMs);
+    task().then((text) => {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        resolve(text);
+      }
+    }).catch((err) => {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        resolve(`❌ ${label}失败: ${err.message}`);
+      }
+    });
+  });
+}
+
+async function fetchMemberEnvironment(memberName: string, loginFetchOptions: ReturnType<typeof getProfileLoginFetchOptions>): Promise<MemberEnvironment> {
+  let uplineName = '';
+  const loginLogsRes = await apiClient.getLoginLogsByMember(memberName, undefined, loginFetchOptions);
+  const ownLogs = loginLogsRes?.items || [];
+  const ips = sortValuesByLatestLog(ownLogs, 'loginIp', PROFILE_IP_LIMIT);
+  const devices = sortValuesByLatestLog(ownLogs, 'device', PROFILE_DEVICE_LIMIT);
+
+  try {
+    const selfRes = await apiClient.getMemberInfoByName(memberName);
+    const self = selfRes?.items?.[0];
+    uplineName = self?.agencyMemberName || '';
+    const lastIp = String(self?.lastLoginIp || '').trim();
+    const lastDevice = String(self?.lastLoginDeviceClientId || '').trim();
+    if (lastIp && !ips.includes(lastIp)) ips.unshift(lastIp);
+    if (lastDevice && !devices.includes(lastDevice)) devices.unshift(lastDevice);
+  } catch { /* ignore */ }
+
+  return {
+    memberName,
+    uplineName,
+    ips: [...new Set(ips)].slice(0, PROFILE_IP_LIMIT),
+    devices: [...new Set(devices)].slice(0, PROFILE_DEVICE_LIMIT),
+  };
+}
+
+async function buildGroupProfile(memberName: string): Promise<GroupProfile> {
+  const cacheKey = memberName.trim().toLowerCase();
+  const cached = groupProfileCache.get(cacheKey);
+  if (cached) return cached;
+
+  const related = new Map<string, GroupMemberHit>();
+  const queuedNames = new Set<string>([cacheKey]);
+  const expandedNames = new Set<string>();
+  const skippedValues: string[] = [];
+  const loginFetchOptions = getProfileLoginFetchOptions();
+  const rootEnv = await fetchMemberEnvironment(memberName, loginFetchOptions);
+  const queue: Array<{ name: string; depth: number; env?: MemberEnvironment }> = [{ name: memberName, depth: 0, env: rootEnv }];
+
+  const addRelated = (name: string, reason: string, latestLoginAt: number, nextDepth: number): void => {
+    const cleanName = String(name || '').trim();
+    if (!cleanName || cleanName === memberName) return;
+    if (isAgentWhitelisted(cleanName)) return;
+    if (!related.has(cleanName) && related.size >= PROFILE_MEMBER_LIMIT) return;
+    mergeGroupHit(related, cleanName, reason, latestLoginAt);
+
+    const key = cleanName.toLowerCase();
+    if (nextDepth < PROFILE_EXPAND_DEPTH && queuedNames.size < PROFILE_EXPAND_MEMBER_LIMIT + 1 && !queuedNames.has(key)) {
+      queuedNames.add(key);
+      queue.push({ name: cleanName, depth: nextDepth });
+    }
+  };
+
+  while (queue.length > 0 && expandedNames.size < PROFILE_EXPAND_MEMBER_LIMIT + 1) {
+    const current = queue.shift()!;
+    const currentKey = current.name.toLowerCase();
+    if (expandedNames.has(currentKey) || current.depth >= PROFILE_EXPAND_DEPTH) continue;
+    expandedNames.add(currentKey);
+
+    const env = current.env || await fetchMemberEnvironment(current.name, loginFetchOptions);
+    const reasonPrefix = current.name === memberName ? '' : `经${current.name} `;
+    const nextDepth = current.depth + 1;
+
+    await Promise.all(env.ips.slice(0, PROFILE_IP_LIMIT).map(async (ip) => {
+      try {
+        const res = await apiClient.getLoginLogsByIp(ip, undefined, loginFetchOptions);
+        const logs = res?.items || [];
+        const total = getPagedTotalCount(res, logs.length);
+        if (total > PROFILE_PUBLIC_IP_LIMIT) {
+          addProfileNote(skippedValues, `公共IP ${ip}(${total}人)`);
+          return;
+        }
+        const latest = latestLoginTimes(logs);
+        for (const [name, ts] of latest) {
+          if (name !== current.name) addRelated(name, `${reasonPrefix}同IP ${ip}`, ts, nextDepth);
+        }
+      } catch { /* ignore single ip */ }
+    }));
+
+    await Promise.all(env.devices.slice(0, PROFILE_DEVICE_LIMIT).map(async (device) => {
+      try {
+        const res = await apiClient.getLoginLogsByDevice(device, undefined, loginFetchOptions);
+        const logs = res?.items || [];
+        const total = getPagedTotalCount(res, logs.length);
+        if (total > PROFILE_PUBLIC_DEVICE_LIMIT) {
+          addProfileNote(skippedValues, `公共设备 ${shortDeviceName(device)}(${total}人)`);
+          return;
+        }
+        const latest = latestLoginTimes(logs);
+        for (const [name, ts] of latest) {
+          if (name !== current.name) addRelated(name, `${reasonPrefix}同设备 ${shortDeviceName(device)}`, ts, nextDepth);
+        }
+      } catch { /* ignore single device */ }
+    }));
+  }
+
+  const relatedMembers = [...related.values()]
+    .filter(hit => hit.memberName !== memberName)
+    .sort((a, b) => b.latestLoginAt - a.latestLoginAt || b.reasons.size - a.reasons.size || a.memberName.localeCompare(b.memberName))
+    .slice(0, PROFILE_MEMBER_LIMIT);
+
+  const profile = {
+    memberName,
+    uplineName: rootEnv.uplineName,
+    ips: rootEnv.ips,
+    devices: rootEnv.devices,
+    relatedMembers,
+    skippedValues,
+  };
+  groupProfileCache.set(cacheKey, profile);
+  return profile;
+}
+
+function buildGroupProfileText(profile: GroupProfile): string {
+  const lines = [
+    `👥 ${profile.memberName} 团体画像`,
+    `上级：${profile.uplineName || '-'}`,
+    `最近登录IP：${profile.ips.length ? profile.ips.join('、') : '-'}`,
+    `最近登录设备：${profile.devices.length ? profile.devices.map(shortDeviceName).join('、') : '-'}`,
+    '',
+  ];
+
+  if (profile.skippedValues.length > 0) {
+    lines.push(`已跳过公共环境：${profile.skippedValues.join('、')}`);
+    lines.push('');
+  }
+
+  if (profile.relatedMembers.length === 0) {
+    lines.push('✅ 暂未发现同IP/同设备关联账号');
+    return lines.join('\n');
+  }
+
+  const shown = profile.relatedMembers.slice(0, PROFILE_DISPLAY_LIMIT);
+  lines.push(`同IP/同设备关联账号：${profile.relatedMembers.length} 个（最多扩展2层，已排除白名单）`);
+  shown.forEach((hit, idx) => {
+    const reason = [...hit.reasons].slice(0, 3).join(' / ');
+    const time = hit.latestLoginAt ? `，最近 ${formatBeijingTime(hit.latestLoginAt)}` : '';
+    lines.push(`${idx + 1}. ${hit.memberName}（${reason}${time}）`);
+  });
+  const hidden = profile.relatedMembers.length - shown.length;
+  if (hidden > 0) lines.push(`...另有 ${hidden} 个账号隐藏`);
+
+  return lines.join('\n').slice(0, 4096);
+}
+
+function queryGroupProfile(memberName: string): Promise<string> {
+  return limitHeavyTelegramQuery(() => withTimeout('团体画像查询', 25 * 1000, async () => {
+    if (isAgentWhitelisted(memberName)) return `👥 ${memberName}：白名单账号，已跳过同IP/同设备深挖`;
+    return buildGroupProfileText(await buildGroupProfile(memberName));
+  }));
+}
+
+function sumBetAmount(bets: BetRecord[]): number {
+  return bets.reduce((s, b) => s + (parseFloat(String(b.amount || 0)) || 0), 0);
+}
+
+function sumProfit(bets: BetRecord[]): number {
+  return bets.reduce((s, b) => s + (parseFloat(String(b.profit || 0)) || 0), 0);
+}
+
+function queryGroupHedge(memberName: string): Promise<string> {
+  return limitHeavyTelegramQuery(() => withTimeout('团体对打查询', 35 * 1000, async () => {
+    if (isAgentWhitelisted(memberName)) return `🎯 ${memberName}：白名单账号，已跳过团体对打`;
+    const profile = await buildGroupProfile(memberName);
+    const candidateNames = [memberName, ...profile.relatedMembers.map(hit => hit.memberName)]
+      .filter((name, idx, arr) => name && arr.indexOf(name) === idx)
+      .filter(name => !isAgentWhitelisted(name))
+      .slice(0, HEDGE_MEMBER_LIMIT);
+    if (candidateNames.length < 2) return `🎯 ${memberName}：未找到可用于团体对打检测的关联账号`;
 
     const dateRange = apiClient.getTimezoneDateRange();
-
-    // 构建查询名单：自身 + 下级 + 上级（非白名单）
-    const checkUpline = uplineName && uplineName !== memberName && !AGENT_WHITELIST.has(uplineName);
-    const allNames = [memberName, ...subNames];
-    if (checkUpline) allNames.push(uplineName);
-
-    const HEDGE_BATCH = 5;
-    const allBetsMap = new Map<string, any[]>();
-
-    for (let bi = 0; bi < allNames.length; bi += HEDGE_BATCH) {
-      const batch = allNames.slice(bi, bi + HEDGE_BATCH);
+    const allBetsMap = new Map<string, BetRecord[]>();
+    for (let i = 0; i < candidateNames.length; i += 5) {
+      const batch = candidateNames.slice(i, i + 5);
       await Promise.all(batch.map(async (name) => {
         try {
-          const betsRes: any = await apiClient.getMemberBetsToday(name, 1, dateRange, 5);
-          const bets = betsRes?.items || betsRes?.data?.items || betsRes?.list || (Array.isArray(betsRes?.data) ? betsRes.data : []) || [];
+          const res = await apiClient.getMemberBets(name, 1, dateRange, 5);
+          const bets = (res?.items || []) as BetRecord[];
           if (bets.length > 0) allBetsMap.set(name, bets);
-        } catch {}
+        } catch { /* ignore single member */ }
       }));
     }
 
-    // 既无下级也无上级可查
-    if (subNames.length === 0 && !checkUpline) {
-      return `🎯 ${memberName}：无下级会员，无需检查`;
-    }
+    if (!allBetsMap.has(memberName)) return `🎯 ${memberName}：今日无投注记录，无法判断团体对打`;
+    if (allBetsMap.size < 2) return `🎯 ${memberName}：关联账号今日无投注记录`;
 
-    const myBets = allBetsMap.get(memberName) || [];
-    if (myBets.length === 0) {
-      const subInfo = subNames.length > 0 ? `（${subNames.length}个下级）` : '';
-      const uplineInfo = checkUpline ? ` 上级:${uplineName}` : '';
-      return `🎯 ${memberName}${subInfo}${uplineInfo}：今日无投注记录`;
-    }
-
-    if (allBetsMap.size === 1 && subNames.length > 0) {
-      return `🎯 ${memberName}（${subNames.length}个下级）：仅自身有投注，下级均无投注记录`;
-    }
-
-    const myIssueMap = new Map<string, any[]>();
-    for (const bet of myBets) {
-      const key = `${bet.lotteryName} ${bet.issue}`;
-      if (!myIssueMap.has(key)) myIssueMap.set(key, []);
-      myIssueMap.get(key)!.push(bet);
-    }
-
-    const hedgeResults: string[] = [];
-
-    // 检查会员与下级之间的对打对冲
-    for (const subName of subNames) {
-      const subBets = allBetsMap.get(subName) || [];
-      if (subBets.length === 0) continue;
-
-      const subIssueMap = new Map<string, any[]>();
-      for (const bet of subBets) {
-        const key = `${bet.lotteryName} ${bet.issue}`;
-        if (!subIssueMap.has(key)) subIssueMap.set(key, []);
-        subIssueMap.get(key)!.push(bet);
+    const issueGroups = new Map<string, Map<string, BetRecord[]>>();
+    for (const [name, bets] of allBetsMap) {
+      for (const bet of bets) {
+        const key = `${bet.lotteryName || ''} ${bet.issue || ''} ${bet.playClassName || ''}`;
+        if (!issueGroups.has(key)) issueGroups.set(key, new Map<string, BetRecord[]>());
+        const memberBets = issueGroups.get(key)!.get(name) || [];
+        memberBets.push(bet);
+        issueGroups.get(key)!.set(name, memberBets);
       }
+    }
 
-      let hedgeCount = 0;
-      let hedgeDetails: string[] = [];
+    const hits: string[] = [];
+    for (const [issueKey, memberMap] of issueGroups) {
+      if (memberMap.size < 2) continue;
+      const members = [...memberMap.entries()];
+      for (let i = 0; i < members.length; i++) {
+        for (let j = i + 1; j < members.length; j++) {
+          const [name1, bets1] = members[i];
+          const [name2, bets2] = members[j];
+          const dirs1 = new Set(bets1.flatMap(b => expandDirections(extractTwoSideDirection(String(b.numbers || '')))));
+          const dirs2 = new Set(bets2.flatMap(b => expandDirections(extractTwoSideDirection(String(b.numbers || '')))));
+          if (dirs1.size === 0 || dirs2.size === 0) continue;
 
-      for (const [issueKey, myIssueBets] of myIssueMap) {
-        const subIssueBets = subIssueMap.get(issueKey);
-        if (!subIssueBets) continue;
-
-        const myDirections = new Set(myIssueBets.flatMap(b => expandDirections(extractTwoSideDirection(b.numbers))));
-        const subDirections = new Set(subIssueBets.flatMap(b => expandDirections(extractTwoSideDirection(b.numbers))));
-
-        let isOpposite = false;
-        for (const d1 of myDirections) {
-          for (const d2 of subDirections) {
-            if (isMutexDirection(d1, d2)) {
-              isOpposite = true;
-              break;
+          let mutexPair = '';
+          for (const d1 of dirs1) {
+            for (const d2 of dirs2) {
+              if (isMutexDirection(d1, d2)) {
+                mutexPair = `${d1}↔${d2}`;
+                break;
+              }
             }
+            if (mutexPair) break;
           }
-          if (isOpposite) break;
-        }
 
-        const myPlays = new Set(myIssueBets.map(b => b.playClassName).filter(Boolean));
-        const subPlays = new Set(subIssueBets.map(b => b.playClassName).filter(Boolean));
-        const isHedge = myPlays.size > 0 && subPlays.size > 0 && [...myPlays].some(p => subPlays.has(p)) &&
-          myIssueBets.length + subIssueBets.length > 5;
-
-        if (isOpposite || isHedge) {
-          hedgeCount++;
-          if (hedgeDetails.length < 3) {
-            const myAmt = myIssueBets.reduce((s: number, b: any) => s + (parseFloat(b.amount) || 0), 0);
-            const subAmt = subIssueBets.reduce((s: number, b: any) => s + (parseFloat(b.amount) || 0), 0);
-            const tag = isOpposite ? '对打' : '对冲';
-            hedgeDetails.push(`${issueKey} ${tag} ${memberName} ${myAmt.toFixed(0)} vs ${subName} ${subAmt.toFixed(0)}`);
+          const amt1 = sumBetAmount(bets1);
+          const amt2 = sumBetAmount(bets2);
+          const closeAmount = Math.max(amt1, amt2) > 0 && Math.abs(amt1 - amt2) / Math.max(amt1, amt2) <= 0.2;
+          const heavySameIssue = !mutexPair && closeAmount && bets1.length + bets2.length >= 6 && Math.min(amt1, amt2) >= 200;
+          if (mutexPair || heavySameIssue) {
+            const tag = mutexPair ? `对打 ${mutexPair}` : '疑似对冲';
+            hits.push(`${issueKey} ${tag}：${name1} ${amt1.toFixed(0)} vs ${name2} ${amt2.toFixed(0)}`);
           }
         }
       }
-
-      if (hedgeCount > 0) {
-        let line = `🔴 ${subName}：${hedgeCount}期对打/对冲`;
-        if (hedgeDetails.length > 0) line += '\n  ' + hedgeDetails.join('\n  ');
-        if (hedgeCount > 3) line += `\n  ...及其他${hedgeCount - 3}期`;
-        hedgeResults.push(line);
-      }
     }
 
-    // 检查会员与上级之间的对打对冲
-    if (checkUpline) {
-      const uplineBets = allBetsMap.get(uplineName) || [];
-      if (uplineBets.length > 0) {
-        const uplineIssueMap = new Map<string, any[]>();
-        for (const bet of uplineBets) {
-          const key = `${bet.lotteryName} ${bet.issue}`;
-          if (!uplineIssueMap.has(key)) uplineIssueMap.set(key, []);
-          uplineIssueMap.get(key)!.push(bet);
-        }
-
-        let upHedgeCount = 0;
-        let upHedgeDetails: string[] = [];
-        for (const [issueKey, myIssueBets] of myIssueMap) {
-          const upIssueBets = uplineIssueMap.get(issueKey);
-          if (!upIssueBets) continue;
-
-          const myDirections = new Set(myIssueBets.flatMap(b => expandDirections(extractTwoSideDirection(b.numbers))));
-          const upDirections = new Set(upIssueBets.flatMap(b => expandDirections(extractTwoSideDirection(b.numbers))));
-
-          let isOpposite = false;
-          for (const d1 of myDirections) {
-            for (const d2 of upDirections) {
-              if (isMutexDirection(d1, d2)) { isOpposite = true; break; }
-            }
-            if (isOpposite) break;
-          }
-
-          const myPlays = new Set(myIssueBets.map(b => b.playClassName).filter(Boolean));
-          const upPlays = new Set(upIssueBets.map(b => b.playClassName).filter(Boolean));
-          const isHedge = myPlays.size > 0 && upPlays.size > 0 && [...myPlays].some(p => upPlays.has(p)) &&
-            myIssueBets.length + upIssueBets.length > 5;
-
-          if (isOpposite || isHedge) {
-            upHedgeCount++;
-            if (upHedgeDetails.length < 3) {
-              const myAmt = myIssueBets.reduce((s: number, b: any) => s + (parseFloat(b.amount) || 0), 0);
-              const upAmt = upIssueBets.reduce((s: number, b: any) => s + (parseFloat(b.amount) || 0), 0);
-              const tag = isOpposite ? '对打' : '对冲';
-              upHedgeDetails.push(`${issueKey} ${tag} ${memberName} ${myAmt.toFixed(0)} vs ${uplineName} ${upAmt.toFixed(0)}`);
-            }
-          }
-        }
-
-        if (upHedgeCount > 0) {
-          let line = `🟠 上级 ${uplineName}：${upHedgeCount}期对打/对冲`;
-          if (upHedgeDetails.length > 0) line += '\n  ' + upHedgeDetails.join('\n  ');
-          if (upHedgeCount > 3) line += `\n  ...及其他${upHedgeCount - 3}期`;
-          hedgeResults.unshift(line);
-        }
-      }
+    const allBets = [...allBetsMap.values()].flat();
+    const totalBet = sumBetAmount(allBets);
+    const totalProfit = sumProfit(allBets);
+    const pnlRate = totalBet > 0 ? Math.abs(totalProfit) / totalBet : 1;
+    if (totalBet >= 10000 && pnlRate < 0.02) {
+      const profitText = totalProfit >= 0 ? '微盈' : '微亏';
+      hits.unshift(`团体盈亏抵消：${allBetsMap.size}个账号投注${totalBet.toFixed(0)}，${profitText}${Math.abs(totalProfit).toFixed(0)}，盈亏率${(pnlRate * 100).toFixed(2)}%`);
     }
 
-    // 构建结果文本
-    const uplineLabel = uplineName ? ` 上级:${uplineName}` : '';
-    let prefix = `🎯 ${memberName}`;
-    if (subNames.length > 0) {
-      prefix += `（${subNames.length}个下级${uplineLabel}）`;
-    } else if (uplineName) {
-      prefix += `（上级:${uplineName}）`;
-    }
+    const header = `🎯 ${memberName} 团体对打检测\n关联账号：${candidateNames.length - 1} 个，今日有投注账号：${allBetsMap.size} 个`;
+    if (hits.length === 0) return `${header}\n✅ 未发现明显团体对打/对冲`;
 
-    if (hedgeResults.length === 0) {
-      if (subNames.length === 0 && checkUpline) {
-        return `${prefix}：✅ 与上级未发现对打对冲行为`;
-      }
-      return `${prefix}：✅ 未发现对打对冲行为`;
-    }
-
-    return `${prefix}对打对冲检测结果：\n${hedgeResults.join('\n')}`;
-  };
-
-  return new Promise<string>((resolve) => {
-    let settled = false;
-    const timer = setTimeout(() => {
-      if (!settled) { settled = true; resolve(`⏰ 查询超时（${HEDGE_TIMEOUT / 1000}秒），请稍后重试`); }
-    }, HEDGE_TIMEOUT);
-    doQuery().then((text) => {
-      if (!settled) { settled = true; clearTimeout(timer); resolve(text); }
-    }).catch((err) => {
-      if (!settled) { settled = true; clearTimeout(timer); resolve(`❌ 查询失败: ${err.message}`); }
-    });
-  });
-}
-
-function queryMemberAssociation(memberName: string): Promise<string> {
-  const QUERY_TIMEOUT = 15 * 1000;
-
-  const doQuery = async (): Promise<string> => {
-    let ips: string[];
-    let devices: string[];
-    const cachedLogs = memberLoginLogsCache.get(memberName);
-    if (cachedLogs) {
-      ips = cachedLogs.ips;
-      devices = cachedLogs.devices;
-    } else {
-      const loginLogsRes = await apiClient.getLoginLogsByMember(memberName);
-      const logs = loginLogsRes?.items || [];
-      if (logs.length === 0) return `📋 ${memberName}：未找到登录记录`;
-      ips = [...new Set(logs.map((l: any) => l.loginIp).filter(Boolean))].slice(0, 5) as string[];
-      devices = [...new Set(logs.map((l: any) => l.device).filter(Boolean))].slice(0, 5) as string[];
-      memberLoginLogsCache.set(memberName, { ips, devices });
-    }
-
-    if (ips.length === 0 && devices.length === 0) {
-      return `📋 ${memberName}：无登录IP/设备记录`;
-    }
-
-    const now = Date.now();
-    const ipPromises = ips.map((ip) => {
-      const cached = ipMemberCache.get(ip);
-      if (cached) {
-        const names = [...cached.members].filter(n => n && n !== memberName);
-        return Promise.resolve({ ip, names, total: names.length });
-      }
-      return apiClient.getLoginLogsByIp(ip).then((res: any) => {
-        const items = res?.items || [];
-        const names = [...new Set(items.map((l: any) => l.memberName).filter((n: string) => n && n !== memberName))];
-        const members = new Set<string>(items.map((l: any) => l.memberName).filter(Boolean));
-        ipMemberCache.set(ip, { members });
-        return { ip, names, total: parseInt(res?.totalNum || '0', 10) };
-      }).catch(() => ({ ip, names: [] as string[], total: 0 }));
-    });
-
-    const devicePromises = devices.map((device) => {
-      const cached = deviceMemberCache.get(device);
-      if (cached) {
-        const names = [...cached.members].filter(n => n && n !== memberName);
-        return Promise.resolve({ device, names, total: names.length });
-      }
-      return apiClient.getLoginLogsByDevice(device).then((res: any) => {
-        const items = res?.items || [];
-        const names = [...new Set(items.map((l: any) => l.memberName).filter((n: string) => n && n !== memberName))];
-        const members = new Set<string>(items.map((l: any) => l.memberName).filter(Boolean));
-        deviceMemberCache.set(device, { members });
-        return { device, names, total: parseInt(res?.totalNum || '0', 10) };
-      }).catch(() => ({ device, names: [] as string[], total: 0 }));
-    });
-
-    const [ipResults, deviceResults] = await Promise.all([
-      Promise.all(ipPromises),
-      Promise.all(devicePromises),
-    ]);
-
-    let assocText = '';
-
-    const ipWithOthers = ipResults.filter(r => (r.names as string[]).length > 0);
-    if (ipWithOthers.length > 0) {
-      assocText += '\n🌐 同IP会员：';
-      for (const r of ipWithOthers) {
-        const names = (r.names as string[]).slice(0, 10).join('、');
-        assocText += `\n  ${r.ip}：${names}`;
-      }
-    }
-
-    const devWithOthers = deviceResults.filter(r => (r.names as string[]).length > 0);
-    if (devWithOthers.length > 0) {
-      assocText += '\n📱 同设备会员：';
-      for (const r of devWithOthers) {
-        const shortDevice = (r.device as string).split(':')[0] || r.device;
-        const names = (r.names as string[]).slice(0, 10).join('、');
-        assocText += `\n  ${shortDevice}：${names}`;
-      }
-    }
-
-    if (!assocText) {
-      assocText = '\n✅ 未发现同IP/同设备关联会员';
-    }
-
-    return `📋 ${memberName} 关联查询结果${assocText}`;
-  };
-
-  return new Promise<string>((resolve) => {
-    let settled = false;
-    const timer = setTimeout(() => {
-      if (!settled) { settled = true; resolve(`⏰ 查询超时（${QUERY_TIMEOUT / 1000}秒），请稍后重试`); }
-    }, QUERY_TIMEOUT);
-    doQuery().then((text) => {
-      if (!settled) { settled = true; clearTimeout(timer); resolve(text); }
-    }).catch((err) => {
-      if (!settled) { settled = true; clearTimeout(timer); resolve(`❌ 查询失败: ${err.message}`); }
-    });
-  });
+    const shown = hits.slice(0, HEDGE_DISPLAY_LIMIT);
+    const hidden = hits.length - shown.length;
+    return formatDisplaySymbols(`${header}\n${shown.map(s => `🔴 ${s}`).join('\n')}${hidden > 0 ? `\n...另有 ${hidden} 条隐藏` : ''}`.slice(0, 4096));
+  }));
 }
 
 function registerBotHandlers(b: Bot): void {
   b.command('bind', async (ctx) => {
+    if (!await requireAdminCommand(ctx)) return;
     const chatId = ctx.chat?.id;
+    if (!ctx.chat || !['group', 'supergroup'].includes(ctx.chat.type)) {
+      await ctx.reply('请在需要接收通知的群组中执行 /bind');
+      return;
+    }
     if (chatId) {
       notifyChatId = chatId;
       await saveChatIdToDB(chatId);
@@ -420,102 +594,67 @@ function registerBotHandlers(b: Bot): void {
     }
   });
 
-  b.command('rules', async (ctx) => {
-    if (!checkRateLimit(ctx.from?.id || 0)) return;
-
-    const rules = getAllRules();
-    const groups: Record<string, typeof rules> = {};
-    for (const r of rules) {
-      if (!groups[r.group]) groups[r.group] = [];
-      groups[r.group].push(r);
-    }
-
-    const groupNames: Record<string, string> = {
-      identity: '👤 身份风险',
-      association: '🔗 关联风险',
-      behavior: '💰 行为风险',
-      environment: '🌐 环境风险',
-      marking: '🏷️ 标记风险',
-    };
-
-    let text = `📋 风控规则列表 (共 ${rules.length} 条)\n\n`;
-
-    for (const [groupKey, groupRules] of Object.entries(groups)) {
-      text += `${groupNames[groupKey] || groupKey}\n`;
-      for (const r of groupRules) {
-        const icon = r.severity === 'CRITICAL' ? '🔴' : r.severity === 'HIGH' ? '🟠' : '🟡';
-        const status = r.enabled ? '' : ' [已关闭]';
-        text += `  ${icon} ${r.id} ${r.name}${status}\n`;
-      }
-      text += '\n';
-    }
-
-    text += `\n💡 /rule R01 off — 关闭规则\n/rule R01 on — 开启规则`;
-
-    await ctx.reply(text);
-  });
-
-  b.command('rule', async (ctx) => {
-    if (!checkRateLimit(ctx.from?.id || 0)) return;
-
-    const parts = (ctx.message?.text || '').trim().split(/\s+/);
-    if (parts.length < 3) {
-      await ctx.reply(`用法: /rule <规则ID> <on|off>\n\n例如: /rule R01 off\n/rule R01 on`);
-      return;
-    }
-
-    const ruleId = parts[1].toUpperCase();
-    const action = parts[2].toLowerCase();
-
-    if (action !== 'on' && action !== 'off') {
-      await ctx.reply(`❌ 无效操作: ${parts[2]}\n请使用 on 或 off`);
-      return;
-    }
-
-    const enabled = action === 'on';
-    const ok = setRuleEnabled(ruleId, enabled);
-
-    if (ok) {
-      try {
-        await dbHolder.db.botConfig.upsert({
-          where: { key: 'RULE_STATES' },
-          update: { value: JSON.stringify(getRuleStates()) },
-          create: { key: 'RULE_STATES', value: JSON.stringify(getRuleStates()) },
-        });
-      } catch {}
-    }
-
-    if (ok) {
-      await ctx.reply(`✅ 规则 ${ruleId} 已${enabled ? '开启' : '关闭'}`);
-    } else {
-      await ctx.reply(`❌ 未找到规则: ${ruleId}\n\n使用 /rules 查看所有规则`);
-    }
-  });
-
-  b.command('help', async (ctx) => {
-    await ctx.reply(
-      `🤖 风控提醒机器人 使用指南\n\n` +
-      `📌 **可用命令**:\n` +
-      `/status - 查看机器人运行状态\n` +
-      `/rules - 查看风控规则列表\n` +
-      `/rule R01 off - 关闭指定规则\n` +
-      `/rule R01 on - 开启指定规则\n` +
-      `/help - 显示此帮助信息`,
-    );
-  });
-
   b.callbackQuery(/^feedback:(.+):(.+)$/, async (ctx) => {
     const orderId = ctx.match[1];
     const action = ctx.match[2];
 
-    if (action === 'info') {
+    if (!await requireAdminCallback(ctx)) return;
+
+    if (action === 'review') {
+      if (reviewLocks.has(orderId)) {
+        await ctx.answerCallbackQuery({ text: '审核处理中，请稍候...' }).catch(() => {});
+        return;
+      }
+      reviewLocks.add(orderId);
+      try {
+        const evalRecord = await dbHolder.db.riskEval.findUnique({ where: { orderId } });
+        if (!evalRecord) {
+          await ctx.answerCallbackQuery({ text: '未找到该订单的风控记录', show_alert: true }).catch(() => {});
+          return;
+        }
+        if (evalRecord.feedback !== '') {
+          await ctx.answerCallbackQuery({ text: '该订单已审核' }).catch(() => {});
+          return;
+        }
+
+        const message = ctx.callbackQuery.message;
+        const messageText = message && 'text' in message ? message.text : '';
+        if (!messageText) {
+          await ctx.answerCallbackQuery({ text: '无法更新原通知，请稍后重试', show_alert: true }).catch(() => {});
+          return;
+        }
+
+        if (!messageText.includes('· 已人工审核')) {
+          await ctx.editMessageText(withReviewStatus(messageText, '已人工审核'), {
+            // 先保留按钮；数据库暂时失败时管理员可以再次点击补写审核记录。
+            reply_markup: buildActionKeyboard(orderId),
+          });
+        }
+        const recorded = await recordFeedbackOutcome(orderId, 'review');
+        if (recorded) {
+          await ctx.editMessageReplyMarkup({ reply_markup: buildActionKeyboard(orderId, true) }).catch((err) => {
+            logger.warn({ orderId, err: (err as Error).message }, '[Telegram] 人工审核后移除按钮失败');
+          });
+        }
+        await ctx.answerCallbackQuery({ text: recorded ? '已人工审核' : '订单状态已变化' }).catch(() => {});
+        if (recorded) logger.info({ orderId, memberName: evalRecord.memberName }, '[Telegram] 订单已人工审核');
+      } catch (err) {
+        logger.warn({ orderId, err: (err as Error).message }, '[Telegram] 人工审核失败');
+        await ctx.answerCallbackQuery({ text: '人工审核失败，请重试', show_alert: true }).catch(() => {});
+      } finally {
+        reviewLocks.delete(orderId);
+      }
+      return;
+    }
+
+    if (action === 'info' || action === 'profile') {
       if (infoQueryLocks.has(orderId)) {
         await ctx.answerCallbackQuery({ text: '查询进行中，请稍候...' });
         return;
       }
       infoQueryLocks.add(orderId);
       try {
-        await ctx.answerCallbackQuery({ text: '正在查询关联信息...' });
+        await ctx.answerCallbackQuery({ text: '正在查询团体画像...' });
         try {
           const evalRecord = await dbHolder.db.riskEval.findUnique({ where: { orderId } });
           const memberName = evalRecord?.memberName || '';
@@ -523,8 +662,8 @@ function registerBotHandlers(b: Bot): void {
             await ctx.reply('❌ 未找到会员信息');
             return;
           }
-          const waitMsg = await ctx.reply(`🔍 正在查询 ${memberName} 的关联信息...`);
-          const resultText = await queryMemberAssociation(memberName);
+          const waitMsg = await ctx.reply(`👥 正在查询 ${memberName} 的团体画像...`);
+          const resultText = await queryGroupProfile(memberName);
           await b.api.editMessageText(waitMsg.chat.id, waitMsg.message_id, resultText);
         } catch (err) {
           await ctx.reply(`❌ 查询失败: ${(err as Error).message}`);
@@ -542,7 +681,7 @@ function registerBotHandlers(b: Bot): void {
       }
       hedgeQueryLocks.add(orderId);
       try {
-        await ctx.answerCallbackQuery({ text: '正在查询对打对冲...' });
+        await ctx.answerCallbackQuery({ text: '正在查询团体对打...' });
         try {
           const evalRecord = await dbHolder.db.riskEval.findUnique({ where: { orderId } });
           const memberName = evalRecord?.memberName || '';
@@ -550,8 +689,8 @@ function registerBotHandlers(b: Bot): void {
             await ctx.reply('❌ 未找到会员信息');
             return;
           }
-          const waitMsg = await ctx.reply(`🎯 正在查询 ${memberName} 的对打对冲信息...`);
-          const resultText = await querySubordinateHedge(memberName);
+          const waitMsg = await ctx.reply(`🎯 正在查询 ${memberName} 的团体对打...`);
+          const resultText = await queryGroupHedge(memberName);
           await b.api.editMessageText(waitMsg.chat.id, waitMsg.message_id, resultText);
         } catch (err) {
           await ctx.reply(`❌ 查询失败: ${(err as Error).message}`);
@@ -562,57 +701,7 @@ function registerBotHandlers(b: Bot): void {
       return;
     }
 
-    const actionLabels: Record<string, string> = {
-      review: '⚠️ 已人工审核',
-    };
-
-    try { await ctx.answerCallbackQuery({ text: `已记录: ${actionLabels[action] || action}` }); } catch {}
-
-    try {
-      // CAS: 仅 feedback 为空时更新，防止与自动审核并发时重复写 RuleFeedback
-      const upd = await dbHolder.db.riskEval.updateMany({
-        where: { orderId, feedback: '' },
-        data: { feedback: action },
-      });
-
-      if (upd.count > 0) {
-        const evalRecord = await dbHolder.db.riskEval.findUnique({ where: { orderId } });
-        const triggeredRules = JSON.parse(evalRecord?.triggeredRules || '[]');
-        const periodInfo = evalRecord?.detail ? (() => { try { const d = JSON.parse(evalRecord.detail); return d.periodInfo || ''; } catch { return ''; } })() : '';
-        const memberId = evalRecord?.memberId || '';
-
-        const feedbackData = triggeredRules.map((rule: any) => ({
-          evalId: evalRecord?.id || orderId,
-          ruleId: rule.id,
-          feedback: action,
-          memberId,
-          periodInfo: ['R24', 'R25', 'R26', 'R27'].includes(rule.id) ? periodInfo : '',
-        }));
-        if (feedbackData.length > 0) {
-          await dbHolder.db.ruleFeedback.createMany({ data: feedbackData });
-          invalidateMemberReviewedPeriods(memberId);
-        }
-      }
-    } catch (err) {
-      logger.warn({ orderId, err: (err as Error).message }, '[Telegram] 记录反馈失败');
-    }
-
-    const user = ctx.from?.username || ctx.from?.first_name || '未知';
-    const keyboard = new InlineKeyboard()
-      .text('🔍 其他信息', `feedback:${orderId}:info`)
-      .text('↔️ 对打对冲', `feedback:${orderId}:hedge`);
-
-    try {
-      const origMsg = ctx.callbackQuery?.message;
-      if (origMsg && 'text' in origMsg) {
-        const appended = `${origMsg.text}\n\n📋 ${user} 对订单 ${orderId} 的处理: ${actionLabels[action] || action}`;
-        await ctx.editMessageText(appended.substring(0, 4096), { reply_markup: keyboard });
-      } else {
-        await ctx.editMessageReplyMarkup({ reply_markup: keyboard });
-      }
-    } catch {
-      try { await ctx.editMessageReplyMarkup({ reply_markup: keyboard }); } catch {}
-    }
+    await ctx.answerCallbackQuery({ text: '无效操作' }).catch(() => {});
   });
 }
 
@@ -629,58 +718,161 @@ interface AlertTextParams {
   depositCount: number;
   withdrawCount: number;
   rechargeWithdrawDiff: number;
+  rechargeAmount?: number;
+  withdrawAmount?: number;
+  profitLoss?: number;
+  estimatedProfitLoss?: boolean;
   receivingBank: string;
   receivingName: string;
   registerTime: string;
   amount: string | number;
-  triggeredRules: Array<{ id: string; name?: string; severity?: string; reason: string }>;
+  triggeredRules: Array<{
+    id: string;
+    name?: string;
+    severity?: string;
+    reason: string;
+    score?: number;
+    presentation?: 'core' | 'support';
+  }>;
   isEarlyMorning?: boolean;
   mainGameType?: string;
+  dataIssues?: string[];
+  remark?: string;
+}
+
+function countGameViolationKeys(parts: string[]): number {
+  const keys = new Set<string>();
+  for (const raw of parts) {
+    const text = raw.trim();
+    if (!text) continue;
+    const beforeColon = text.split(/[：:]/, 1)[0].trim();
+    const tokens = beforeColon.split(/\s+/).filter(Boolean);
+    if (tokens.length >= 2) {
+      keys.add(`${tokens[0]} ${tokens[1]}`);
+    } else {
+      keys.add(beforeColon || text);
+    }
+  }
+  return keys.size || parts.length;
+}
+
+function buildGameViolationHeader(icon: string, ruleId: string, ruleName: string, parts: string[], shownCount: number): string {
+  const entryCount = parts.length;
+  if (entryCount <= 1) return `${icon} ${ruleName}：`;
+  const keyCount = countGameViolationKeys(parts);
+  const keyUnit = ruleId === 'R27' ? '项' : '期';
+  const hiddenText = entryCount > shownCount ? ` / 展示${shownCount}条` : '';
+  return `${icon} ${ruleName}：${entryCount}条 / ${keyCount}${keyUnit}${hiddenText}`;
+}
+
+function formatDisplaySymbols(text: string): string {
+  return text.replace(/↔/g, ' - ');
+}
+
+function parseMoneyValue(value: string | number | undefined | null): number {
+  if (value === null || value === undefined) return 0;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+  const n = parseFloat(String(value).replace(/,/g, '').trim());
+  return Number.isFinite(n) ? n : 0;
+}
+
+function formatProfitLoss(value: number | undefined, estimated: boolean | undefined, balance: string | number, rechargeWithdrawDiff: number): string {
+  const net = Number.isFinite(value) ? Number(value) : parseMoneyValue(balance) - parseMoneyValue(rechargeWithdrawDiff);
+  const prefix = estimated ? '估算' : '';
+  if (Math.abs(net) < 0.005) return `${prefix}持平: 0`;
+  return `${prefix}${net > 0 ? '净赢' : '净输'}: ${fmtNum(Math.abs(net))}`;
+}
+
+function hasRegistrationSignal(parts: Array<{ name?: string; reason?: string }> | string[]): boolean {
+  return parts.some(part => {
+    const text = typeof part === 'string' ? part : `${part.name || ''} ${part.reason || ''}`;
+    return /注册|新账号|新会员/.test(text);
+  });
+}
+
+function compactGameType(gameType: string): string {
+  return gameType.replace(/类游戏/g, '').replace(/[、，]/g, '/').replace(/\/{2,}/g, '/');
+}
+
+function buildGameAndMethodLines(gameType: string | undefined, bank: string, name: string): string[] {
+  const method = `${bank || '未知渠道'}${name ? `·${name}` : ''}`;
+  const compactGame = gameType ? compactGameType(gameType) : '';
+  if (!compactGame) return [`🏦 提款方式: ${method}`];
+
+  const combined = `🎮 ${compactGame}  🏦 ${method}`;
+  return Array.from(combined).length <= 32
+    ? [combined]
+    : [`🎮 主投: ${compactGame}`, `🏦 提款方式: ${method}`];
+}
+
+function isCoreRule(rule: AlertTextParams['triggeredRules'][number]): boolean {
+  if (rule.presentation) return rule.presentation === 'core';
+  const score = Number(rule.score || 0);
+  return score >= 15 || rule.severity === 'CRITICAL';
+}
+
+function formatAlertRule(rule: AlertTextParams['triggeredRules'][number]): string {
+  const severityIcon = SEVERITY_ICON[rule.severity || ''] || '🟡';
+  const parts = rule.reason.split('\n').filter((line: string) => line.trim());
+  const isBettingRule = ['R24', 'R25', 'R26', 'R27'].includes(rule.id);
+  if (isBettingRule) {
+    const ruleName = rule.name || '游戏违规';
+    if (parts.length <= 1) return `${severityIcon} ${ruleName}：${(parts[0] || rule.reason).trim()}`;
+    const maxShow = 3;
+    const shown = parts.slice(0, maxShow);
+    const header = buildGameViolationHeader(severityIcon, rule.id, ruleName, parts, shown.length);
+    const details = shown.map((line: string, index: number) => `  ${index + 1}. ${line.trim()}`).join('\n');
+    const hidden = parts.length > maxShow ? `\n  另有 ${parts.length - maxShow} 条隐藏` : '';
+    return `${header}\n${details}${hidden}`;
+  }
+  if (parts.length <= 1) return `${severityIcon} ${parts[0] || rule.reason}`;
+  return `${severityIcon} ${parts.map((line: string) => line.trim()).join(' | ')}`;
 }
 
 export function buildRiskAlertText(p: AlertTextParams): string {
-  const { icon, label, head } = LEVEL_CONFIG[p.riskLevel] || { icon: '❓', label: '未知', head: '❓' };
+  const { label, head } = LEVEL_CONFIG[p.riskLevel] || { label: '未知', head: '❓' };
 
-  const diff = p.rechargeWithdrawDiff ?? 0;
-  const diffTag = diff < 0 ? '赢' : '输';
-  const diffValue = fmtNum(Math.abs(diff));
-  const manualBadge = p.triggeredRules.some((r: any) => r.id === 'R29') ? ' · 手工补单' : '';
-  const earlyBadge = p.isEarlyMorning ? ' · 跨日数据' : '';
+  const netText = formatProfitLoss(p.profitLoss, p.estimatedProfitLoss, p.balance, p.rechargeWithdrawDiff ?? 0);
+  const manualBadge = p.triggeredRules.some((r: any) => r.id === 'R29') ? ' · 人工加款' : '';
+  const earlyBadge = p.isEarlyMorning ? ' · 凌晨提款' : '';
 
   const shortDate = p.registerTime
     ? p.registerTime.replace(/^(\d{4})-(\d{2})-(\d{2})\s*(\d{1,2}:\d{2}).*/, (_, y, m, d, t) => `${y}-${parseInt(m, 10)}-${parseInt(d, 10)} ${t}`)
     : '';
 
-  const triggeredText = p.triggeredRules
-    .map((r) => {
-      const sIcon = SEVERITY_ICON[r.severity || ''] || '🟡';
-      const parts = r.reason.split('\n').filter((s: string) => s.trim());
-      const isBettingRule = ['R24', 'R25', 'R26', 'R27'].includes(r.id);
-      if (isBettingRule && parts.length > 1) {
-        const ruleName = r.name || r.id;
-        const entryCount = parts.length;
-        const MAX_SHOW = 8;
-        const shown = parts.slice(0, MAX_SHOW);
-        const detailLines = shown.map((s: string) => `  ${s.trim()}`).join('\n');
-        const suffix = entryCount > MAX_SHOW ? `\n  ...还有 ${entryCount - MAX_SHOW} 条类似违规` : '';
-        return `${sIcon} ${ruleName} ${entryCount} 条：\n${detailLines}${suffix}`;
-      }
-      if (parts.length <= 1) {
-        return `${sIcon} ${r.reason}`;
-      }
-      return `${sIcon} ${parts.map((s: string) => s.trim()).join(' | ')}`;
-    })
-    .join('\n');
+  const sortedRules = [...p.triggeredRules].sort((a, b) => {
+    const coreDiff = Number(isCoreRule(b)) - Number(isCoreRule(a));
+    if (coreDiff !== 0) return coreDiff;
+    const scoreA = Number((a as { score?: number }).score || 0);
+    const scoreB = Number((b as { score?: number }).score || 0);
+    return scoreB - scoreA;
+  });
+  const triggeredText = sortedRules.map(formatAlertRule).join('\n');
 
   let line1 = `${head}${label} ${p.totalScore}分${manualBadge}${earlyBadge}`;
   let line3 = `👤 账号: ${p.memberName}  上级: ${p.proxyCode}`;
-  let line4 = `💰 余额: ${fmtNum(p.balance || 0)}  充提次数: ${p.depositCount} / ${p.withdrawCount}`;
-  let line5 = `💸 ${diffTag}钱: ${diffValue} 提款方式: ${p.receivingBank || '未知渠道'}${p.receivingName ? '·' + p.receivingName : ''}`;
-  let line6 = `\u{1F4C5} ${shortDate || '未知'} 💲 提款: ${fmtNum(p.amount)}`;
-  // 主投游戏类型（仅当近7天有投注数据时显示）
-  let lineGame = p.mainGameType ? `\u{1F3AE} 主投: ${p.mainGameType}` : '';
+  const focusLine = `💲 提款：${fmtNum(p.amount)}  余额：${fmtNum(p.balance || 0)}  ${netText}`;
+  const fundsLine = `💰 充${fmtNum(p.rechargeAmount || 0)}（${p.depositCount}）/提${fmtNum(p.withdrawAmount || 0)}（${p.withdrawCount}）`;
+  const registrationLine = shortDate && hasRegistrationSignal(p.triggeredRules)
+    ? `📅 注册：${shortDate}`
+    : '';
+  const overviewLines = [
+    focusLine,
+    fundsLine,
+    ...buildGameAndMethodLines(p.mainGameType, p.receivingBank, p.receivingName),
+    registrationLine,
+  ].filter(Boolean).join('\n');
+  const remark = normalizeMemberRemark(p.remark);
 
-  let text = `${line1}\n\n${line3}\n${line4}\n${line5}${lineGame ? '\n' + lineGame : ''}\n${line6}\n\n${triggeredText || '  无'}`;
+  const dataStatus = (p.dataIssues?.length || 0) > 0
+    ? `数据不完整：${p.dataIssues!.slice(0, 3).join('、')}，需人工复核`
+    : '';
+  const alertDetails = [
+    triggeredText,
+    dataStatus,
+    remark ? `📝 备注：${remark}` : '',
+  ].filter(Boolean).join('\n');
+  let text = `${line1}\n\n${line3}\n${overviewLines}${alertDetails ? '\n\n' + alertDetails : ''}`;
 
   if (text.length > 4000) {
     let cutoff = 3990;
@@ -689,7 +881,7 @@ export function buildRiskAlertText(p: AlertTextParams): string {
     text = text.substring(0, cutoff) + '\n...（更多省略）';
   }
 
-  return text;
+  return formatDisplaySymbols(text);
 }
 
 export async function sendRiskAlert(evalResult: EvaluationResult, order?: WithdrawOrder): Promise<{ success: boolean; messageId?: number; text?: string }> {
@@ -722,33 +914,39 @@ export async function sendRiskAlert(evalResult: EvaluationResult, order?: Withdr
 
     if (evalResult.riskLevel === 'LOW') {
       const numAmount = parseFloat(String(amount ?? '0'));
-      if (numAmount >= 5000) {
-        // 大额提款，展示完整会员信息 + 人工审核按钮，超时后自动审核
-        const lowText = buildLowAmountAlertText({
-          memberName,
-          proxyCode,
-          balance: evalResult.balance || order?.balance || 0,
-          depositCount: evalResult.depositCount ?? 0,
-          withdrawCount: evalResult.withdrawCount ?? 0,
-          rechargeWithdrawDiff: evalResult.rechargeWithdrawDiff ?? 0,
-          receivingBank: order?.receivingBank || '',
-          receivingName: String(order?.receivingName || order?.realName || order?.memberRealName || order?.accountName || order?.bankAccountName || order?.receiving_name || ''),
-          registerTime: evalResult.registerTime || '',
-          amount,
-        });
-        const lowKeyboard = new InlineKeyboard()
-          .text('📋 人工审核', `feedback:${evalResult.orderId}:review`)
-          .text('🔍 其他信息', `feedback:${evalResult.orderId}:info`)
-          .text('↔️ 对打对冲', `feedback:${evalResult.orderId}:hedge`);
-        const msg = await bot.api.sendMessage(notifyChatId, lowText, { reply_markup: lowKeyboard });
+      const isLargeLow = numAmount >= 5000;
+      const lowText = buildLowAmountAlertText({
+        memberName,
+        proxyCode,
+        balance: evalResult.balance ?? order?.balance ?? 0,
+        depositCount: evalResult.depositCount ?? 0,
+        withdrawCount: evalResult.withdrawCount ?? 0,
+        rechargeWithdrawDiff: evalResult.rechargeWithdrawDiff ?? 0,
+        rechargeAmount: evalResult.rechargeAmount ?? 0,
+        withdrawAmount: evalResult.withdrawAmount ?? 0,
+        profitLoss: evalResult.profitLoss,
+        estimatedProfitLoss: evalResult.estimatedProfitLoss,
+        receivingBank: order?.receivingBank || '',
+        receivingName: String(order?.receivingName || order?.realName || order?.memberRealName || order?.accountName || order?.bankAccountName || order?.receiving_name || ''),
+        registerTime: evalResult.registerTime || '',
+        amount,
+        isLarge: isLargeLow,
+        mainGameType: evalResult.mainGameType,
+        remark: evalResult.remark || order?.memberRemark,
+        auxiliaryReasons: evalResult.triggeredRules.slice(0, 3).map(rule => rule.reason),
+      });
+
+      if (evalResult.orderId) {
+        const msg = await bot.api.sendMessage(notifyChatId, lowText, { reply_markup: buildActionKeyboard(evalResult.orderId) });
         tgFailCount = 0;
-        logger.info({ orderNo: evalResult.orderId, amount: numAmount }, '[Telegram] ✅ 低风险大额通知已发送（带审核按钮）');
+        logger.info({ orderNo: evalResult.orderId, amount: numAmount }, '[Telegram] ✅ 低风险通知已发送（带审核按钮）');
         return { success: true, messageId: msg.message_id, text: lowText };
       }
-      const msg = await bot.api.sendMessage(notifyChatId, `✅ ${memberName} · 提款 ${fmtNum(amount)} · 代理 ${proxyCode} · ${evalResult.orderId || ''}`);
+
+      const msg = await bot.api.sendMessage(notifyChatId, lowText);
       tgFailCount = 0;
       logger.info({ orderNo: evalResult.orderId, riskLevel: evalResult.riskLevel }, '[Telegram] ✅ 低风险通知已发送');
-      return { success: true, messageId: msg.message_id };
+      return { success: true, messageId: msg.message_id, text: lowText };
     }
 
     const text = buildRiskAlertText({
@@ -756,10 +954,14 @@ export async function sendRiskAlert(evalResult: EvaluationResult, order?: Withdr
       totalScore: evalResult.totalScore,
       memberName,
       proxyCode,
-      balance: evalResult.balance || order?.balance || '',
+      balance: evalResult.balance ?? order?.balance ?? '',
       depositCount: evalResult.depositCount ?? 0,
       withdrawCount: evalResult.withdrawCount ?? 0,
       rechargeWithdrawDiff: evalResult.rechargeWithdrawDiff ?? 0,
+      rechargeAmount: evalResult.rechargeAmount ?? 0,
+      withdrawAmount: evalResult.withdrawAmount ?? 0,
+      profitLoss: evalResult.profitLoss,
+      estimatedProfitLoss: evalResult.estimatedProfitLoss,
       receivingBank: order?.receivingBank || '',
       receivingName: String(order?.receivingName || order?.realName || order?.memberRealName || order?.accountName || order?.bankAccountName || order?.receiving_name || ''),
       registerTime: evalResult.registerTime || '',
@@ -767,15 +969,13 @@ export async function sendRiskAlert(evalResult: EvaluationResult, order?: Withdr
       triggeredRules: evalResult.triggeredRules,
       isEarlyMorning: evalResult.isEarlyMorning,
       mainGameType: evalResult.mainGameType,
+      dataIssues: evalResult.dataIssues,
+      remark: evalResult.remark || order?.memberRemark,
     });
 
     let msg: { message_id: number };
     if (evalResult.orderId) {
-      const keyboard = new InlineKeyboard()
-        .text('📋 人工审核', `feedback:${evalResult.orderId}:review`)
-        .text('🔍 其他信息', `feedback:${evalResult.orderId}:info`)
-        .text('↔️ 对打对冲', `feedback:${evalResult.orderId}:hedge`);
-      msg = await bot.api.sendMessage(notifyChatId, text, { reply_markup: keyboard });
+      msg = await bot.api.sendMessage(notifyChatId, text, { reply_markup: buildActionKeyboard(evalResult.orderId) });
     } else {
       msg = await bot.api.sendMessage(notifyChatId, text);
     }
@@ -799,7 +999,7 @@ export async function startTelegramBot(): Promise<void> {
     const token = process.env.TELEGRAM_BOT_TOKEN || '';
     if (!token) {
       logger.error('[Telegram] 错误: 未设置 TELEGRAM_BOT_TOKEN，请检查 .env 配置');
-      return;
+      throw new Error('TELEGRAM_BOT_TOKEN 未配置');
     }
 
     bot = new Bot(token);
@@ -813,6 +1013,7 @@ export async function startTelegramBot(): Promise<void> {
     const me = await bot.api.getMe();
     logger.info({ username: me.username, id: me.id }, `[Telegram] Bot 启动成功: @${me.username}`);
 
+    await bot.api.deleteWebhook({ drop_pending_updates: true });
     bot.start({
       onStart: (info) => {
         logger.info({ username: info.username }, `[Telegram] 开始轮询更新: @${info.username}`);
@@ -821,38 +1022,57 @@ export async function startTelegramBot(): Promise<void> {
   } catch (err) {
     logger.error({ err: (err as Error).message }, '[Telegram] Bot 启动失败');
     logger.error('[Telegram] 请检查 TELEGRAM_BOT_TOKEN 是否正确');
+    throw err;
   }
 }
 
 const AUTO_REVIEW_TIMEOUT_MS = 150 * 1000; // 2 分 30 秒
 
-/** 构建低风险大额提款通知文本（sendRiskAlert 和 autoReview 共用） */
-function buildLowAmountAlertText(p: {
+/** 构建低风险提款通知文本（sendRiskAlert 和 autoReview 共用） */
+export function buildLowAmountAlertText(p: {
   memberName: string;
   proxyCode: string;
   balance: string | number;
   depositCount: number;
   withdrawCount: number;
   rechargeWithdrawDiff: number;
+  rechargeAmount: number;
+  withdrawAmount: number;
+  profitLoss?: number;
+  estimatedProfitLoss?: boolean;
   receivingBank: string;
   receivingName: string;
   registerTime: string;
   amount: string | number;
+  isLarge?: boolean;
+  mainGameType?: string;
+  remark?: string;
+  auxiliaryReasons?: string[];
 }): string {
-  const diff = p.rechargeWithdrawDiff ?? 0;
-  const diffTag = diff < 0 ? '赢' : '输';
-  const diffValue = fmtNum(Math.abs(diff));
+  const netText = formatProfitLoss(p.profitLoss, p.estimatedProfitLoss, p.balance, p.rechargeWithdrawDiff ?? 0);
   const shortDate = p.registerTime
     ? p.registerTime.replace(/^(\d{4})-(\d{2})-(\d{2})\s*(\d{1,2}:\d{2}).*/, (_, y: string, m: string, d: string, t: string) => `${y}-${parseInt(m, 10)}-${parseInt(d, 10)} ${t}`)
     : '';
-  return [
-    `✅ 低风险 · 大额提款`,
-    ``,
+  const hasRegistrationRelatedReason = hasRegistrationSignal(p.auxiliaryReasons || []);
+  const lines = [
+    p.isLarge ? `✅ 低风险 · 大额提款` : `✅ 低风险`,
+    '',
     `👤 账号: ${p.memberName}  上级: ${p.proxyCode}`,
-    `💰 余额: ${fmtNum(p.balance || 0)}  充提次数: ${p.depositCount} / ${p.withdrawCount}`,
-    `💸 ${diffTag}钱: ${diffValue} 提款方式: ${p.receivingBank || '未知渠道'}${p.receivingName ? '·' + p.receivingName : ''}`,
-    `📅 ${shortDate || '未知'} 💲 提款: ${fmtNum(p.amount)}`,
-  ].join('\n');
+    `💲 提款：${fmtNum(p.amount)}  余额：${fmtNum(p.balance || 0)}  ${netText}`,
+    `💰 充${fmtNum(p.rechargeAmount)}（${p.depositCount}）/提${fmtNum(p.withdrawAmount)}（${p.withdrawCount}）`,
+    ...buildGameAndMethodLines(p.mainGameType, p.receivingBank, p.receivingName),
+  ];
+  if (shortDate && hasRegistrationRelatedReason) lines.push(`📅 注册：${shortDate}`);
+  const hasAuxiliaryReasons = (p.auxiliaryReasons?.length || 0) > 0;
+  if (hasAuxiliaryReasons) {
+    lines.push('', ...p.auxiliaryReasons!.map(reason => `🟡 ${reason.split('\n')[0]}`));
+  }
+  const remark = normalizeMemberRemark(p.remark);
+  if (remark) {
+    if (!hasAuxiliaryReasons) lines.push('');
+    lines.push(`📝 备注：${remark}`);
+  }
+  return lines.join('\n');
 }
 
 /** 精准定时：通知发送成功后调用，2分30秒后准时触发自动审核（setTimeout，非轮询）。
@@ -876,7 +1096,7 @@ async function tryAutoReviewSingleOrder(orderId: string): Promise<void> {
   }
 }
 
-/** 对单条 RiskEval 记录执行自动审核（DB 更新 + RuleFeedback + 消息编辑）。
+/** 对单条 RiskEval 记录执行自动审核（先更新/补发消息，再落库反馈）。
  *  由 tryAutoReviewSingleOrder（精准 setTimeout）和 autoReviewExpiredOrders（批量兜底）共用。
  *  所有条件判断（超时、CAS、按钮检测）均在此函数内完成，调用方只需传入记录。 */
 async function autoReviewOneRecord(ev: {
@@ -894,6 +1114,16 @@ async function autoReviewOneRecord(ev: {
   notifiedAt: Date | null;
   createdAt: Date;
 }): Promise<void> {
+  const orderId = ev.orderId;
+  if (reviewLocks.has(orderId)) return;
+  reviewLocks.add(orderId);
+
+  try {
+    // 两条自动审核路径可能同时命中同一订单，锁住后再从数据库读取最新状态。
+    const current = await dbHolder.db.riskEval.findUnique({ where: { orderId } });
+    if (!current) return;
+    ev = current;
+
   // 已审核或未通知的订单跳过
   if (ev.feedback !== '') return;
   if (!ev.notified) return;
@@ -905,43 +1135,15 @@ async function autoReviewOneRecord(ev: {
   let detail: Record<string, any> = {};
   try { detail = JSON.parse(ev.detail || '{}'); } catch {}
 
-  // 判断是否需要自动审核：非 LOW（均有审核按钮）或 LOW + 金额 >= 5000
   const orderAmount = parseFloat(String(detail.orderAmount ?? '0'));
-  const isLowAutoReview = ev.riskLevel === 'LOW' && orderAmount >= 5000;
-  const hasReviewButton = ev.riskLevel !== 'LOW' && triggeredRules.length > 0;
-  if (!hasReviewButton && !isLowAutoReview) return;
+  const isLowAutoReview = ev.riskLevel === 'LOW';
 
   // 精确超时判断：专用列 notifiedAt，回退到 createdAt（兼容旧数据）
   const effectiveNotifiedAt = ev.notifiedAt ? ev.notifiedAt.getTime() : new Date(ev.createdAt).getTime();
   if (Date.now() - effectiveNotifiedAt < AUTO_REVIEW_TIMEOUT_MS) return;
 
-  // CAS 更新 feedback 防止重复处理
-  const upd = await dbHolder.db.riskEval.updateMany({
-    where: { orderId: ev.orderId, feedback: '' },
-    data: { feedback: 'review' },
-  });
-  if (upd.count === 0) return;
-
-  // 写入 RuleFeedback 记录（与人工审核行为一致：所有触发规则均记录）
-  if ((hasReviewButton || isLowAutoReview) && triggeredRules.length > 0) {
-    const periodInfo = detail.periodInfo || '';
-    const feedbackData = triggeredRules.map((rule: any) => ({
-      evalId: ev.id,
-      ruleId: rule.id,
-      feedback: 'review',
-      memberId: ev.memberId,
-      periodInfo: ['R24', 'R25', 'R26', 'R27'].includes(rule.id) ? periodInfo : '',
-    }));
-    if (feedbackData.length > 0) {
-      await dbHolder.db.ruleFeedback.createMany({ data: feedbackData });
-      invalidateMemberReviewedPeriods(ev.memberId);
-    }
-  }
-
-  // 更新 Telegram 消息：移除"人工审核"按钮 + 追加审核文案
+  // 更新 Telegram 消息：保留查询按钮，并追加系统自动处理状态。
   const notifyMsgId = ev.notifyMsgId;
-  const reviewTag = `📋 超时未操作 ${ev.orderId} 的处理: ⚠️ 默认已审核`;
-
   let rebuiltText: string;
   if (isLowAutoReview) {
     rebuiltText = buildLowAmountAlertText({
@@ -951,10 +1153,18 @@ async function autoReviewOneRecord(ev: {
       depositCount: (detail.depositCount as number) ?? 0,
       withdrawCount: (detail.withdrawCount as number) ?? 0,
       rechargeWithdrawDiff: (detail.rechargeWithdrawDiff as number) ?? 0,
+      rechargeAmount: (detail.rechargeAmount as number) ?? 0,
+      withdrawAmount: (detail.withdrawAmount as number) ?? 0,
+      profitLoss: detail.profitLoss as number | undefined,
+      estimatedProfitLoss: (detail.estimatedProfitLoss as boolean) ?? true,
       receivingBank: (detail.receivingBank as string) || '',
       receivingName: (detail.receivingName as string) || '',
       registerTime: (detail.registerTime as string) || '',
       amount: (detail.orderAmount as string | number) || '',
+      isLarge: orderAmount >= 5000,
+      mainGameType: (detail.mainGameType as string) || undefined,
+      remark: (detail.remark as string) || '',
+      auxiliaryReasons: triggeredRules.slice(0, 3).map((rule: any) => String(rule.reason || '')),
     });
   } else {
     rebuiltText = buildRiskAlertText({
@@ -966,6 +1176,10 @@ async function autoReviewOneRecord(ev: {
       depositCount: (detail.depositCount as number) ?? 0,
       withdrawCount: (detail.withdrawCount as number) ?? 0,
       rechargeWithdrawDiff: (detail.rechargeWithdrawDiff as number) ?? 0,
+      rechargeAmount: (detail.rechargeAmount as number) ?? 0,
+      withdrawAmount: (detail.withdrawAmount as number) ?? 0,
+      profitLoss: detail.profitLoss as number | undefined,
+      estimatedProfitLoss: (detail.estimatedProfitLoss as boolean) ?? true,
       receivingBank: (detail.receivingBank as string) || '',
       receivingName: (detail.receivingName as string) || '',
       registerTime: (detail.registerTime as string) || '',
@@ -973,31 +1187,57 @@ async function autoReviewOneRecord(ev: {
       triggeredRules,
       isEarlyMorning: (detail.isEarlyMorning as boolean) || false,
       mainGameType: (detail.mainGameType as string) || undefined,
+      dataIssues: (detail.dataIssues as string[]) || [],
+      remark: (detail.remark as string) || '',
     });
   }
 
-  const appended = `${rebuiltText}\n\n${reviewTag}`;
-  const updatedKeyboard = new InlineKeyboard()
-    .text('🔍 其他信息', `feedback:${ev.orderId}:info`)
-    .text('↔️ 对打对冲', `feedback:${ev.orderId}:hedge`);
+  const reviewedText = withReviewStatus(rebuiltText, '已自动审核');
+  const updatedKeyboard = buildActionKeyboard(ev.orderId, true);
 
+  let msgEdited = false;
   if (notifyMsgId && notifyChatId) {
     try {
-      await bot.api.editMessageText(notifyChatId, notifyMsgId, appended.substring(0, 4096), { reply_markup: updatedKeyboard });
+      await bot.api.editMessageText(notifyChatId, notifyMsgId, reviewedText.substring(0, 4096), { reply_markup: updatedKeyboard });
+      msgEdited = true;
     } catch (editErr) {
-      logger.warn({ orderId: ev.orderId, err: (editErr as Error).message }, '[Telegram] 自动审核编辑消息失败，尝试发新消息');
-      try { await bot.api.sendMessage(notifyChatId, appended.substring(0, 4096), { reply_markup: updatedKeyboard }); } catch (sendErr) {
-        logger.warn({ orderId: ev.orderId, err: (sendErr as Error).message }, '[Telegram] 自动审核发新消息也失败');
+      if (isTelegramMessageNotModified(editErr)) {
+        // 另一条审核路径已完成编辑；无需再发一条通知。
+        msgEdited = true;
+        logger.info({ orderId: ev.orderId }, '[Telegram] 自动审核消息已是目标状态，跳过补发');
+      } else {
+        logger.warn({ orderId: ev.orderId, err: (editErr as Error).message }, '[Telegram] 自动审核编辑消息失败，尝试发新消息');
+        try {
+          await bot.api.sendMessage(notifyChatId, reviewedText.substring(0, 4096), { reply_markup: updatedKeyboard });
+          msgEdited = true;
+        } catch (sendErr) {
+          logger.warn({ orderId: ev.orderId, err: (sendErr as Error).message }, '[Telegram] 自动审核发新消息也失败');
+        }
       }
     }
   } else if (notifyChatId) {
     logger.info({ orderId: ev.orderId }, '[Telegram] 自动审核 notifyMsgId 缺失，发新消息');
-    try { await bot.api.sendMessage(notifyChatId, appended.substring(0, 4096), { reply_markup: updatedKeyboard }); } catch (sendErr) {
+    try {
+      await bot.api.sendMessage(notifyChatId, reviewedText.substring(0, 4096), { reply_markup: updatedKeyboard });
+      msgEdited = true;
+    } catch (sendErr) {
       logger.warn({ orderId: ev.orderId, err: (sendErr as Error).message }, '[Telegram] 自动审核发新消息失败');
     }
   }
 
+  if (!msgEdited) {
+    logger.warn({ orderId: ev.orderId }, '[Telegram] 自动审核消息编辑/发送均失败，保留未审核状态等待重试');
+    return;
+  }
+
+  // 风险单和逐规则反馈在同一事务中落库，避免只更新一半后无法重试。
+  const recorded = await recordFeedbackOutcome(ev.orderId, 'review');
+  if (!recorded) return;
+
   logger.info({ orderId: ev.orderId, memberName: ev.memberName, riskLevel: ev.riskLevel }, '[Telegram] 超时订单已自动审核');
+  } finally {
+    reviewLocks.delete(orderId);
+  }
 }
 
 /** 批量兜底：定时扫描超时未审核订单（进程重启后 setTimeout 丢失的补偿机制） */
@@ -1020,7 +1260,7 @@ export async function autoReviewExpiredOrders(): Promise<void> {
       orderBy: { createdAt: 'asc' },
     });
 
-    // Query 2: LOW 风险订单（大额提款可能有审核按钮）
+    // Query 2: LOW 风险订单（现在统一带审核按钮）
     const lowCandidates = await dbHolder.db.riskEval.findMany({
       where: {
         notified: true,

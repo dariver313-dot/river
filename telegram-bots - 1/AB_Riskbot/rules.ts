@@ -5,13 +5,13 @@
  * 引擎逻辑（evaluateRules、缓存、handledRules 等）在 rule-engine.ts 中。
  */
 
-import type { BetRecord, ThirdGameOrder, WithdrawalRecord, PaymentOrder } from './types';
-import type { RiskRule, RuleContext, RuleResult } from './rule-types';
+import type { BetRecord, WithdrawalRecord, PaymentOrder } from './types';
+import type { LoginAssociationSummary, RiskRule, RuleContext, RuleResult } from './rule-types';
 import { checkLiuHeCai } from './lhc-checker';
 import { checkShiShiCai } from './ssc-checker';
 import { checkKuaiSan } from './k3-checker';
 import { checkPK10 } from './pk10-checker';
-import { parseTimeStr, absFloat, sum, extractProxyCode, formatBeijingTime, normalizePayChannel } from './utils';
+import { parseTimeStr, absFloat, sum, extractProxyCode, formatBeijingTime, normalizePayChannel, combineMemberRemarks } from './utils';
 import { logger } from './logger';
 
 // ============================================================
@@ -35,6 +35,96 @@ function getProxyBlacklist(): string[] {
     _proxyBlacklistCache.parsed = current.split(',').map(s => s.trim()).filter(Boolean);
   }
   return _proxyBlacklistCache.parsed;
+}
+
+function formatRuleMoney(amount: number): string {
+  if (!Number.isFinite(amount)) return '0';
+  const fixed = amount.toFixed(2);
+  return fixed.endsWith('.00') ? fixed.slice(0, -3) : fixed.replace(/0+$/, '').replace(/\.$/, '');
+}
+
+function normalizeBetText(value: string | undefined): string {
+  return String(value || '').replace(/\s+/g, '').toLowerCase();
+}
+
+function formatWithdrawChannel(raw: string | undefined, normalized: string): string {
+  const value = String(raw || normalized || '').trim();
+  const key = value.toLowerCase().replace(/\s+/g, '');
+  const displayMap: Record<string, string> = {
+    alipay: '支付宝',
+    wechat: '微信',
+    wx: '微信',
+    bank: '银行卡',
+    unionpay: '云闪付',
+    jdpay: 'JDpay',
+    abpay: 'ABpay',
+    cbipay: 'C币钱包',
+    kdpay: 'K豆钱包',
+    usdt: 'USDT',
+  };
+  return displayMap[key] || value || '未知';
+}
+
+function splitLotteryViolation(reason: string): { lotteryName: string; issue: string; play: string; problem: string } | null {
+  const trimmed = reason.trim();
+  const match = trimmed.match(/^(\S+)\s+(\S+)\s+(.+)$/);
+  if (!match) return null;
+
+  const [, lotteryName, issue, rest] = match;
+  const colonIndex = rest.search(/[：:]/);
+  if (colonIndex >= 0) {
+    return {
+      lotteryName,
+      issue,
+      play: rest.slice(0, colonIndex).trim(),
+      problem: rest.slice(colonIndex + 1).trim(),
+    };
+  }
+
+  const tokens = rest.split(/\s+/).filter(Boolean);
+  if (tokens.length <= 1) return { lotteryName, issue, play: rest.trim(), problem: '玩法违规' };
+
+  const problemIndex = tokens.findIndex((token, index) => index > 0 && /↔|对打|互斥|只能|限|覆盖|全包|规避/.test(token));
+  if (problemIndex > 0) {
+    return {
+      lotteryName,
+      issue,
+      play: tokens.slice(0, problemIndex).join(' '),
+      problem: tokens.slice(problemIndex).join(' '),
+    };
+  }
+
+  return {
+    lotteryName,
+    issue,
+    play: tokens[0],
+    problem: tokens.slice(1).join(' '),
+  };
+}
+
+function amountForViolation(bets: BetRecord[], lotteryName: string, issue: string, play: string): number {
+  const sameIssue = bets.filter(b => String(b.lotteryName || '') === lotteryName && String(b.issue || '') === issue);
+  const playKey = normalizeBetText(play);
+  const playMatched = sameIssue.filter((b) => {
+    const playClass = normalizeBetText(b.playClassName);
+    const playName = normalizeBetText(b.playName);
+    return (playClass && (playKey.includes(playClass) || playClass.includes(playKey))) ||
+      (playName && (playKey.includes(playName) || playName.includes(playKey)));
+  });
+  const source = playMatched.length > 0 ? playMatched : sameIssue;
+  return source.reduce((total, b) => total + (parseFloat(String(b.amount || 0)) || 0), 0);
+}
+
+function formatLotteryViolationReason(reason: string, bets: BetRecord[]): string {
+  if (/^\S+\s+\S+\s+.+\s金额[\d,.]+[：:]/.test(reason.trim())) return reason.trim();
+  const parsed = splitLotteryViolation(reason);
+  if (!parsed) return reason.trim();
+  const amount = amountForViolation(bets, parsed.lotteryName, parsed.issue, parsed.play);
+  return `${parsed.lotteryName} ${parsed.issue} ${parsed.play} 金额${formatRuleMoney(amount)}：${parsed.problem}`;
+}
+
+function formatLotteryViolationReasons(reasons: string[], bets: BetRecord[]): string[] {
+  return reasons.map(reason => formatLotteryViolationReason(reason, bets));
 }
 
 export function extractTwoSideDirection(numbers: string): string | null {
@@ -85,7 +175,8 @@ export function isMutexDirection(dir1: string | null, dir2: string | null): bool
 
 
 function ipAssociationScore(count: number, maxScore: number): { triggered: boolean; score: number; label: string } {
-  if (count < 3) return { triggered: false, score: 0, label: '' };
+  if (count < 2) return { triggered: false, score: 0, label: '' };
+  if (count === 2) return { triggered: true, score: 5, label: '同IP2人' };
   if (count <= 20) return { triggered: true, score: maxScore, label: `小群体(${count}人)` };
   if (count <= 100) return { triggered: true, score: Math.round(maxScore * 0.5), label: `中群体(${count}人)` };
   if (count <= 500) return { triggered: true, score: Math.round(maxScore * 0.2), label: `大群体(${count}人)` };
@@ -100,6 +191,32 @@ function deviceAssociationScore(count: number, maxScore: number): { triggered: b
   return { triggered: false, score: 0, label: `公共设备(${count}人)` };
 }
 
+const ASSOCIATION_DISPLAY_LIMIT = 8;
+
+function pickTopAssociation(
+  summaries: LoginAssociationSummary[] | undefined,
+  scorer: (count: number, maxScore: number) => { triggered: boolean; score: number; label: string },
+  maxScore: number,
+): { summary: LoginAssociationSummary; score: number; label: string } | null {
+  const candidates = (summaries || [])
+    .map(summary => ({ summary, result: scorer(summary.accountCount, maxScore) }))
+    .filter(item => item.result.triggered)
+    .sort((a, b) => b.summary.accountCount - a.summary.accountCount || b.result.score - a.result.score);
+  const top = candidates[0];
+  return top ? { summary: top.summary, score: top.result.score, label: top.result.label } : null;
+}
+
+function formatAssociationReason(prefix: string, value: string, summary: LoginAssociationSummary): string {
+  const display = summary.otherMemberNames.slice(0, ASSOCIATION_DISPLAY_LIMIT);
+  const hidden = Math.max(0, summary.otherMemberNames.length - display.length);
+  const suffix = hidden > 0 ? `，另有${hidden}个隐藏` : '';
+  const otherText = display.length > 0 ? `，其他账号：${display.join(' ')}${suffix}` : '';
+  const fetched = summary.fetchedCount ?? summary.memberNames.length;
+  const total = summary.totalCount ?? fetched;
+  const truncatedText = summary.truncated && total > fetched ? `，仅查前${fetched}条/共${total}条登录` : '';
+  return `${prefix} ${value} 共${summary.accountCount}个账号${otherText}${truncatedText}`;
+}
+
 // ============================================================
 // 已审核期号过滤（供 R24/R25 使用）
 // ============================================================
@@ -107,8 +224,9 @@ function deviceAssociationScore(count: number, maxScore: number): { triggered: b
 function filterBetsByPeriods(bets: BetRecord[], excludedPeriods: Set<string>): BetRecord[] {
   if (excludedPeriods.size === 0) return bets;
   return bets.filter(b => {
-    const key = `${b.lotteryName || ''}:::${b.issue || ''}:::${b.playClassName || ''}`;
-    return !excludedPeriods.has(key);
+    const baseKey = `${b.lotteryName || ''}:::${b.issue || ''}`;
+    const fullKey = `${baseKey}:::${b.playClassName || ''}`;
+    return !excludedPeriods.has(fullKey) && !excludedPeriods.has(baseKey);
   });
 }
 
@@ -122,6 +240,20 @@ function getUnreviewedBets(ctx: RuleContext): BetRecord[] {
       { total: bets.length, filtered: filtered.length, removed: bets.length - filtered.length, excludedPeriods: [...excluded] },
       '[R24/R25] 期号去重过滤投注',
     );
+  }
+  return filtered;
+}
+
+/** R26 使用预分组投注，仍需排除已经审核过的彩种/期号/玩法。 */
+function getUnreviewedIssueGroups(ctx: RuleContext): Map<string, BetRecord[]> {
+  const issueGroups = ctx.issueGroups || new Map<string, BetRecord[]>();
+  const excluded = ctx.reviewedPeriodKeys;
+  if (!excluded || excluded.size === 0) return issueGroups;
+
+  const filtered = new Map<string, BetRecord[]>();
+  for (const [key, group] of issueGroups) {
+    const remaining = filterBetsByPeriods(group, excluded);
+    if (remaining.length > 0) filtered.set(key, remaining);
   }
   return filtered;
 }
@@ -154,7 +286,10 @@ export const rules: RiskRule[] = [
       const regTime = parseTimeStr(member?.createTime || member?.createdAt);
       if (!regTime || !order?.amount) return { triggered: false, score: 0 };
 
-      const hoursSinceReg = (Date.now() - regTime) / 3600000;
+      const orderTime = parseTimeStr(
+        order?.createTime || (order as Record<string, unknown>)?.createdAt as string | number | undefined,
+      ) || Date.now();
+      const hoursSinceReg = Math.max(0, (orderTime - regTime) / 3600000);
       const amount = parseFloat(String(order.amount)) || 0;
       const hasBet = absFloat(member?.sumBet) > 0;
 
@@ -244,6 +379,53 @@ export const rules: RiskRule[] = [
   // ============================================================
 
   {
+    id: 'R02D',
+    name: '今日同IP账号数',
+    description: '当天同一登录IP出现多个账号（2个账号起低分提示，>500公共出口忽略）',
+    severity: 'HIGH',
+    weight: 20,
+    group: 'association',
+    enabled: true,
+    evaluate(ctx: RuleContext): RuleResult {
+      const top = pickTopAssociation(ctx.dailyLoginIpAssociations, ipAssociationScore, 20);
+      if (!top) return { triggered: false, score: 0 };
+      const topDevice = pickTopAssociation(ctx.dailyLoginDeviceAssociations, deviceAssociationScore, 25);
+      const sameAccountOnTopDevice = new Set(topDevice?.summary.otherMemberNames || []);
+      if (top.summary.otherMemberNames.some(name => sameAccountOnTopDevice.has(name))) {
+        return { triggered: false, score: 0 };
+      }
+      return {
+        triggered: true,
+        reason: formatAssociationReason('今日同IP', top.summary.value, top.summary),
+        score: top.score,
+      };
+    },
+  },
+
+  {
+    id: 'R03D',
+    name: '今日同设备账号数',
+    description: '当天同一登录设备出现多个账号（2个账号起提示，>100公共设备忽略）',
+    severity: 'HIGH',
+    weight: 25,
+    group: 'association',
+    enabled: true,
+    evaluate(ctx: RuleContext): RuleResult {
+      const top = pickTopAssociation(ctx.dailyLoginDeviceAssociations, deviceAssociationScore, 25);
+      if (!top) return { triggered: false, score: 0 };
+      const shortDevice = top.summary.value.split(':')[0] || top.summary.value;
+      const ipAccounts = new Set((ctx.dailyLoginIpAssociations || []).flatMap(summary => summary.otherMemberNames));
+      const both = top.summary.otherMemberNames.filter(name => ipAccounts.has(name));
+      const bothText = both.length > 0 ? `，其中 ${both.slice(0, 3).join(' ')} 同时命中同IP` : '';
+      return {
+        triggered: true,
+        reason: `${formatAssociationReason('今日同设备', shortDevice, top.summary)}${bothText}`,
+        score: Math.min(30, top.score + (both.length > 0 ? 5 : 0)),
+      };
+    },
+  },
+
+  {
     id: 'R02',
     name: '同登录IP多账号',
     description: '同一登录IP下关联账号（3-20人高风险，>500公共IP忽略）',
@@ -251,6 +433,9 @@ export const rules: RiskRule[] = [
     weight: 25,
     group: 'association',
     enabled: false,
+    precondition(ctx: RuleContext): boolean {
+      return !ctx.dailyLoginIpAssociations || ctx.dailyLoginIpAssociations.length === 0;
+    },
     evaluate(ctx: RuleContext): RuleResult {
       const count = ctx.relatedByLoginIpCount ?? 0;
       const result = ipAssociationScore(count, 25);
@@ -277,6 +462,9 @@ export const rules: RiskRule[] = [
     weight: 25,
     group: 'association',
     enabled: false,
+    precondition(ctx: RuleContext): boolean {
+      return !ctx.dailyLoginDeviceAssociations || ctx.dailyLoginDeviceAssociations.length === 0;
+    },
     evaluate(ctx: RuleContext): RuleResult {
       const count = ctx.relatedByLoginDeviceCount ?? 0;
       const result = deviceAssociationScore(count, 25);
@@ -304,20 +492,11 @@ export const rules: RiskRule[] = [
     group: 'association',
     enabled: true,
     evaluate(ctx: RuleContext): RuleResult {
-      const order = ctx.order;
-      const receivingName = order?.receivingName;
-      const receivingCardNo = order?.receivingCardNo;
-      if (!receivingName || !receivingCardNo) return { triggered: false, score: 0 };
-
-      const key = `${receivingName}:${receivingCardNo}`;
-      const cache = ctx.receivingInfoCache;
-      const entry = cache.get(key);
-      const memberIds = entry?.data || new Set<string>();
-      const currentMemberId = String(order.memberId);
-
-      const otherMemberIds = [...memberIds].filter(id => id !== currentMemberId);
-      if (otherMemberIds.length >= 1) {
-        return { triggered: true, reason: `收款人 ${receivingName} 关联 ${otherMemberIds.length + 1} 个不同会员`, score: 30 };
+      const relatedNames = [...new Set(ctx.receivingAssociations || [])];
+      if (relatedNames.length >= 1) {
+        const display = relatedNames.slice(0, 5).join(' ');
+        const hidden = relatedNames.length > 5 ? `，另有${relatedNames.length - 5}个隐藏` : '';
+        return { triggered: true, reason: `同收款信息关联账号：${display}${hidden}`, score: 30 };
       }
       return { triggered: false, score: 0 };
     },
@@ -330,23 +509,24 @@ export const rules: RiskRule[] = [
   {
     id: 'R04',
     name: '充提回流比异常',
-    description: '提款超过充值 10%轻度异常，30%以上明显套利/洗钱特征',
-    severity: 'HIGH',
-    weight: 25,
+    description: '累计提款明显超过充值且当前净赢，作为资金辅助信号',
+    severity: 'MEDIUM',
+    weight: 15,
     group: 'behavior',
     enabled: true,
     evaluate(ctx: RuleContext): RuleResult {
-      const member = ctx.member;
-      const sumRecharge = absFloat(member?.sumRecharge);
-      const sumWithdraw = absFloat(member?.sumWithdraw);
+      const sumRecharge = absFloat(ctx.member?.sumRecharge);
+      const sumWithdraw = absFloat(ctx.member?.sumWithdraw);
+      const balance = absFloat(ctx.member?.balance ?? ctx.order?.balance);
+      const estimatedNet = sumWithdraw + balance - sumRecharge;
 
-      if (sumRecharge >= 1000) {
+      if (sumRecharge >= 1000 && estimatedNet > 0) {
         const ratio = sumWithdraw / sumRecharge;
-        if (ratio > 1.3) {
-          return { triggered: true, reason: `充提回流比 ${(ratio * 100).toFixed(1)}%（充 ${sumRecharge} / 提 ${sumWithdraw}）`, score: 25 };
+        if (ratio > 1.5) {
+          return { triggered: true, reason: `累计提充比 ${(ratio * 100).toFixed(1)}%（充 ${sumRecharge} / 提 ${sumWithdraw}），当前净赢`, score: 15 };
         }
-        if (ratio > 1.1) {
-          return { triggered: true, reason: `充提回流比 ${(ratio * 100).toFixed(1)}%（充 ${sumRecharge} / 提 ${sumWithdraw}）`, score: 15 };
+        if (ratio > 1.2) {
+          return { triggered: true, reason: `累计提充比 ${(ratio * 100).toFixed(1)}%（充 ${sumRecharge} / 提 ${sumWithdraw}），需结合投注核对`, score: 8 };
         }
       }
       return { triggered: false, score: 0 };
@@ -468,7 +648,7 @@ export const rules: RiskRule[] = [
   {
     id: 'R17',
     name: '会员备注标记',
-    description: '会员备注包含风险关键词',
+    description: '备注命中风险关键词时增加风险评分；备注内容统一作为上下文展示',
     severity: 'HIGH',
     weight: 25,
     group: 'marking',
@@ -486,9 +666,7 @@ export const rules: RiskRule[] = [
       }
 
       if (hitKeywords.length > 0) {
-        const fullRemark = [...new Set([remark, memberRemark].filter(Boolean))].join('；');
-        const displayRemark = fullRemark.length > 100 ? fullRemark.substring(0, 100) + '...' : fullRemark;
-        return { triggered: true, reason: `非常规备注: ${displayRemark}`, score: 25 };
+        return { triggered: true, reason: `备注命中风险词：${hitKeywords.join('、')}`, score: 25 };
       }
       return { triggered: false, score: 0 };
     },
@@ -497,9 +675,9 @@ export const rules: RiskRule[] = [
   {
     id: 'R17a',
     name: '无备注会员',
-    description: '会员没有任何备注信息且充值或提款次数<=5，缺乏人工审核标记',
+    description: '会员没有任何备注信息且充值或提款次数<=5，仅作辅助展示',
     severity: 'MEDIUM',
-    weight: 10,
+    weight: 0,
     group: 'marking',
     enabled: true,
     precondition(ctx: RuleContext): boolean {
@@ -508,11 +686,9 @@ export const rules: RiskRule[] = [
       return depCount <= 5 && wdCount <= 5;
     },
     evaluate(ctx: RuleContext): RuleResult {
-      const remark = (ctx.member?.remark || '').trim();
-      const memberRemark = (ctx.order?.memberRemark || '').trim();
-
-      if (!remark && !memberRemark) {
-        return { triggered: true, reason: '会员无任何备注信息', score: 10 };
+      const remark = combineMemberRemarks([ctx.member?.remark, ctx.order?.memberRemark]);
+      if (!remark) {
+        return { triggered: true, reason: '会员无任何备注信息', score: 0 };
       }
       return { triggered: false, score: 0 };
     },
@@ -552,9 +728,9 @@ export const rules: RiskRule[] = [
   {
     id: 'R21',
     name: '对冲投注检测',
-    description: '当日投注额大但盈亏率接近0（几乎不输不赢，对冲洗钱）',
-    severity: 'CRITICAL',
-    weight: 35,
+    description: '当日投注额较大且盈亏率接近0，作为需核对对冲的辅助证据',
+    severity: 'HIGH',
+    weight: 20,
     group: 'behavior',
     enabled: true,
     evaluate(ctx: RuleContext): RuleResult {
@@ -572,53 +748,14 @@ export const rules: RiskRule[] = [
         return {
           triggered: true,
           reason: `投注 ${totalBet.toFixed(0)}，${direction} ${Math.abs(profit).toFixed(0)}，盈亏率 ${(pnlRate * 100).toFixed(2)}%（对冲特征）`,
-          score: profit >= 0 ? 40 : 35,
+          score: 20,
         };
       }
       if (pnlRate < 0.02) {
         return {
           triggered: true,
-          reason: `投注 ${totalBet.toFixed(0)}，盈亏率 ${(pnlRate * 100).toFixed(2)}%（疑似对冲）`,
-          score: 20,
-        };
-      }
-      return { triggered: false, score: 0 };
-    },
-  },
-
-  {
-    id: 'R22',
-    name: '代充代付检测',
-    description: '同一支付渠道有多个不同会员充值',
-    severity: 'HIGH',
-    weight: 25,
-    group: 'marking',
-    enabled: false,
-    evaluate(ctx: RuleContext): RuleResult {
-      const cache = ctx.payChannelCache;
-      const member = ctx.member;
-      const memberId = String(ctx.order?.memberId || '');
-      const rechargeOrders = member?.latestRechargeOrder || [];
-
-      const hitSet = new Map<string, number>();
-      for (const order of rechargeOrders) {
-        const channel = order.paywayName || order.payPlatformCode;
-        if (!channel) continue;
-        if (hitSet.has(channel)) continue;
-        const entry = cache.get(channel);
-        const memberIds = entry?.data || new Set<string>();
-        const otherMemberIds = [...memberIds].filter(id => id !== memberId);
-        if (otherMemberIds.length >= 2) {
-          hitSet.set(channel, otherMemberIds.length + 1);
-        }
-      }
-
-      if (hitSet.size > 0) {
-        const details = [...hitSet.entries()].map(([ch, count]) => `${ch}(${count}人)`).join(', ');
-        return {
-          triggered: true,
-          reason: `充值渠道关联多会员: ${details}`,
-          score: 25,
+          reason: `当日大额投注 ${totalBet.toFixed(0)}，盈亏率 ${(pnlRate * 100).toFixed(2)}%，需核对是否对冲`,
+          score: 12,
         };
       }
       return { triggered: false, score: 0 };
@@ -628,35 +765,34 @@ export const rules: RiskRule[] = [
   {
     id: 'R23',
     name: '异常流水检测',
-    description: '当日投注额远超充值额（刷流水/对冲套利）',
+    description: '比较同一时间范围内的当日投注额和当日充值额',
     severity: 'HIGH',
     weight: 20,
     group: 'behavior',
     enabled: true,
     evaluate(ctx: RuleContext): RuleResult {
       const bc = ctx.betsCount;
-      const order = ctx.order;
-      const sumRecharge = absFloat(ctx.member?.sumRecharge);
+      const sameWindowRecharge = (ctx.manualRechargeToday || 0) + (ctx.thirdPartyRechargeToday || 0);
 
-      if (!bc || sumRecharge < 1000) return { triggered: false, score: 0 };
+      if (!bc || sameWindowRecharge < 1000) return { triggered: false, score: 0 };
 
       const totalBet = parseFloat(bc.countAmount || '0');
       if (totalBet < 5000) return { triggered: false, score: 0 };
 
-      const ratio = totalBet / sumRecharge;
+      const ratio = totalBet / sameWindowRecharge;
 
       if (ratio > 50) {
         return {
           triggered: true,
-          reason: `当日投注 ${totalBet.toFixed(0)} / 充值 ${sumRecharge} = ${ratio.toFixed(1)}x（极度异常流水）`,
-          score: 30,
+          reason: `当日投注 ${totalBet.toFixed(0)} / 当日充值 ${sameWindowRecharge.toFixed(0)} = ${ratio.toFixed(1)}x（需核对异常流水）`,
+          score: 20,
         };
       }
       if (ratio > 20) {
         return {
           triggered: true,
-          reason: `当日投注 ${totalBet.toFixed(0)} / 充值 ${sumRecharge} = ${ratio.toFixed(1)}x（异常流水）`,
-          score: 20,
+          reason: `当日投注 ${totalBet.toFixed(0)} / 当日充值 ${sameWindowRecharge.toFixed(0)} = ${ratio.toFixed(1)}x（需关注流水）`,
+          score: 12,
         };
       }
       return { triggered: false, score: 0 };
@@ -702,7 +838,7 @@ export const rules: RiskRule[] = [
       ];
 
       // 去重：不同 checker 可能生成相同违规描述
-      const uniqueViolations = [...new Set(twoSideViolations)];
+      const uniqueViolations = [...new Set(formatLotteryViolationReasons(twoSideViolations, unreviewedBets))];
 
       if (uniqueViolations.length === 0) {
         return { triggered: false, score: 0 };
@@ -758,7 +894,7 @@ export const rules: RiskRule[] = [
       ];
 
       // 去重：不同 checker 可能生成相同违规描述
-      const uniqueViolations = [...new Set(coverageViolations)];
+      const uniqueViolations = [...new Set(formatLotteryViolationReasons(coverageViolations, unreviewedBets))];
 
       if (uniqueViolations.length === 0) {
         return { triggered: false, score: 0 };
@@ -788,8 +924,7 @@ export const rules: RiskRule[] = [
     group: 'behavior',
     enabled: false,
     evaluate(ctx: RuleContext): RuleResult {
-      const bets = ctx.bets || [];
-      const issueGroups = ctx.issueGroups || new Map<string, BetRecord[]>();
+      const issueGroups = getUnreviewedIssueGroups(ctx);
 
       const hits: string[] = [];
       let maxScore = 0;
@@ -802,7 +937,7 @@ export const rules: RiskRule[] = [
         if (avg < 1) continue;
         const maxDiff = Math.max(...amounts.map((a: number) => Math.abs(a - avg) / avg));
         if (maxDiff < 0.5) {
-          hits.push(`${key}：${amounts.length} 注，金额浮动 ${(maxDiff * 100).toFixed(0)}%（<50%，疑似规避）`);
+          hits.push(formatLotteryViolationReason(`${key}：${amounts.length} 注，金额浮动 ${(maxDiff * 100).toFixed(0)}%（<50%，疑似规避）`, group));
           maxScore = 15;
         }
       }
@@ -815,130 +950,15 @@ export const rules: RiskRule[] = [
   },
 
   // ============================================================
-  // 三方游戏检测（电子/捕鱼/棋牌）
-  // ============================================================
-
-  {
-    id: 'R27',
-    name: '三方游戏高频下注',
-    description: '三方游戏下注间隔极短（疑似脚本/机器人）',
-    severity: 'HIGH',
-    weight: 25,
-    group: 'behavior',
-    enabled: false,
-    precondition(ctx: RuleContext): boolean {
-      return (ctx.thirdGameBets?.length ?? 0) >= 20;
-    },
-    evaluate(ctx: RuleContext): RuleResult {
-      const orders = (ctx.thirdGameBets || []) as ThirdGameOrder[];
-      const activeOrders = orders.filter((o: ThirdGameOrder) => parseFloat(String(o.allbet || o.bet)) > 0);
-      if (activeOrders.length < 20) return { triggered: false, score: 0 };
-
-      const sorted = [...activeOrders].sort((a: ThirdGameOrder, b: ThirdGameOrder) => parseTimeStr(a.betTime) - parseTimeStr(b.betTime));
-      const intervals: number[] = [];
-      for (let i = 1; i < sorted.length; i++) {
-        const diff = (parseTimeStr(sorted[i].betTime) - parseTimeStr(sorted[i - 1].betTime)) / 1000;
-        if (!isNaN(diff) && diff >= 0) intervals.push(diff);
-      }
-
-      if (intervals.length === 0) return { triggered: false, score: 0 };
-      const avgInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length;
-      const underOneSec = intervals.filter(t => t < 1).length;
-
-      if (avgInterval < 0.5) {
-        return {
-          triggered: true,
-          reason: `${activeOrders.length} 次下注，均间隔 ${(avgInterval * 1000).toFixed(0)}ms（脚本操作）`,
-          score: 30,
-        };
-      }
-      if (underOneSec >= activeOrders.length * 0.7) {
-        return {
-          triggered: true,
-          reason: `${activeOrders.length} 次下注， ${underOneSec} 次间隔<1秒（疑似脚本）`,
-          score: 25,
-        };
-      }
-      return { triggered: false, score: 0 };
-    },
-  },
-
-  {
-    id: 'R28',
-    name: '三方游戏无波动检测',
-    description: '电子游戏中大量下注但盈亏率极低',
-    severity: 'MEDIUM',
-    weight: 12,
-    group: 'behavior',
-    enabled: false,
-    precondition(ctx: RuleContext): boolean {
-      return (ctx.thirdGameBets?.length ?? 0) >= 30;
-    },
-    evaluate(ctx: RuleContext): RuleResult {
-      const orders = (ctx.thirdGameBets || []) as ThirdGameOrder[];
-      const activeOrders = orders.filter((o: ThirdGameOrder) => parseFloat(String(o.allbet || o.bet)) > 0);
-      if (activeOrders.length < 30) return { triggered: false, score: 0 };
-
-      const totalBet = activeOrders.reduce((sum: number, o: ThirdGameOrder) => sum + parseFloat(String(o.allbet || o.bet || '0')), 0);
-      const totalProfit = activeOrders.reduce((sum: number, o: ThirdGameOrder) => sum + parseFloat(String(o.profit || '0')), 0);
-
-      if (totalBet < 100) return { triggered: false, score: 0 };
-      const pnlRate = Math.abs(totalProfit) / totalBet;
-
-      if (pnlRate < 0.03) {
-        return {
-          triggered: true,
-          reason: `${activeOrders.length} 次电子下注，${totalBet.toFixed(0)}，盈亏率 ${(pnlRate * 100).toFixed(1)}%（刷水可疑）`,
-          score: 12,
-        };
-      }
-      return { triggered: false, score: 0 };
-    },
-  },
-
-  // ============================================================
   // 充值异常检测
   // ============================================================
-
-  {
-    id: 'R29',
-    name: '手工补单检测',
-    description: '充值记录中存在手工补单/人工加款（remark含手工补单）',
-    severity: 'HIGH',
-    weight: 20,
-    group: 'marking',
-    enabled: true,
-    precondition(ctx: RuleContext): boolean {
-      return (ctx.paymentOrders?.length ?? 0) > 0;
-    },
-    evaluate(ctx: RuleContext): RuleResult {
-      const orders = ctx.paymentOrders || [];
-      const manualOrders = orders.filter((o: PaymentOrder) => {
-        const remark = o.remark || '';
-        return remark.includes('手工补单') || remark.includes('人工补单') || remark.includes('手动补单')
-            || remark.includes('人工加款') || remark.includes('手动加款') || remark.includes('手工加款');
-      });
-
-      if (manualOrders.length === 0) return { triggered: false, score: 0 };
-
-      const totalAmount = manualOrders.reduce((s: number, o: PaymentOrder) => s + (parseFloat(String(o.amount)) || 0), 0);
-      const operators = [...new Set(manualOrders.map((o: PaymentOrder) => o.operatorName).filter(Boolean))];
-      const operatorText = operators.length > 0 ? `，操作员: ${operators.join(',')}` : '';
-
-      return {
-        triggered: true,
-        reason: `${manualOrders.length} 笔手工补单，${totalAmount.toFixed(0)} 元${operatorText}`,
-        score: 20,
-      };
-    },
-  },
 
   {
     id: 'R30',
     name: '低活跃度提现',
     description: '充值或提款次数<5，账号活跃度极低却申请提现（首充首提由R06a覆盖）',
-    severity: 'HIGH',
-    weight: 25,
+    severity: 'MEDIUM',
+    weight: 8,
     group: 'behavior',
     enabled: true,
     precondition(ctx: RuleContext): boolean {
@@ -950,8 +970,7 @@ export const rules: RiskRule[] = [
       const depCount = ctx.member?.sumRechargeTimes ?? 0;
       const wdCount = ctx.member?.sumWithdrawTimes ?? 0;
 
-      // 使用 && 确保充值和提款次数都偏低才触发（而非仅其中一项低即触发）
-      if (depCount < 5 && wdCount < 5) {
+      if (depCount < 5 || wdCount < 5) {
         return { triggered: true, reason: `偏低活跃度：充值 ${depCount} 次，提款 ${wdCount} 次`, score: 8 };
       }
       return { triggered: false, score: 0 };
@@ -1025,7 +1044,7 @@ export const rules: RiskRule[] = [
   {
     id: 'R33',
     name: '无近期充值却提现',
-    description: '当天/3天/7天逐级检查充值记录，无充值却提现涉嫌套利',
+    description: '当天/3天/7天逐级检查充值记录，近期无充值仍提款需复核',
     severity: 'HIGH',
     weight: 20,
     group: 'behavior',
@@ -1034,12 +1053,15 @@ export const rules: RiskRule[] = [
       const regTime = parseTimeStr(ctx.member?.createTime || ctx.member?.createdAt);
       if (!regTime) return { triggered: false, score: 0 };
 
-      const daysSinceReg = (Date.now() - regTime) / 86400000;
+      const orderTime = parseTimeStr(
+        ctx.order?.createTime || (ctx.order as Record<string, unknown>)?.createdAt as string | number | undefined,
+      ) || Date.now();
+      const daysSinceReg = Math.max(0, (orderTime - regTime) / 86400000);
       if (daysSinceReg < 3) return { triggered: false, score: 0 };
       if (daysSinceReg < 7) {
         const threeDayTotal = (ctx.manualRecharge3Day ?? 0) + (ctx.thirdPartyRecharge3Day ?? 0);
         if (threeDayTotal > 0) return { triggered: false, score: 0 };
-        return { triggered: true, reason: `注册${daysSinceReg.toFixed(1)}天，3天无充值记录却提现`, score: 15 };
+        return { triggered: true, reason: `注册${daysSinceReg.toFixed(1)}天，近3天无充值后提款`, score: 0 };
       }
 
       // 1. 当天有人工加款或线上充值 → 不触发
@@ -1052,14 +1074,14 @@ export const rules: RiskRule[] = [
         return { triggered: true, reason: '当天无充值，3天内有充值记录，需关注', score: 10 };
       }
 
-      // 3. 3天无充值，7天内有充值 → 关注
+      // 3. 近3天无充值，7天内有充值 → 关注
       const sevenDayTotal = (ctx.manualRecharge7Day ?? 0) + (ctx.thirdPartyRecharge7Day ?? 0);
       if (sevenDayTotal > 0) {
-        return { triggered: true, reason: '3天无充值，7天内有充值记录，需关注', score: 15 };
+        return { triggered: true, reason: '近3天无充值，7天内有充值记录，需关注', score: 15 };
       }
 
-      // 4. 7天无充值 → 高风险
-      return { triggered: true, reason: '7天无充值记录却提现，涉嫌套利', score: 20 };
+      // 4. 近7天无充值 → 高风险
+      return { triggered: true, reason: '近7天无充值，本次提款需结合投注和资金情况复核', score: 20 };
     },
   },
 
@@ -1123,9 +1145,9 @@ export const rules: RiskRule[] = [
   {
     id: 'R37',
     name: '首提大于首充',
-    description: '首次提现金额远超首次充值金额（>1.5x），超出1倍打码量正常范围',
-    severity: 'HIGH',
-    weight: 25,
+    description: '首次提现金额显著高于首充，需结合投注和派奖情况复核',
+    severity: 'MEDIUM',
+    weight: 15,
     group: 'behavior',
     enabled: true,
     evaluate(ctx: RuleContext): RuleResult {
@@ -1139,8 +1161,8 @@ export const rules: RiskRule[] = [
       if (sumRecharge > 0 && amount > sumRecharge * 1.5) {
         return {
           triggered: true,
-          reason: `首提 ${amount.toFixed(0)} > 首充 ${sumRecharge.toFixed(0)}（${(amount / sumRecharge).toFixed(1)}x），超出1倍打码量正常范围`,
-          score: 25,
+          reason: `首提 ${amount.toFixed(0)} 为首充 ${sumRecharge.toFixed(0)} 的 ${(amount / sumRecharge).toFixed(1)}倍，需结合投注和派奖情况复核`,
+          score: 15,
         };
       }
       return { triggered: false, score: 0 };
@@ -1373,9 +1395,9 @@ export const rules: RiskRule[] = [
   {
     id: 'R40',
     name: '新注册账号提现',
-    description: '注册少于7天的账号申请提现，需高度关注',
-    severity: 'HIGH',
-    weight: 40, // 对齐最高分 (注册不足1天: 40)
+    description: '注册少于7天的账号申请提现，仅作为会员阶段辅助信息',
+    severity: 'MEDIUM',
+    weight: 0,
     group: 'identity',
     enabled: true,
     evaluate(ctx: RuleContext): RuleResult {
@@ -1384,7 +1406,10 @@ export const rules: RiskRule[] = [
       const regTime = parseTimeStr(member?.createTime || member?.createdAt);
       if (!regTime) return { triggered: false, score: 0 };
 
-      const daysSinceReg = (Date.now() - regTime) / 86400000;
+      const orderTime = parseTimeStr(
+        ctx.order?.createTime || (ctx.order as Record<string, unknown>)?.createdAt as string | number | undefined,
+      ) || Date.now();
+      const daysSinceReg = Math.max(0, (orderTime - regTime) / 86400000);
       const amount = parseFloat(String(order?.amount)) || 0;
 
       if (daysSinceReg >= 7) return { triggered: false, score: 0 };
@@ -1392,42 +1417,50 @@ export const rules: RiskRule[] = [
       const regDate = formatBeijingTime(regTime);
 
       if (daysSinceReg < 1) {
-        return { triggered: true, reason: `注册不足1天（${regDate}），提现 ${amount.toFixed(0)}`, score: 40 };
+        return { triggered: true, reason: `注册不足1天（${regDate}），提现 ${amount.toFixed(0)}`, score: 0 };
       }
       if (daysSinceReg < 3) {
-        return { triggered: true, reason: `注册${daysSinceReg.toFixed(1)}天（${regDate}），提现 ${amount.toFixed(0)}`, score: 35 };
+        return { triggered: true, reason: `注册${daysSinceReg.toFixed(1)}天（${regDate}），提现 ${amount.toFixed(0)}`, score: 0 };
       }
-      return { triggered: true, reason: `注册${daysSinceReg.toFixed(1)}天（${regDate}），提现 ${amount.toFixed(0)}`, score: 30 };
+      return { triggered: true, reason: `注册${daysSinceReg.toFixed(1)}天（${regDate}），提现 ${amount.toFixed(0)}`, score: 0 };
     },
   },
   {
     id: 'R41',
-    name: '提款方式变更',
-    description: '本次提款方式与上次提款方式不同，可能账号被盗或转手',
-    severity: 'CRITICAL',
-    weight: 50,
+    name: '提款收款信息变更',
+    description: '与上次成功提款比较收款姓名、账号和渠道，按证据强度评分',
+    severity: 'HIGH',
+    weight: 30,
     group: 'identity',
     enabled: true,
     evaluate(ctx: RuleContext): RuleResult {
       const order = ctx.order;
       const last = ctx.lastWithdrawMethod;
-      if (!last) return { triggered: false, score: 0 };
+      const current = ctx.currentWithdrawMethod;
+      if (!last || last.version !== 2 || !current) return { triggered: false, score: 0 };
 
-      const currentBank = normalizePayChannel(String(order?.receivingBank || '').trim());
-      const currentCard = String(order?.receivingCardNo || '').trim();
+      const currentBank = normalizePayChannel(current.bank);
       if (!currentBank) return { triggered: false, score: 0 };
 
       const lastBank = normalizePayChannel(last.bank);
       const lastCard = last.card;
 
-      // 银行/渠道不同 → 严重风险
-      if (currentBank !== lastBank && lastBank) {
-        return { triggered: true, reason: `提款渠道变更：上次[${lastBank}] → 本次[${currentBank}]`, score: 50 };
+      if (current.name && last.name && current.name !== last.name) {
+        return {
+          triggered: true, reason: '提款收款人变更：本次收款姓名与上次成功提款不同', score: 30,
+        };
       }
 
-      // 同渠道但卡号不同 → 高风险
-      if (currentCard && lastCard && currentCard !== lastCard) {
-        return { triggered: true, reason: `提款卡号变更：同渠道[${currentBank}]内换卡`, score: 40 };
+      if (current.card && lastCard && current.card !== lastCard) {
+        return { triggered: true, reason: `提款卡号变更：${currentBank || '同渠道'}内更换收款账号`, score: 20 };
+      }
+
+      if (currentBank !== lastBank && lastBank) {
+        return {
+          triggered: true,
+          reason: `提款方式变更：上次 ${formatWithdrawChannel(last.bank, lastBank)} → 本次 ${formatWithdrawChannel(String(order?.receivingBank || ''), currentBank)}`,
+          score: 10,
+        };
       }
 
       return { triggered: false, score: 0 };

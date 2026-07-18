@@ -12,9 +12,7 @@ function parseEnvList(key: string, defaults: string[]): string[] {
 // 代理白名单不再硬编码默认值，统一由 .env (AGENT_WHITELIST) 或数据库配置
 const DEFAULT_AGENT_WHITELIST: string[] = [];
 
-const _envAgentWhitelist = parseEnvList('AGENT_WHITELIST', DEFAULT_AGENT_WHITELIST);
-
-const _agentWhitelist = new Set<string>(_envAgentWhitelist);
+const _agentWhitelist = new Set<string>(DEFAULT_AGENT_WHITELIST);
 
 /**
  * 代理白名单（只读语义，外部不应直接修改）。
@@ -22,9 +20,26 @@ const _agentWhitelist = new Set<string>(_envAgentWhitelist);
  */
 export const AGENT_WHITELIST: ReadonlySet<string> = _agentWhitelist;
 
+export function isAgentWhitelisted(name: string | undefined | null): boolean {
+  const target = String(name || '').trim().toLowerCase();
+  if (!target) return false;
+  for (const item of _agentWhitelist) {
+    if (item.trim().toLowerCase() === target) return true;
+  }
+  return false;
+}
+
+/** dotenv 加载完成后刷新 .env 配置 */
+export function reloadConstantsFromEnv(): void {
+  const items = parseEnvList('AGENT_WHITELIST', DEFAULT_AGENT_WHITELIST);
+  _agentWhitelist.clear();
+  for (const v of items) _agentWhitelist.add(v);
+}
+
 /** 从数据库重新加载白名单配置，DB 无配置时保留 .env 值 */
 export async function reloadConstantsFromDB(): Promise<void> {
   try {
+    reloadConstantsFromEnv();
     const config = await dbHolder.db.botConfig.findUnique({ where: { key: 'AGENT_WHITELIST' } }).catch(() => null);
 
     const wl = config?.value;

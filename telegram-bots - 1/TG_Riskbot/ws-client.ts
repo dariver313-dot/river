@@ -106,6 +106,12 @@ export class WsClient {
       this.handleMessage(data.toString());
     });
 
+    // 使用 WebSocket 协议级 Pong 判断连接存活。平台在空闲时不会持续下发业务消息，
+    // 不能把“未收到订单推送”误判为连接失效。
+    this.ws.on('pong', () => {
+      this.lastHeartbeatTime = Date.now();
+    });
+
     this.ws.on('close', (code: number, reason: string) => {
       this.isConnected = false;
       this.stopHeartbeat();
@@ -198,9 +204,10 @@ export class WsClient {
           this.ws.terminate();
           return;
         }
-        this.ws.send('ping');
+        // 发送协议级 Ping，服务端会按 RFC 自动回 Pong；不依赖业务文本消息。
+        this.ws.ping();
       }
-    }, 10000);
+    }, 30000);
   }
 
   private stopHeartbeat(): void {

@@ -18,6 +18,17 @@ export interface RiskRule {
   evaluate: (ctx: RuleContext) => RuleResult;
 }
 
+export interface LoginAssociationSummary {
+  value: string;
+  memberNames: string[];
+  otherMemberNames: string[];
+  latestLoginAtByMember?: Record<string, number>;
+  accountCount: number;
+  fetchedCount?: number;
+  totalCount?: number;
+  truncated?: boolean;
+}
+
 export interface RuleContext {
   order: WithdrawOrder;
   member: MemberInfo;
@@ -27,10 +38,11 @@ export interface RuleContext {
   relatedByLoginDevice: LoginLogItem[];
   relatedByLoginIpCount: number;
   relatedByLoginDeviceCount: number;
-  receivingInfoCache: LRUCache<string, { data: Set<string> }>;
+  dailyLoginIpAssociations?: LoginAssociationSummary[];
+  dailyLoginDeviceAssociations?: LoginAssociationSummary[];
+  /** 同收款信息的已成功提款关联账号；白名单账号已在查询阶段排除。 */
+  receivingAssociations?: string[];
   agentWithdrawCache: LRUCache<string, { count: number; memberIds: Set<string>; lastUpdate: number }>;
-  payChannelCache: LRUCache<string, { data: Set<string> }>;
-  thirdGameBets: unknown[];
   paymentOrders: PaymentOrder[];
   betsCount: BetsCount | null;
   manualRechargeToday: number;
@@ -52,7 +64,8 @@ export interface RuleContext {
   _pk10Result?: PK10CheckResult;
   reviewedPeriodKeys?: Set<string>;
   traceId?: string;
-  lastWithdrawMethod?: { bank: string; card: string; name: string } | null;
+  lastWithdrawMethod?: { bank: string; card: string; name: string; version?: number } | null;
+  currentWithdrawMethod?: { bank: string; card: string; name: string; version?: number } | null;
 }
 
 export interface RuleResult {
@@ -88,6 +101,8 @@ export interface EvaluationResult {
   proxyCode: string;
   orderAmount: string;
   balance: string;
+  /** 规范后的会员备注，仅作为通知上下文展示，不参与风险评分。 */
+  remark?: string;
   associatedGroup?: string[];
   isEarlyMorning?: boolean;
   periodInfo?: string;

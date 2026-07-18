@@ -1,0 +1,7 @@
+node_modules/
+.env
+data/report-config.json
+data/uploads/
+outputs/
+templates/*.xlsx
+!templates/.gitkeep

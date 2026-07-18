@@ -72,19 +72,12 @@ export function createServer(deps: ServerDeps): http.Server {
     try {
       if (url.pathname === '/' && req.method === 'GET') {
         const hasToken = !!(process.env.AUTH_API_KEY || '');
-        const evalCount = await dbHolder.db.riskEval.count();
-        const recentEvals = await dbHolder.db.riskEval.findMany({
-          take: 5,
-          orderBy: { createdAt: 'desc' },
-        });
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
           status: 'running',
+          timestamp: new Date().toISOString(),
           tokenConfigured: hasToken,
-          totalEvaluations: evalCount,
-          lastPollTime: deps.getLastPollTime() ? new Date(deps.getLastPollTime()).toISOString() : null,
-          recentEvals,
           message: hasToken ? '风控机器人运行中' : '等待设置 API Token',
         }));
         return;
@@ -93,8 +86,6 @@ export function createServer(deps: ServerDeps): http.Server {
       if (url.pathname === '/health' && req.method === 'GET') {
         const hasToken = !!(process.env.AUTH_API_KEY || '');
         const apiHealthy = hasToken ? await apiClient.checkHealth().catch(() => false) : false;
-        let evalCount = 0;
-        try { evalCount = await dbHolder.db.riskEval.count(); } catch {}
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
@@ -102,17 +93,10 @@ export function createServer(deps: ServerDeps): http.Server {
           timestamp: new Date().toISOString(),
           tokenConfigured: hasToken,
           apiHealthy,
-          totalEvaluations: evalCount,
           lastPollTime: deps.getLastPollTime() ? new Date(deps.getLastPollTime()).toISOString() : null,
           pollIntervalSec: deps.getPollInterval() / 1000,
           wsEnabled: deps.isWsEnabled(),
           wsConnected: deps.getWsClient()?.connected ?? false,
-          wsUrl: deps.getWsUrl() || null,
-          caches: {
-            associationGraph: 0,
-            receivingInfo: getReceivingInfoCache().size,
-            agentWithdraw: getAgentWithdrawCache().size,
-          },
         }));
         return;
       }

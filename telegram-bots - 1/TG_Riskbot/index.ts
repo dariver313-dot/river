@@ -3,20 +3,25 @@ import path from 'path';
 import dotenv from 'dotenv';
 import { LRUCache } from 'lru-cache';
 import { apiClient } from './api-client';
-import { evaluateOrder, cleanupStaleCaches, updateMemberProfile, updateAgentProfile, setPrefetchStore, consumePrefetchedDetail, getCacheStats } from './evaluator';
-import { extractProxyCode, formatBeijingTime } from './utils';
-import { startTelegramBot, sendRiskAlert, getBot, autoReviewExpiredOrders, scheduleAutoReview } from './telegram';
+import { evaluateOrder, updateMemberProfile, updateAgentProfile, recordSuccessfulWithdrawal, setPrefetchStore, consumePrefetchedDetail, getCacheStats } from './evaluator';
+import { extractProxyCode, formatBeijingTime, parseTimeStr } from './utils';
+import { startTelegramBot, sendRiskAlert, autoReviewExpiredOrders, scheduleAutoReview } from './telegram';
 import { dbHolder, ensureDatabase } from './db';
 import { getActiveRuleIds, applyRuleStates } from './rule-engine';
 import type { EvaluationResult } from './rule-types';
 import { logger } from './logger';
 import { WsClient, type WithdrawOrder } from './ws-client';
 import * as auth from './auth-client';
-import { reloadConstantsFromDB } from './constants';
+import { reloadConstantsFromDB, reloadConstantsFromEnv } from './constants';
 import type { TriggeredRule, UserDetailsResponse } from './types';
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function parsePositiveInt(value: string | undefined, fallback: number): number {
+  const n = parseInt(String(value || ''), 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
 function buildDetailJson(order: WithdrawOrder, result?: EvaluationResult | null, extra?: Record<string, any>): string {
@@ -29,14 +34,22 @@ function buildDetailJson(order: WithdrawOrder, result?: EvaluationResult | null,
     proxyCode,
     receivingBank: order.receivingBank,
     receivingName,
+    receivingCardNo: order.receivingCardNo,
     vipLevel: order.vipLevel,
-    balance: result?.balance || order.balance || '',
+    balance: result?.balance ?? order.balance ?? '',
     registerTime: result?.registerTime || '',
+    daysSinceReg: result?.daysSinceReg ?? 999,
     depositCount: result?.depositCount ?? 0,
     withdrawCount: result?.withdrawCount ?? 0,
     rechargeWithdrawDiff: result?.rechargeWithdrawDiff ?? 0,
+    rechargeAmount: result?.rechargeAmount ?? 0,
+    withdrawAmount: result?.withdrawAmount ?? 0,
+    profitLoss: result?.profitLoss,
+    estimatedProfitLoss: result?.estimatedProfitLoss ?? true,
+    dataIssues: result?.dataIssues || [],
     isEarlyMorning: result?.isEarlyMorning || false,
     mainGameType: result?.mainGameType || '',
+    remark: result?.remark || String(order.memberRemark || ''),
   };
   if (result?.triggeredRules) {
     // 优先使用 lhc-checker 生成的完整 periodInfo
@@ -53,16 +66,27 @@ function buildDetailJson(order: WithdrawOrder, result?: EvaluationResult | null,
   return JSON.stringify(detail);
 }
 
-function buildFallbackResult(order: WithdrawOrder, orderNo?: string): EvaluationResult {
+const EVAL_FAILED_RULE_ID = 'EVAL_FAILED';
+const SYNTHETIC_RULE_IDS = new Set([EVAL_FAILED_RULE_ID]);
+
+function buildFallbackResult(order: WithdrawOrder, orderNo?: string, reason = '风控数据查询失败，需人工复核'): EvaluationResult {
   const no = orderNo || String(order.orderNo || order.id || '');
   return {
     orderId: no,
     memberId: String(order.memberId || order.member_id || ''),
     memberName: order.memberName || order.member_name || '',
-    totalScore: 0,
-    riskLevel: 'LOW',
-    triggeredRules: [],
-    groupScores: {},
+    totalScore: 30,
+    riskLevel: 'HIGH',
+    triggeredRules: [{
+      id: EVAL_FAILED_RULE_ID,
+      name: '风控评估失败',
+      severity: 'HIGH',
+      group: 'environment',
+      reason,
+      score: 30,
+      presentation: 'core',
+    }],
+    groupScores: { environment: 30 },
     depositCount: 0,
     withdrawCount: 0,
     registerTime: '',
@@ -70,16 +94,25 @@ function buildFallbackResult(order: WithdrawOrder, orderNo?: string): Evaluation
     rechargeWithdrawDiff: 0,
     proxyCode: extractProxyCode(order),
     orderAmount: String(order.amount || ''),
-    balance: String(order.balance || ''),
+    balance: String(order.balance ?? ''),
+    remark: String(order.memberRemark || ''),
     isEarlyMorning: false,
   };
 }
 
+function getReplayableRules(
+  rawRules: TriggeredRule[],
+  activeRuleIds: Set<string>,
+): TriggeredRule[] {
+  return rawRules.filter((r) => activeRuleIds.has(r.id) || SYNTHETIC_RULE_IDS.has(r.id));
+}
+
 let POLL_INTERVAL = 60 * 1000;
 let PORT = 0;
+let HOST = '127.0.0.1';
 let WS_ENABLED = true;
 let WS_URL = '';
-const POLL_INTERVAL_WS_CONNECTED = 30 * 1000;
+let POLL_INTERVAL_WS_CONNECTED = 30 * 1000;
 
 const evaluatedOrderCache = new LRUCache<string, boolean>({ max: 2000, ttl: 2 * 60 * 60 * 1000 });
 const evalRetryCount = new LRUCache<string, { count: number; source: string; ts: number }>({
@@ -87,11 +120,6 @@ const evalRetryCount = new LRUCache<string, { count: number; source: string; ts:
   ttl: 10 * 60 * 1000,
 });
 const MAX_EVAL_RETRY = 3;
-
-function getEvalRetry(orderNo: string, source: string): number {
-  const entry = evalRetryCount.get(`${orderNo}:${source}`);
-  return entry?.count || 0;
-}
 
 function incrementEvalRetry(orderNo: string, source: string): number {
   const key = `${orderNo}:${source}`;
@@ -117,6 +145,52 @@ const noOrderNoNotifySet = new Set<string>();
 
 // 防止同一订单并发通知：将 orderNo 串行化，CAS 之外的额外保护层
 const notifyingLocks = new Map<string, Promise<NotifyResult>>();
+const recentNotifications = new LRUCache<string, number>({ max: 1000, ttl: 5 * 60 * 1000 });
+const NOTIFICATION_LEASE_MS = 10 * 60 * 1000;
+
+type NotificationLeaseResult = 'acquired' | 'notified' | 'busy' | 'missing';
+
+function wasRecentlyNotified(orderNo: string): boolean {
+  return recentNotifications.has(orderNo);
+}
+
+function markRecentlyNotified(orderNo: string): void {
+  recentNotifications.set(orderNo, Date.now());
+}
+
+async function acquireNotificationLease(orderNo: string): Promise<NotificationLeaseResult> {
+  const now = new Date();
+  const expiredBefore = new Date(now.getTime() - NOTIFICATION_LEASE_MS);
+  const acquired = await dbHolder.db.riskEval.updateMany({
+    where: {
+      orderId: orderNo,
+      notified: false,
+      OR: [
+        { notifyLeaseAt: null },
+        { notifyLeaseAt: { lt: expiredBefore } },
+      ],
+    },
+    data: { notifyLeaseAt: now },
+  });
+  if (acquired.count > 0) return 'acquired';
+
+  const current = await dbHolder.db.riskEval.findUnique({
+    where: { orderId: orderNo },
+    select: { notified: true, notifyLeaseAt: true },
+  });
+  if (!current) return 'missing';
+  if (current.notified) return 'notified';
+
+  logger.info({ orderNo, notifyLeaseAt: current.notifyLeaseAt }, '[通知] 上次发送尚未确认，等待租约到期后再试');
+  return 'busy';
+}
+
+async function releaseNotificationLease(orderNo: string): Promise<void> {
+  await dbHolder.db.riskEval.updateMany({
+    where: { orderId: orderNo, notified: false },
+    data: { notifyLeaseAt: null },
+  });
+}
 
 async function handleNotification(order: WithdrawOrder, result: EvaluationResult, precheckedNotified?: boolean): Promise<NotifyResult> {
   const orderNo = String(order.orderNo || order.id || result.orderId || '');
@@ -143,78 +217,60 @@ async function handleNotification(order: WithdrawOrder, result: EvaluationResult
     }
   }
 
-  let wasNotified = false;
-  let dbOk = false;
-
   const doNotify = async (): Promise<NotifyResult> => {
-    if (precheckedNotified === false) {
-      dbOk = true;
-    } else {
-      try {
-        const existing = await dbHolder.db.riskEval.findUnique({
-          where: { orderId: orderNo },
-          select: { notified: true },
-        });
-        wasNotified = !!existing?.notified;
-        dbOk = true;
-      } catch {
-        logger.warn({ orderNo }, '[通知] DB查询失败，尝试乐观发送');
+    if (wasRecentlyNotified(orderNo)) return 'skipped';
+
+    let leaseAcquired = false;
+    try {
+      const lease = await acquireNotificationLease(orderNo);
+      if (lease === 'notified') {
+        markRecentlyNotified(orderNo);
+        return 'skipped';
       }
-    }
-
-    if (dbOk && wasNotified) return 'skipped';
-
-    // CAS: 只有 notified=false 的记录才能被更新为 true，防止并发重复通知
-    if (dbOk && !wasNotified) {
-      const r = await dbHolder.db.riskEval.updateMany({
-        where: { orderId: orderNo, notified: false },
-        data: { notified: true },
-      });
-      if (r.count === 0) return 'skipped';
+      if (lease === 'busy') return 'skipped';
+      if (lease === 'missing') {
+        logger.error({ orderNo }, '[通知] 找不到持久化风控记录，拒绝发送以避免不可追踪的重复通知');
+        return 'failed';
+      }
+      leaseAcquired = true;
+    } catch (err) {
+      // 数据库不可用时保留原有的“优先通知”行为；恢复后租约会继续减少重复窗口。
+      logger.warn({ orderNo, err: (err as Error).message }, '[通知] 发送租约获取失败，走受限乐观发送路径');
     }
 
     const { success: notified, messageId } = await sendRiskAlert(result, order);
     if (!notified) {
-      if (dbOk && !wasNotified) {
-        try {
-          await dbHolder.db.riskEval.updateMany({
-            where: { orderId: orderNo, notified: true, feedback: '', createdAt: { gte: new Date(Date.now() - 30 * 1000) } },
-            data: { notified: false },
-          });
-        } catch (err) {
-          logger.error({ orderNo, err: (err as Error).message }, '[通知] 通知失败回滚失败');
-        }
+      if (leaseAcquired) {
+        await releaseNotificationLease(orderNo).catch((err) => {
+          logger.warn({ orderNo, err: (err as Error).message }, '[通知] 发送失败后释放租约失败');
+        });
       }
       return 'failed';
     }
 
-    if (messageId) {
-      try {
-        await dbHolder.db.riskEval.update({
-          where: { orderId: orderNo },
-          data: { notifyMsgId: messageId, notifiedAt: new Date() },
-        });
-        // 精准定时：仅带审核按钮的订单才需要 2分30秒后自动审核
-        const orderAmount = parseFloat(String(order?.amount ?? '0'));
-        if (result.riskLevel !== 'LOW' || orderAmount >= 5000) {
-          scheduleAutoReview(orderNo);
-        }
-      } catch (err) { logger.warn({ orderNo, err: (err as Error).message }, '[通知] 保存 notifyMsgId 或调度自动审核失败'); }
+    markRecentlyNotified(orderNo);
+
+    let marked = false;
+    try {
+      const r = await dbHolder.db.riskEval.updateMany({
+        where: { orderId: orderNo, notified: false },
+        data: {
+          notified: true,
+          notifyLeaseAt: null,
+          ...(messageId !== undefined ? { notifyMsgId: messageId, notifiedAt: new Date() } : {}),
+        },
+      });
+      marked = r.count > 0;
+      if (r.count === 0) {
+        logger.info({ orderNo }, '[通知] CAS显示已被其他路径标记，通知已发送');
+      }
+    } catch (err) {
+      logger.warn({ orderNo, err: (err as Error).message }, '[通知] CAS标记notified失败，但通知已发送');
     }
 
-    // 乐观路径：DB查询失败时，先发送通知再尝试 CAS 更新，防止重复通知
-    if (!dbOk) {
-      try {
-        const r = await dbHolder.db.riskEval.updateMany({
-          where: { orderId: orderNo, notified: false },
-          data: { notified: true },
-        });
-        if (r.count === 0) {
-          logger.info({ orderNo }, '[通知] 乐观路径CAS显示已通知，但通知已发送');
-        }
-      } catch (err) {
-        logger.warn({ orderNo, err: (err as Error).message }, '[通知] DB乐观CAS更新失败，继续发送（可能重复）');
-      }
+    if (messageId !== undefined && marked) {
+      // 精准定时：当前风险通知均带审核按钮，需要 2分30秒后自动审核。
+      scheduleAutoReview(orderNo);
     }
 
     return 'sent';
@@ -231,7 +287,7 @@ async function handleNotification(order: WithdrawOrder, result: EvaluationResult
 
 let trackOrderRoundRobinOffset = 0;
 
-async function trackOrderStatus(): Promise<void> {
+async function retryPendingNotifications(): Promise<void> {
   try {
     const totalCount = await dbHolder.db.riskEval.count({ where: { notified: false, finalStatus: '' } });
     if (totalCount === 0) return;
@@ -254,47 +310,67 @@ async function trackOrderStatus(): Promise<void> {
     logger.info({ count: unnotifiedEvals.length }, '[追踪] 发现未通知的风险订单，尝试补发');
 
     const activeRuleIds = getActiveRuleIds();
-    const results = await Promise.allSettled(
-      unnotifiedEvals.map(async (evalRecord) => {
+    const results: PromiseSettledResult<NotifyResult>[] = new Array(unnotifiedEvals.length);
+    const REPLAY_NOTIFY_CONCURRENCY = parsePositiveInt(process.env.REPLAY_NOTIFY_CONCURRENCY, 5);
+    let replayIdx = 0;
+
+    const replayWorkers = Array.from({ length: Math.min(REPLAY_NOTIFY_CONCURRENCY, unnotifiedEvals.length) }, async () => {
+      while (replayIdx < unnotifiedEvals.length) {
+        const idx = replayIdx++;
+        const evalRecord = unnotifiedEvals[idx];
         let detail: Record<string, unknown> = {};
         try { detail = JSON.parse(evalRecord.detail || '{}'); } catch {}
-        let rawRules: { id: string; name: string; reason: string; score: number; severity?: string; group?: string }[] = [];
+        let rawRules: TriggeredRule[] = [];
         try { rawRules = JSON.parse(evalRecord.triggeredRules || '[]'); } catch { rawRules = []; }
-        const validRules = rawRules.filter((r) => activeRuleIds.has(r.id));
-        return handleNotification(
-          {
-            orderNo: evalRecord.orderId,
-            status: 1,
-            memberName: evalRecord.memberName,
-            member_name: evalRecord.memberName,
-            memberId: evalRecord.memberId,
-            member_id: evalRecord.memberId,
-            amount: (detail.orderAmount as string | number) || 0,
-            proxyCode: (detail.proxyCode as string) || '',
-            receivingBank: (detail.receivingBank as string) || '',
-            receivingName: (detail.receivingName as string) || '',
-            balance: (detail.balance as string | number) || '',
-            createTime: (detail.orderTime as string | number) || '',
-            vipLevel: (detail.vipLevel as string | number) || '',
-          } as WithdrawOrder,
-          {
-            ...evalRecord,
-            proxyCode: (detail.proxyCode as string) || '',
-            orderAmount: (detail.orderAmount as string | number) || '',
-            balance: (detail.balance as string | number) || '',
-            registerTime: (detail.registerTime as string) || '',
-            depositCount: (detail.depositCount as number) ?? 0,
-            withdrawCount: (detail.withdrawCount as number) ?? 0,
-            rechargeWithdrawDiff: (detail.rechargeWithdrawDiff as number) ?? 0,
-            triggeredRules: validRules,
-            groupScores: {},
-            daysSinceReg: (detail.daysSinceReg as number) ?? 0,
-            isEarlyMorning: (detail.isEarlyMorning as boolean) || false,
-          } as EvaluationResult,
-          false
-        );
-      })
-    );
+        const validRules = getReplayableRules(rawRules, activeRuleIds);
+        try {
+          const value = await handleNotification(
+            {
+              orderNo: evalRecord.orderId,
+              status: 1,
+              memberName: evalRecord.memberName,
+              member_name: evalRecord.memberName,
+              memberId: evalRecord.memberId,
+              member_id: evalRecord.memberId,
+              memberRemark: (detail.remark as string) || '',
+              amount: (detail.orderAmount as string | number) || 0,
+              proxyCode: (detail.proxyCode as string) || '',
+              receivingBank: (detail.receivingBank as string) || '',
+              receivingName: (detail.receivingName as string) || '',
+              balance: (detail.balance as string | number) || '',
+              createTime: (detail.orderTime as string | number) || '',
+              vipLevel: (detail.vipLevel as string | number) || '',
+            } as WithdrawOrder,
+            {
+              ...evalRecord,
+              proxyCode: (detail.proxyCode as string) || '',
+              orderAmount: (detail.orderAmount as string | number) || '',
+              balance: (detail.balance as string | number) || '',
+              registerTime: (detail.registerTime as string) || '',
+              depositCount: (detail.depositCount as number) ?? 0,
+              withdrawCount: (detail.withdrawCount as number) ?? 0,
+              rechargeWithdrawDiff: (detail.rechargeWithdrawDiff as number) ?? 0,
+              rechargeAmount: (detail.rechargeAmount as number) ?? 0,
+              withdrawAmount: (detail.withdrawAmount as number) ?? 0,
+              profitLoss: detail.profitLoss as number | undefined,
+              estimatedProfitLoss: (detail.estimatedProfitLoss as boolean) ?? true,
+              triggeredRules: validRules,
+              groupScores: {},
+              daysSinceReg: (detail.daysSinceReg as number) ?? 0,
+              isEarlyMorning: (detail.isEarlyMorning as boolean) || false,
+              mainGameType: (detail.mainGameType as string) || undefined,
+              dataIssues: (detail.dataIssues as string[]) || [],
+              remark: (detail.remark as string) || '',
+            } as EvaluationResult,
+            false
+          );
+          results[idx] = { status: 'fulfilled', value };
+        } catch (reason) {
+          results[idx] = { status: 'rejected', reason };
+        }
+      }
+    });
+    await Promise.all(replayWorkers);
 
     // H4: 补发完成后写入 evaluatedOrderCache，减少后续轮询周期的 DB 查询
     for (let i = 0; i < unnotifiedEvals.length; i++) {
@@ -325,6 +401,18 @@ let isPolling = false;
 let lastPollTime = 0;
 let consecutiveFailures = 0;
 const MAX_CONSECUTIVE_FAILURES = 5;
+const RECENT_ORDER_RECONCILE_WINDOW_MS = Math.max(5 * 60 * 1000, parsePositiveInt(process.env.RECENT_ORDER_RECONCILE_WINDOW_MIN, 10) * 60 * 1000);
+let lastIdleHeartbeatAt = 0;
+let lastWsDomainWarningAt = 0;
+let wsDomainUnavailable = false;
+const IDLE_HEARTBEAT_INTERVAL_MS = 5 * 60 * 1000;
+
+function logIdleHeartbeat(message: string): void {
+  const now = Date.now();
+  if (now - lastIdleHeartbeatAt < IDLE_HEARTBEAT_INTERVAL_MS) return;
+  lastIdleHeartbeatAt = now;
+  logger.info(`[轮询] 心跳 ${formatBeijingTime(undefined, 'time')} — ${message}`);
+}
 
 const wsOrderQueue: WithdrawOrder[] = [];
 const wsQueueSet = new Set<string>();
@@ -335,11 +423,15 @@ const WS_LAST_STATUS_MAX = 500;
 const PREFETCH_MAX = 200;
 const prefetchedDetails = new LRUCache<string, Promise<UserDetailsResponse | null>>({ max: PREFETCH_MAX, ttl: 60 * 1000 });
 const prefetchedAdded = new LRUCache<string, number>({ max: PREFETCH_MAX, ttl: 60 * 1000 });
-const WS_CONCURRENCY = 3;
 let wsActiveCount = 0;
 
+function getWsConcurrency(): number {
+  return parsePositiveInt(process.env.WS_CONCURRENCY, 3);
+}
+
 async function processWsOrderQueue(): Promise<void> {
-  while (wsOrderQueue.length > 0 && wsActiveCount < WS_CONCURRENCY) {
+  const wsConcurrency = getWsConcurrency();
+  while (wsOrderQueue.length > 0 && wsActiveCount < wsConcurrency) {
     const order = wsOrderQueue.shift()!;
     wsQueueSet.delete(String(order.orderNo || ''));
     wsActiveCount++;
@@ -350,7 +442,7 @@ async function processWsOrderQueue(): Promise<void> {
       .finally(() => {
         wsActiveCount--;
         // H1: 仅当队列仍有待处理项且未达到并发上限时才调度下一批
-        if (wsOrderQueue.length > 0 && wsActiveCount < WS_CONCURRENCY) {
+        if (wsOrderQueue.length > 0 && wsActiveCount < getWsConcurrency()) {
           setImmediate(() => processWsOrderQueue());
         }
       });
@@ -368,6 +460,7 @@ async function processSingleWsOrder(order: WithdrawOrder): Promise<void> {
   try {
     const dbEval = await dbHolder.db.riskEval.findUnique({ where: { orderId: orderNo } });
     if (dbEval) {
+      trackOpenOrder(order);
       markEvaluated(orderNo);
       consumePrefetchedDetail(orderNo);
       logger.info({ orderNo, riskLevel: dbEval.riskLevel, notified: dbEval.notified }, '[WS评估] 数据库已有评估记录，跳过');
@@ -375,9 +468,9 @@ async function processSingleWsOrder(order: WithdrawOrder): Promise<void> {
         let dbDetail: Record<string, unknown> = {};
         try { dbDetail = JSON.parse(dbEval.detail || '{}'); } catch {}
         const activeRuleIds2 = getActiveRuleIds();
-        let rawRules2: { id: string; name: string; reason: string; score: number; severity?: string; group?: string }[] = [];
+        let rawRules2: TriggeredRule[] = [];
         try { rawRules2 = JSON.parse(dbEval.triggeredRules || '[]'); } catch { rawRules2 = []; }
-        const validRules2 = rawRules2.filter((r) => activeRuleIds2.has(r.id));
+        const validRules2 = getReplayableRules(rawRules2, activeRuleIds2);
         const result = await handleNotification(order, {
           ...dbEval,
           proxyCode: (dbDetail.proxyCode as string) || extractProxyCode(order) || '',
@@ -387,9 +480,17 @@ async function processSingleWsOrder(order: WithdrawOrder): Promise<void> {
           depositCount: (dbDetail.depositCount as number) ?? 0,
           withdrawCount: (dbDetail.withdrawCount as number) ?? 0,
           rechargeWithdrawDiff: (dbDetail.rechargeWithdrawDiff as number) ?? 0,
+          rechargeAmount: (dbDetail.rechargeAmount as number) ?? 0,
+          withdrawAmount: (dbDetail.withdrawAmount as number) ?? 0,
+          profitLoss: dbDetail.profitLoss as number | undefined,
+          estimatedProfitLoss: (dbDetail.estimatedProfitLoss as boolean) ?? true,
           triggeredRules: validRules2,
           groupScores: {},
           daysSinceReg: (dbDetail.daysSinceReg as number) ?? 0,
+          isEarlyMorning: (dbDetail.isEarlyMorning as boolean) || false,
+          mainGameType: (dbDetail.mainGameType as string) || undefined,
+          dataIssues: (dbDetail.dataIssues as string[]) || [],
+          remark: (dbDetail.remark as string) || '',
         } as EvaluationResult, !!dbEval.notified);
         if (result === 'failed') {
           logger.warn({ orderNo }, '[WS评估] 通知发送失败');
@@ -405,32 +506,33 @@ async function processSingleWsOrder(order: WithdrawOrder): Promise<void> {
     if (!result) {
       const retries = incrementEvalRetry(orderNo, 'ws');
       if (retries >= MAX_EVAL_RETRY) {
-        const memberName = order.memberName || order.member_name || '';
+        const fallback = buildFallbackResult(order, orderNo);
         await dbHolder.db.riskEval.upsert({
           where: { orderId: orderNo },
           update: {
-            totalScore: 0,
-            riskLevel: 'LOW',
-            triggeredRules: '[]',
-            detail: buildDetailJson(order, null, { evalFailed: true, retries, source: 'ws' }),
+            totalScore: fallback.totalScore,
+            riskLevel: fallback.riskLevel,
+            triggeredRules: JSON.stringify(fallback.triggeredRules),
+            detail: buildDetailJson(order, fallback, { evalFailed: true, retries, source: 'ws' }),
           },
           create: {
             orderId: orderNo,
             memberId: String(order.memberId || order.member_id || ''),
             memberName: order.memberName || order.member_name || '',
-            totalScore: 0,
-            riskLevel: 'LOW',
-            triggeredRules: '[]',
-            detail: buildDetailJson(order, null, { evalFailed: true, retries, source: 'ws' }),
+            totalScore: fallback.totalScore,
+            riskLevel: fallback.riskLevel,
+            triggeredRules: JSON.stringify(fallback.triggeredRules),
+            detail: buildDetailJson(order, fallback, { evalFailed: true, retries, source: 'ws' }),
             notified: false,
           },
         });
+        trackOpenOrder(order);
         markEvaluated(orderNo);
-        logger.warn({ orderNo, retries }, '[WS评估] 重试耗尽，写入LOW兜底记录');
+        logger.warn({ orderNo, retries }, '[WS评估] 重试耗尽，写入评估失败复核记录');
 
-        const notifyResult = await handleNotification(order, buildFallbackResult(order, orderNo));
+        const notifyResult = await handleNotification(order, fallback);
         if (notifyResult === 'failed') {
-          logger.warn({ orderNo }, '[WS评估] LOW兜底通知发送失败');
+          logger.warn({ orderNo }, '[WS评估] 评估失败复核通知发送失败');
         }
       } else {
         logger.warn({ orderNo, retries }, `[WS评估] 评估失败，${5 * retries}秒后重试 (${retries}/${MAX_EVAL_RETRY})`);
@@ -472,6 +574,7 @@ async function processSingleWsOrder(order: WithdrawOrder): Promise<void> {
         notified: false,
       },
     });
+    trackOpenOrder(order);
 
     await Promise.all([
       updateMemberProfile(memberName, memberId, result, order),
@@ -489,7 +592,6 @@ async function processSingleWsOrder(order: WithdrawOrder): Promise<void> {
       logger.warn({ orderNo }, '[WS评估] 通知发送失败');
     }
 
-    cleanupStaleCaches();
   } catch (err) {
     logger.error({ err: (err as Error).message }, '[WS评估] 单订单评估异常');
   } finally {
@@ -517,9 +619,10 @@ function handleWsWithdraw(order: WithdrawOrder, action: 'new' | 'update'): void 
       wsEvaluatingSet.delete(oldNo);
       prefetchedDetails.delete(oldNo);
       prefetchedAdded.delete(oldNo);
-      // 持久化兜底：丢弃的订单写入数据库 LOW 记录，避免完全丢失（非async上下文用.then）
+      // 持久化兜底：丢弃的订单写入评估失败记录，避免未知风险被当成低风险
       const oldMemberId = String(old.memberId || old.member_id || '');
       const oldMemberName = old.memberName || old.member_name || '';
+      const overflowFallback = buildFallbackResult(old, oldNo, '风控队列溢出，未完成评估，需人工复核');
       dbHolder.db.riskEval.upsert({
         where: { orderId: oldNo },
         update: {},
@@ -527,10 +630,10 @@ function handleWsWithdraw(order: WithdrawOrder, action: 'new' | 'update'): void 
           orderId: oldNo,
           memberId: oldMemberId,
           memberName: oldMemberName,
-          totalScore: 0,
-          riskLevel: 'LOW',
-          triggeredRules: '[]',
-          detail: buildDetailJson(old, null, { dropped: true, reason: 'WS队列溢出', queueLen: WS_QUEUE_MAX }),
+          totalScore: overflowFallback.totalScore,
+          riskLevel: overflowFallback.riskLevel,
+          triggeredRules: JSON.stringify(overflowFallback.triggeredRules),
+          detail: buildDetailJson(old, overflowFallback, { dropped: true, reason: 'WS队列溢出', queueLen: WS_QUEUE_MAX }),
           notified: false,
         },
       }).catch((dbErr) => {
@@ -539,7 +642,7 @@ function handleWsWithdraw(order: WithdrawOrder, action: 'new' | 'update'): void 
           logger.error({ orderNo: oldNo, err: (dbErr as Error).message }, '[WS] 队列溢出，数据库兜底写入失败');
         }
       });
-      logger.warn({ orderNo: oldNo, queueLen: WS_QUEUE_MAX }, '[WS] 队列已满，丢弃最旧订单（已写入DB兜底）');
+      logger.warn({ orderNo: oldNo, queueLen: WS_QUEUE_MAX }, '[WS] 队列已满，丢弃最旧订单（已写入评估失败复核记录）');
     }
     logger.info({ orderNo, memberName: order.memberName || order.member_name, amount: order.amount }, '[WS] 📩 新提款订单推送');
     const mName = order.memberName || order.member_name || '';
@@ -567,17 +670,12 @@ function handleWsWithdraw(order: WithdrawOrder, action: 'new' | 'update'): void 
       }
     }
 
-    const statusMap: Record<number, string> = { 3: 'rejected', 4: 'partial', 5: 'returned', 8: 'success' };
-    const label = statusMap[order.status];
-    if (label) {
-      dbHolder.db.riskEval.updateMany({
-        where: { orderId: orderNo, finalStatus: '' },
-        data: { finalStatus: label },
-      }).then(() => {
-        wsLastStatus.delete(orderNo);
-      }).catch((err) => {
-        logger.warn({ orderNo, status: order.status, err: (err as Error).message }, '[WS] 更新订单最终状态失败');
-      });
+    if (FINAL_STATUS_LABELS[order.status]) {
+      finalizeTrackedOrder(order)
+        .then(() => wsLastStatus.delete(orderNo))
+        .catch((err) => {
+          logger.warn({ orderNo, status: order.status, err: (err as Error).message }, '[WS] 更新订单最终状态失败');
+        });
     }
     if (!evaluatedOrderCache.has(orderNo) && !wsEvaluatingSet.has(orderNo) && !wsQueueSet.has(orderNo) && (order.status === 1 || order.status === 2)) {
       logger.info({ orderNo, status: order.status }, '[WS] 订单未评估，补充入队');
@@ -620,22 +718,33 @@ async function resolveWsDomainAndConnect(): Promise<void> {
   if (!wsClient) return;
 
   let wsUrl = WS_URL || '';
+  let lookupError = '';
 
   try {
     const apiDomain = await apiClient.getWebSocketDomain();
     if (apiDomain) {
       wsUrl = apiDomain;
-      logger.info({ apiDomain }, '[WS] 从API获取到WebSocket域名');
     }
   } catch (err) {
-    logger.warn({ err: (err as Error).message }, '[WS] 从API获取WebSocket域名失败');
+    lookupError = (err as Error).message;
   }
 
   if (!wsUrl) {
-    logger.warn('[WS] 无可用的WebSocket域名（API和.env均未获取到），60秒后重试');
+    const now = Date.now();
+    if (now - lastWsDomainWarningAt >= 5 * 60 * 1000) {
+      lastWsDomainWarningAt = now;
+      logger.warn({ retryInSec: 60, ...(lookupError ? { err: lookupError } : {}) }, '[WS] 无可用WebSocket域名，将继续重试');
+    }
+    wsDomainUnavailable = true;
     setTimeout(() => resolveWsDomainAndConnect(), 60 * 1000);
     return;
   }
+
+  if (wsDomainUnavailable) {
+    logger.info('[WS] WebSocket域名已恢复，开始连接');
+  }
+  wsDomainUnavailable = false;
+  lastWsDomainWarningAt = 0;
 
   wsClient.updateUrl(wsUrl);
   wsClient.connect();
@@ -644,7 +753,7 @@ async function resolveWsDomainAndConnect(): Promise<void> {
 async function notifyRiskOrders(items: Array<{ order: WithdrawOrder; result: EvaluationResult }>): Promise<void> {
   if (items.length === 0) return;
 
-  const NOTIFY_CONCURRENCY = 5;
+  const NOTIFY_CONCURRENCY = parsePositiveInt(process.env.NOTIFY_CONCURRENCY, 5);
   const results: PromiseSettledResult<NotifyResult>[] = new Array(items.length);
 
   // P1: 滑动窗口发送通知，消除批次头线阻塞
@@ -683,206 +792,118 @@ async function notifyRiskOrders(items: Array<{ order: WithdrawOrder; result: Eva
   }
 }
 
-const COMPLETED_RECOVERY_MINUTES = 60;
-let lastRecoveryTime = 0;
+interface TrackedOpenOrder {
+  order: WithdrawOrder;
+  firstSeenAt: number;
+}
 
-async function recoverCompletedOrders(): Promise<void> {
+const trackedOpenOrders = new Map<string, TrackedOpenOrder>();
+const FINAL_STATUS_LABELS: Record<number, string> = {
+  3: 'rejected',
+  4: 'success',
+  8: 'success',
+  9: 'failed',
+};
+let lastFinalStatusCheck = 0;
+
+function trackOpenOrder(order: WithdrawOrder): void {
+  if (order.status !== 1 && order.status !== 2) return;
+  const orderNo = String(order.orderNo || order.id || '');
+  if (!orderNo) return;
+  const existing = trackedOpenOrders.get(orderNo);
+  trackedOpenOrders.set(orderNo, {
+    order: { ...(existing?.order || {}), ...order },
+    firstSeenAt: existing?.firstSeenAt || Date.now(),
+  });
+}
+
+async function finalizeTrackedOrder(order: WithdrawOrder): Promise<void> {
+  const orderNo = String(order.orderNo || order.id || '');
+  const finalStatus = FINAL_STATUS_LABELS[Number(order.status)];
+  if (!orderNo || !finalStatus) return;
+
+  await dbHolder.db.riskEval.updateMany({
+    where: { orderId: orderNo, finalStatus: '' },
+    data: { finalStatus },
+  });
+  if (Number(order.status) === 4 || Number(order.status) === 8) {
+    await recordSuccessfulWithdrawal(order);
+  }
+  trackedOpenOrders.delete(orderNo);
+}
+
+/**
+ * 只恢复本次重启前一天内、已被评估但尚未拿到最终状态的订单。
+ * 这不会补发停机期间已完成订单的提醒，仅补齐成功提款基线和订单终态。
+ */
+async function restoreTrackedOpenOrders(): Promise<void> {
+  const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const records = await dbHolder.db.riskEval.findMany({
+    where: { finalStatus: '', createdAt: { gte: since } },
+    select: { orderId: true, memberId: true, memberName: true, detail: true, createdAt: true },
+    take: 500,
+    orderBy: { createdAt: 'asc' },
+  });
+
+  let restored = 0;
+  for (const record of records) {
+    let detail: Record<string, unknown> = {};
+    try { detail = JSON.parse(record.detail || '{}'); } catch { /* 旧记录格式异常时使用安全兜底 */ }
+    const orderTime = parseTimeStr(detail.orderTime as string | number | undefined) || record.createdAt.getTime();
+    trackOpenOrder({
+      orderNo: record.orderId,
+      status: 1,
+      memberId: record.memberId,
+      member_id: record.memberId,
+      memberName: record.memberName,
+      member_name: record.memberName,
+      amount: (detail.orderAmount as string | number | undefined) ?? 0,
+      createTime: orderTime,
+      proxyCode: detail.proxyCode as string | undefined,
+      receivingBank: detail.receivingBank as string | undefined,
+      receivingName: detail.receivingName as string | undefined,
+      receivingCardNo: detail.receivingCardNo as string | undefined,
+      balance: detail.balance as string | number | undefined,
+    });
+    restored++;
+  }
+
+  if (restored > 0) {
+    logger.info({ restored }, '[状态] 已恢复重启前未终态订单跟踪，仅补齐终态与成功提款基线');
+  }
+}
+
+async function reconcileTrackedOrderStatuses(pendingOrders: WithdrawOrder[]): Promise<void> {
+  const pendingById = new Map(pendingOrders.map(order => [String(order.orderNo || order.id || ''), order]));
+  for (const [orderNo, tracked] of trackedOpenOrders) {
+    const pending = pendingById.get(orderNo);
+    if (pending) trackedOpenOrders.set(orderNo, { ...tracked, order: { ...tracked.order, ...pending } });
+  }
+
+  const missing = [...trackedOpenOrders.entries()].filter(([orderNo]) => !pendingById.has(orderNo));
+  if (missing.length === 0 || Date.now() - lastFinalStatusCheck < 60_000) return;
+  lastFinalStatusCheck = Date.now();
+
   const now = Date.now();
-  if (now - lastRecoveryTime < 5 * 60 * 1000) return;
-  lastRecoveryTime = now;
+  const oldestOrderTime = Math.min(...missing.map(([, tracked]) => parseTimeStr(tracked.order.createTime) || tracked.firstSeenAt));
+  const start = Math.max(now - 24 * 60 * 60 * 1000, oldestOrderTime - 5 * 60 * 1000);
 
-  try {
-    const offset = parseInt(process.env.TZ_OFFSET || '8', 10) * 3600000;
-    const localNow = new Date(now + offset);
-    const since = new Date(localNow);
-    since.setMinutes(since.getMinutes() - COMPLETED_RECOVERY_MINUTES);
-    since.setSeconds(0, 0);
-    const dateRange = {
-      start: since.getTime() - offset,
-      end: localNow.getTime() - offset,
-    };
+  const finalOrders = await apiClient.getAllWithdrawOrdersByStatuses(
+    Object.keys(FINAL_STATUS_LABELS).map(Number),
+    { start, end: now },
+  );
+  const finalById = new Map(finalOrders.map(order => [String(order.orderNo || order.id || ''), order]));
 
-    const completedOrders = await apiClient.getAllWithdrawOrdersByStatuses([1, 2], dateRange);
-    if (!completedOrders || completedOrders.length === 0) return;
-
-    const unevaluated: string[] = [];
-    for (const o of completedOrders) {
-      const no = String(o.orderNo || o.id);
-      if (evaluatedOrderCache.has(no)) continue;
-      unevaluated.push(no);
+  for (const [orderNo, tracked] of missing) {
+    const finalOrder = finalById.get(orderNo);
+    if (finalOrder) {
+      await finalizeTrackedOrder({ ...tracked.order, ...finalOrder });
+      continue;
     }
-
-    if (unevaluated.length === 0) return;
-
-    const DB_BATCH = 100;
-    const dbSet = new Set<string>();
-    const retryCandidateSet = new Set<string>();
-    for (let bi = 0; bi < unevaluated.length; bi += DB_BATCH) {
-      const batch = unevaluated.slice(bi, bi + DB_BATCH);
-      const dbEvals = await dbHolder.db.riskEval.findMany({
-        where: { orderId: { in: batch } },
-        select: { orderId: true, detail: true },
-      });
-      for (const e of dbEvals) {
-        dbSet.add(e.orderId);
-        try {
-          const d = JSON.parse(e.detail || '{}');
-          if (d.evalFailed) retryCandidateSet.add(e.orderId);
-        } catch {}
-      }
+    if (now - tracked.firstSeenAt > 24 * 60 * 60 * 1000) {
+      trackedOpenOrders.delete(orderNo);
+      logger.warn({ orderNo }, '[状态] 运行期订单超过24小时仍未取得最终状态，停止跟踪');
     }
-    const missedSet = new Set(unevaluated.filter(no => !dbSet.has(no)));
-
-    for (const no of dbSet) {
-      if (!retryCandidateSet.has(no)) {
-        markEvaluated(no);
-      }
-    }
-
-    const RECOVERY_CONCURRENCY = 4;
-
-    async function processMissedOrder(order: WithdrawOrder): Promise<void> {
-      const orderNo = String(order.orderNo || order.id);
-      try {
-        const result = await evaluateOrder(order);
-        if (result) {
-          const memberName = order.memberName || order.member_name || '';
-          const memberId = String(order.memberId || order.member_id || '');
-          const proxyCode = extractProxyCode(order) || result.proxyCode || '';
-
-          await dbHolder.db.riskEval.upsert({
-            where: { orderId: result.orderId || orderNo },
-            update: {
-              totalScore: result.totalScore,
-              riskLevel: result.riskLevel,
-              triggeredRules: JSON.stringify(result.triggeredRules),
-              detail: buildDetailJson(order, result, { source: 'recovery' }),
-            },
-            create: {
-              orderId: result.orderId || orderNo,
-              memberId: result.memberId || memberId,
-              memberName,
-              totalScore: result.totalScore,
-              riskLevel: result.riskLevel,
-              triggeredRules: JSON.stringify(result.triggeredRules),
-              detail: buildDetailJson(order, result, { source: 'recovery' }),
-              notified: false,
-            },
-          });
-
-          const notifyResult = await handleNotification(order, result);
-          if (notifyResult === 'failed') {
-            logger.warn({ orderNo }, '[补查] 通知发送失败');
-          }
-          markEvaluated(orderNo);
-        } else {
-          const retries = incrementEvalRetry(orderNo, 'recovery');
-          if (retries >= MAX_EVAL_RETRY) {
-            try {
-              const memberName = order.memberName || order.member_name || '';
-              await dbHolder.db.riskEval.upsert({
-                where: { orderId: orderNo },
-                update: { totalScore: 0, riskLevel: 'LOW', triggeredRules: '[]', detail: buildDetailJson(order, null, { evalFailed: true, retries, source: 'recovery' }) },
-                create: { orderId: orderNo, memberId: String(order.memberId || order.member_id || ''), memberName: order.memberName || order.member_name || '', totalScore: 0, riskLevel: 'LOW', triggeredRules: '[]', detail: buildDetailJson(order, null, { evalFailed: true, retries, source: 'recovery' }), notified: false },
-              });
-              logger.warn({ orderNo, retries }, '[补查] 重试耗尽，写入LOW兜底记录');
-
-              const notifyResult = await handleNotification(order, buildFallbackResult(order, orderNo));
-              if (notifyResult === 'failed') {
-                logger.warn({ orderNo }, '[补查] LOW兜底通知发送失败');
-              }
-              markEvaluated(orderNo);
-            } catch (e) {
-              logger.error({ orderNo, err: (e as Error).message }, '[补查] 兜底记录写入失败');
-            }
-          } else {
-            logger.warn({ orderNo, retries }, `[补查] 评估失败，将在下轮重试 (${retries}/${MAX_EVAL_RETRY})`);
-          }
-        }
-      } catch (err) {
-        logger.error({ orderNo, err: (err as Error).message }, '[补查] 评估遗漏订单失败');
-      }
-    }
-
-    async function processRetryOrder(order: WithdrawOrder): Promise<void> {
-      const orderNo = String(order.orderNo || order.id);
-      try {
-        const result = await evaluateOrder(order);
-        if (result) {
-          await dbHolder.db.riskEval.update({
-            where: { orderId: orderNo },
-            data: {
-              totalScore: result.totalScore,
-              riskLevel: result.riskLevel,
-              triggeredRules: JSON.stringify(result.triggeredRules),
-              detail: buildDetailJson(order, result, { source: 'recovery-retry' }),
-            },
-          });
-          const notifyResult = await handleNotification(order, result);
-          if (notifyResult === 'failed') {
-            logger.warn({ orderNo }, '[补查] 通知发送失败');
-          }
-          markEvaluated(orderNo);
-        } else {
-          const retries = incrementEvalRetry(orderNo, 'recovery-retry');
-          if (retries >= MAX_EVAL_RETRY) {
-            try {
-              await dbHolder.db.riskEval.update({
-                where: { orderId: orderNo },
-                data: {
-                  totalScore: 0,
-                  riskLevel: 'LOW',
-                  triggeredRules: '[]',
-                  detail: buildDetailJson(order, null, { evalFailed: true, retries, source: 'recovery-retry' }),
-                },
-              });
-              markEvaluated(orderNo);
-              logger.warn({ orderNo, retries }, '[补查] 重试订单重试耗尽，写入LOW兜底');
-
-              const notifyResult = await handleNotification(order, buildFallbackResult(order, orderNo));
-              if (notifyResult === 'failed') {
-                logger.warn({ orderNo }, '[补查] 重试兜底通知发送失败');
-              }
-            } catch (e) {
-              logger.error({ orderNo, err: (e as Error).message }, '[补查] 重试兜底记录写入失败');
-            }
-          } else {
-            logger.debug({ orderNo, retries }, '[补查] 重新评估失败订单仍失败，保留重试机会');
-          }
-        }
-      } catch (err) {
-        logger.debug({ orderNo, err: (err as Error).message }, '[补查] 重新评估失败订单异常');
-      }
-    }
-
-    if (missedSet.size > 0) {
-      const missedArr = [...missedSet];
-      logger.warn({ count: missedArr.length, sample: missedArr.slice(0, 5) }, `[补查] 发现 ${missedArr.length} 笔已完成但未评估的订单`);
-      const missedOrders = completedOrders.filter(o => missedSet.has(String(o.orderNo || o.id)));
-      // P1: 滑动窗口替代固定批次
-      let missedIdx = 0;
-      const missedWorkers = Array.from({ length: Math.min(RECOVERY_CONCURRENCY, missedOrders.length) }, async () => {
-        while (missedIdx < missedOrders.length) {
-          await processMissedOrder(missedOrders[missedIdx++]);
-        }
-      });
-      await Promise.all(missedWorkers);
-    }
-
-    if (retryCandidateSet.size > 0) {
-      logger.info({ count: retryCandidateSet.size }, `[补查] 重新评估 ${retryCandidateSet.size} 笔之前失败的订单`);
-      const retryOrders = completedOrders.filter(o => retryCandidateSet.has(String(o.orderNo || o.id)));
-      // P1: 滑动窗口替代固定批次
-      let retryIdx = 0;
-      const retryWorkers = Array.from({ length: Math.min(RECOVERY_CONCURRENCY, retryOrders.length) }, async () => {
-        while (retryIdx < retryOrders.length) {
-          await processRetryOrder(retryOrders[retryIdx++]);
-        }
-      });
-      await Promise.all(retryWorkers);
-    }
-  } catch (err) {
-    logger.debug({ err: (err as Error).message }, '[补查] 已完成订单补查失败');
   }
 }
 
@@ -891,10 +912,36 @@ async function pollOrders() {
   isPolling = true;
 
   try {
-    const orders: WithdrawOrder[] = await apiClient.getPendingWithdrawOrders();
+    const normalOrders = await apiClient.getPendingWithdrawOrders();
+    let orders = normalOrders;
+
+    // 每轮轮询均做短窗口全状态对账。WS 是秒级主通道；一旦 WS 或某个
+    // 状态页漏推/延迟，对账会在下一轮（当前配置为 30 秒）发现订单。
+    try {
+      const now = Date.now();
+      const recentOrders = await apiClient.getRecentPendingWithdrawOrders({
+        start: now - RECENT_ORDER_RECONCILE_WINDOW_MS,
+        end: now,
+      });
+      if (recentOrders.length > 0) {
+        const normalOrderNos = new Set(normalOrders.map(order => String(order.orderNo || order.id || '')).filter(Boolean));
+        const recovered = recentOrders.filter(order => !normalOrderNos.has(String(order.orderNo || order.id || '')));
+        if (recovered.length > 0) {
+          logger.warn({ recovered: recovered.length, windowMin: RECENT_ORDER_RECONCILE_WINDOW_MS / 60000 }, '[轮询] 全状态对账发现状态页遗漏订单');
+          orders = [...normalOrders, ...recovered];
+        }
+      }
+    } catch (err) {
+      // 对账失败不得影响主状态页轮询。
+      logger.warn({ err: (err as Error).message }, '[轮询] 全状态对账失败，保留主状态页结果');
+    }
+
+    await reconcileTrackedOrderStatuses(orders).catch((err) => {
+      logger.warn({ err: (err as Error).message }, '[状态] 运行期订单最终状态查询失败，将稍后重试');
+    });
 
     if (!orders || orders.length === 0) {
-      logger.info(`[轮询] 心跳 ${formatBeijingTime(undefined, 'time')} — 无待审核/处理中订单`);
+      logIdleHeartbeat('无待审核/处理中订单');
       consecutiveFailures = 0;
       return;
     }
@@ -906,7 +953,7 @@ async function pollOrders() {
       statusCount[s] = (statusCount[s] || 0) + 1;
     }
     const statusSummary = Object.entries(statusCount).map(([s, c]) => `${statusLabel(Number(s))}${c}个`).join('，');
-    logger.info({ count: orders.length, summary: statusSummary }, `[轮询] 获取到 ${orders.length} 个订单（${statusSummary}）`);
+    logger.debug({ count: orders.length, summary: statusSummary }, `[轮询] 获取到 ${orders.length} 个订单（${statusSummary}）`);
 
     const orderNos = orders.map(o => String(o.orderNo || o.id));
     const memHitSet = new Set<string>();
@@ -932,15 +979,21 @@ async function pollOrders() {
         }
       }
     }
-    const newOrders = orders.filter(o => !memHitSet.has(String(o.orderNo || o.id)));
+    // WS 已经接管的订单不再由轮询重复评估。通知层虽有幂等保护，
+    // 但重复跑完整风控查询会拖慢后续真实新订单。
+    const newOrders = orders.filter(o => {
+      const orderNo = String(o.orderNo || o.id);
+      return !memHitSet.has(orderNo) && !wsEvaluatingSet.has(orderNo) && !wsQueueSet.has(orderNo);
+    });
 
     if (newOrders.length === 0) {
-      logger.info(`[轮询] 心跳 ${formatBeijingTime(undefined, 'time')} — ${orders.length}个订单已全部评估`);
+      logIdleHeartbeat(`${orders.length}个订单已全部评估`);
       consecutiveFailures = 0;
       return;
     }
 
-    logger.info({ newCount: newOrders.length, total: orders.length }, `[轮询] 其中 ${newOrders.length} 个为新订单，开始并发评估`);
+    lastIdleHeartbeatAt = 0;
+    logger.info({ newCount: newOrders.length, total: orders.length, summary: statusSummary }, `[轮询] 其中 ${newOrders.length} 个为新订单，开始并发评估`);
 
     // M1 修复：批量预加载 ruleFeedback（按订单级别），减少 N+1 查询
     try {
@@ -953,7 +1006,7 @@ async function pollOrders() {
         if (existingEvals.length > 0) {
           const evalIdToOrderId = new Map(existingEvals.map(e => [e.id, e.orderId]));
           const feedbacks = await dbHolder.db.ruleFeedback.findMany({
-            where: { evalId: { in: [...evalIdToOrderId.keys()] }, feedback: 'review' },
+            where: { evalId: { in: [...evalIdToOrderId.keys()] }, feedback: { in: ['confirm', 'clear', 'review'] } },
             select: { evalId: true, ruleId: true },
           });
           const mapped = feedbacks.map(f => ({
@@ -968,7 +1021,8 @@ async function pollOrders() {
       logger.warn({ err: (err as Error).message }, '[轮询] 批量预加载 ruleFeedback 失败，降级为逐条查询');
     }
 
-    const CONCURRENCY = newOrders.length > 30 ? 8 : newOrders.length > 15 ? 5 : newOrders.length > 5 ? 4 : 3;
+    const dynamicConcurrency = newOrders.length > 30 ? 8 : newOrders.length > 15 ? 5 : newOrders.length > 5 ? 4 : 3;
+    const CONCURRENCY = Math.min(parsePositiveInt(process.env.POLL_EVAL_MAX_CONCURRENCY, 8), dynamicConcurrency);
 
     // P2: 批量预取 userDetails，减少 per-evaluation API 调用
     // getUserDetails 需要 memberName，构建 memberId → memberName 映射
@@ -980,7 +1034,7 @@ async function pollOrders() {
     }
     const uniqueMemberNames = [...new Set(memberNameMap.values())];
     if (uniqueMemberNames.length > 0) {
-      const PREFETCH_BATCH = 10;
+      const PREFETCH_BATCH = parsePositiveInt(process.env.PREFETCH_BATCH_SIZE, 10);
       for (let pi = 0; pi < uniqueMemberNames.length; pi += PREFETCH_BATCH) {
         const batch = uniqueMemberNames.slice(pi, pi + PREFETCH_BATCH);
         await Promise.all(batch.map(async (mName) => {
@@ -997,7 +1051,7 @@ async function pollOrders() {
           } catch { /* 预取失败不阻塞流程 */ }
         }));
       }
-      logger.info({ members: uniqueMemberNames.length }, '[轮询] 批量预取用户详情完成');
+      logger.debug({ members: uniqueMemberNames.length }, '[轮询] 批量预取用户详情完成');
     }
 
     const evalResults = new Map<string, EvaluationResult>();
@@ -1012,32 +1066,33 @@ async function pollOrders() {
           const retries = incrementEvalRetry(orderId, 'polling');
           if (retries >= MAX_EVAL_RETRY) {
             try {
-              const memberName = order.memberName || order.member_name || '';
+              const fallback = buildFallbackResult(order, orderId);
               await dbHolder.db.riskEval.upsert({
                 where: { orderId },
                 update: {
-                  totalScore: 0,
-                  riskLevel: 'LOW',
-                  triggeredRules: '[]',
-                  detail: buildDetailJson(order, null, { evalFailed: true, retries }),
+                  totalScore: fallback.totalScore,
+                  riskLevel: fallback.riskLevel,
+                  triggeredRules: JSON.stringify(fallback.triggeredRules),
+                  detail: buildDetailJson(order, fallback, { evalFailed: true, retries, source: 'polling' }),
                 },
                 create: {
                   orderId,
                   memberId: String(order.memberId || order.member_id || ''),
                   memberName: order.memberName || order.member_name || '',
-                  totalScore: 0,
-                  riskLevel: 'LOW',
-                  triggeredRules: '[]',
-                  detail: buildDetailJson(order, null, { evalFailed: true, retries }),
+                  totalScore: fallback.totalScore,
+                  riskLevel: fallback.riskLevel,
+                  triggeredRules: JSON.stringify(fallback.triggeredRules),
+                  detail: buildDetailJson(order, fallback, { evalFailed: true, retries, source: 'polling' }),
                   notified: false,
                 },
               });
+              trackOpenOrder(order);
               markEvaluated(orderId);
-              logger.warn({ orderNo: order.orderNo || order.id, retries }, '[评估] 重试耗尽，写入LOW兜底记录');
+              logger.warn({ orderNo: order.orderNo || order.id, retries }, '[评估] 重试耗尽，写入评估失败复核记录');
 
-              const notifyResult = await handleNotification(order, buildFallbackResult(order, orderId));
+              const notifyResult = await handleNotification(order, fallback);
               if (notifyResult === 'failed') {
-                logger.warn({ orderId }, '[评估] LOW兜底通知发送失败');
+                logger.warn({ orderId }, '[评估] 评估失败复核通知发送失败');
               }
             } catch (err) {
               logger.error({ orderNo: order.orderNo || order.id, err: (err as Error).message }, '[评估] 兜底记录写入失败');
@@ -1077,6 +1132,7 @@ async function pollOrders() {
           });
 
           // DB 持久化成功后才标记为已评估，避免崩溃后订单被永久跳过
+          trackOpenOrder(order);
           markEvaluated(String(order.orderNo || order.id));
 
           await Promise.all([
@@ -1117,9 +1173,6 @@ async function pollOrders() {
       await notifyRiskOrders(notifyOrders);
     }
 
-    cleanupStaleCaches();
-
-    recoverCompletedOrders().catch(err => logger.error({ err: (err as Error).message }, '[补查] 异步补查异常'));
 
     consecutiveFailures = 0;
   } catch (err) {
@@ -1155,6 +1208,11 @@ async function main() {
   // 全局未捕获的 Promise 拒绝处理
   process.on('unhandledRejection', (reason) => {
     logger.fatal({ err: reason }, '[全局] 未捕获的 Promise 拒绝');
+    process.exit(1);
+  });
+  process.on('uncaughtException', (err) => {
+    logger.fatal({ err }, '[全局] 未捕获异常');
+    process.exit(1);
   });
 
   logger.info('========================================');
@@ -1163,11 +1221,16 @@ async function main() {
 
   const envPath = path.resolve(process.cwd(), '.env');
   dotenv.config({ path: envPath });
+  logger.level = (process.env.LOG_LEVEL || 'info').toLowerCase();
+  reloadConstantsFromEnv();
   logger.info('[Env] 已通过 dotenv 加载 .env 文件');
 
-  POLL_INTERVAL = Math.max(parseInt(process.env.POLL_INTERVAL || '25', 10) * 1000, 10000);
+  POLL_INTERVAL = Math.max(parsePositiveInt(process.env.POLL_INTERVAL, 25) * 1000, 10_000);
+  POLL_INTERVAL_WS_CONNECTED = Math.max(parsePositiveInt(process.env.POLL_INTERVAL_WS_CONNECTED, 30) * 1000, 10_000);
   setPrefetchStore(prefetchedDetails);
-  PORT = parseInt(process.env.PORT || '0', 10);
+  const parsedPort = parseInt(process.env.PORT || '0', 10);
+  PORT = Number.isInteger(parsedPort) && parsedPort >= 0 && parsedPort <= 65535 ? parsedPort : 0;
+  HOST = process.env.HOST || '127.0.0.1';
   WS_ENABLED = process.env.WS_ENABLED !== 'false';
   WS_URL = (process.env.WS_URL || '').replace(/\/+$/, '');
 
@@ -1175,6 +1238,7 @@ async function main() {
   if (!process.env.AUTH_SERVICE_URL) missingEnvs.push('AUTH_SERVICE_URL');
   if (!process.env.AUTH_API_KEY) missingEnvs.push('AUTH_API_KEY');
   if (!process.env.TELEGRAM_BOT_TOKEN) missingEnvs.push('TELEGRAM_BOT_TOKEN');
+  if (!process.env.RISK_FINGERPRINT_SECRET) missingEnvs.push('RISK_FINGERPRINT_SECRET');
   // DATABASE_URL 由 ensureDatabase() 自动生成，无需强制配置
   if (missingEnvs.length > 0) {
     logger.fatal({ missing: missingEnvs }, `[配置] 缺少关键环境变量: ${missingEnvs.join(', ')}，无法启动`);
@@ -1190,9 +1254,10 @@ async function main() {
     logger.warn({ pollInterval: POLL_INTERVAL / 1000 }, '[配置] POLL_INTERVAL 过小（<10秒），可能导致API限流');
   }
 
-  logger.info({ baseUrl: process.env.API_BASE_URL || '(未设置)', tzOffset: process.env.TZ_OFFSET || '8(默认)', pollInterval: POLL_INTERVAL / 1000, wsEnabled: WS_ENABLED, wsUrl: WS_URL || '(未设置)' }, '[配置] 启动参数');
+  logger.info({ authServiceUrl: process.env.AUTH_SERVICE_URL, tzOffset: process.env.TZ_OFFSET || '8(默认)', pollInterval: POLL_INTERVAL / 1000, wsEnabled: WS_ENABLED, wsUrl: WS_URL || '(未设置)' }, '[配置] 启动参数');
 
   await ensureDatabase();
+  await restoreTrackedOpenOrders();
 
   logger.info('[启动] auth-service 已接管 Token 管理');
   const healthy = await apiClient.checkHealth().catch(() => false);
@@ -1209,9 +1274,13 @@ async function main() {
     logger.warn({ err: (err as Error).message }, '[启动] 加载规则开关配置失败');
   }
 
-  server.listen(PORT, () => {
-    logger.info({ port: PORT }, `[HTTP] 服务器运行在 http://localhost:${PORT}`);
-  });
+  if (PORT > 0) {
+    server.listen(PORT, HOST, () => {
+      logger.info({ host: HOST, port: PORT }, `[HTTP] 服务器运行在 http://${HOST}:${PORT}`);
+    });
+  } else {
+    logger.info('[HTTP] 内置 HTTP 服务已禁用（PORT=0）');
+  }
 
   await startTelegramBot();
 
@@ -1248,7 +1317,7 @@ async function main() {
   scheduleNextPoll();
 
   const statusTrackTimer = setInterval(async () => {
-    await trackOrderStatus();
+    await retryPendingNotifications();
   }, 5 * 60 * 1000);
 
   const autoReviewTimer = setInterval(async () => {
@@ -1272,72 +1341,6 @@ async function main() {
       resolveWsDomainAndConnect();
     }
   }, 5 * 60 * 1000);
-
-  const dailyReportTimer = setInterval(async () => {
-    try {
-      const now = new Date();
-      const tzOffset = parseInt(process.env.TZ_OFFSET || '8', 10);
-      const localHour = Math.floor((now.getUTCHours() + tzOffset + 24) % 24);
-      if (localHour < 9 || localHour >= 10) return;
-
-      const lastReport = await dbHolder.db.botConfig.findUnique({ where: { key: 'LAST_DAILY_REPORT' } });
-      const localDateStr = new Date(now.getTime() + tzOffset * 3600000).toISOString().slice(0, 10);
-      if (lastReport?.value === localDateStr) return;
-
-      const { start: todayStart } = apiClient.getTimezoneDateRange();
-      const yesterdayStart = todayStart - 86400000;
-      const yesterdayWhere = { createdAt: { gte: new Date(yesterdayStart), lt: new Date(todayStart) } };
-
-      const [total, highRisk, mediumRisk] = await Promise.all([
-        dbHolder.db.riskEval.count({ where: yesterdayWhere }),
-        dbHolder.db.riskEval.count({ where: { ...yesterdayWhere, riskLevel: { in: ['HIGH', 'CRITICAL'] } } }),
-        dbHolder.db.riskEval.count({ where: { ...yesterdayWhere, riskLevel: 'MEDIUM' } }),
-      ]);
-
-      let topRules = '无';
-      try {
-        const nonLowEvals = await dbHolder.db.riskEval.findMany({
-          where: {
-            createdAt: { gte: new Date(yesterdayStart), lt: new Date(todayStart) },
-            riskLevel: { not: 'LOW' },
-          },
-          select: { triggeredRules: true },
-        });
-        const ruleCount: Record<string, number> = {};
-        for (const row of nonLowEvals) {
-          try {
-            const rules = JSON.parse(row.triggeredRules || '[]');
-            for (const r of rules) {
-              ruleCount[r.id] = (ruleCount[r.id] || 0) + 1;
-            }
-          } catch {}
-        }
-        topRules = Object.entries(ruleCount).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([id, c]) => `${id}(${c}次)`).join('、') || '无';
-      } catch {}
-
-      const text = [
-        `📊 每日风控报告（${formatBeijingTime(yesterdayStart, 'date')}）`,
-        ``,
-        `总评估：${total} 笔`,
-        `高风险：${highRisk} 笔`,
-        `中风险：${mediumRisk} 笔`,
-        `TOP5规则：${topRules || '无'}`,
-      ].join('\n');
-
-      const chatId = await dbHolder.db.botConfig.findUnique({ where: { key: 'NOTIFY_CHAT_ID' } });
-      if (chatId?.value) {
-        await getBot().api.sendMessage(chatId.value, text).catch(() => {});
-      }
-
-      await dbHolder.db.botConfig.upsert({
-        where: { key: 'LAST_DAILY_REPORT' },
-        update: { value: localDateStr },
-        create: { key: 'LAST_DAILY_REPORT', value: localDateStr },
-      });
-    } catch (err) {
-      logger.error({ err: (err as Error).message }, '[报告] 每日风控报告生成失败');
-    }
-  }, 10 * 60 * 1000);
 
   const cleanupTimer = setInterval(async () => {
     try {
@@ -1407,8 +1410,12 @@ async function main() {
         where: { createdAt: { lt: new Date(Date.now() - 90 * 86400000) } },
       });
 
-      if (lowDeleted.count > 0 || oldDeleted.count > 0 || highDeleted.count > 0 || staleUnnotified.count > 0 || feedbackInfoDeleted.count > 0) {
-        logger.info({ lowDeleted: lowDeleted.count, oldDeleted: oldDeleted.count, highDeleted: highDeleted.count, staleUnnotified: staleUnnotified.count, feedbackDeleted: feedbackInfoDeleted.count }, `[清理] 删除 ${lowDeleted.count}条LOW(30d) ${oldDeleted.count}条MEDIUM(90d) ${highDeleted.count}条HIGH/CRITICAL(180d) ${staleUnnotified.count}条超期未通知(180d) ${feedbackInfoDeleted.count}条审核反馈(90d)`);
+      const successfulWithdrawDeleted = await dbHolder.db.successfulWithdrawal.deleteMany({
+        where: { createTime: { lt: new Date(Date.now() - 365 * 86400000) } },
+      });
+
+      if (lowDeleted.count > 0 || oldDeleted.count > 0 || highDeleted.count > 0 || staleUnnotified.count > 0 || feedbackInfoDeleted.count > 0 || successfulWithdrawDeleted.count > 0) {
+        logger.info({ lowDeleted: lowDeleted.count, oldDeleted: oldDeleted.count, highDeleted: highDeleted.count, staleUnnotified: staleUnnotified.count, feedbackDeleted: feedbackInfoDeleted.count, successfulWithdrawDeleted: successfulWithdrawDeleted.count }, `[清理] 删除 ${lowDeleted.count}条LOW(30d) ${oldDeleted.count}条MEDIUM(90d) ${highDeleted.count}条HIGH/CRITICAL(180d) ${staleUnnotified.count}条超期未通知(180d) ${feedbackInfoDeleted.count}条审核反馈(90d) ${successfulWithdrawDeleted.count}条成功提款基线(365d)`);
       }
     } catch (err) {
       logger.error({ err: (err as Error).message }, '[清理] 数据自动清理失败');
@@ -1427,13 +1434,14 @@ async function main() {
     clearInterval(autoReviewTimer);
     clearInterval(watchdogTimer);
     clearInterval(wsRecoveryTimer);
-    clearInterval(dailyReportTimer);
     clearInterval(cleanupTimer);
     if (wsClient) {
       wsClient.disconnect();
       wsClient = null;
     }
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    if (server.listening) {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
     try { await dbHolder.db.$disconnect(); } catch {}
     logger.info('[关闭] 风控机器人已停止');
     process.exit(0);

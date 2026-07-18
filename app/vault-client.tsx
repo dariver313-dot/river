@@ -700,14 +700,14 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
 
         <nav className="main-nav">
           <p className="nav-label">密码库</p>
-          <button className={`nav-item ${collection === "all" && space === "全部" ? "is-active" : ""}`} onClick={() => { setCollection("all"); setSpace("全部"); }}><KeyRound size={18} /><span>所有项目</span><span className="nav-count">{items.length}</span></button>
-          <button className={`nav-item ${collection === "security" ? "is-active" : ""}`} onClick={() => { setCollection("security"); setSpace("全部"); setSecurityFocus("all"); }}><ShieldEllipsis size={18} /><span>安全检查</span><span className="nav-alert">{securityIssueCount}</span></button>
+          <button className={`nav-item ${collection === "all" && space === "全部" ? "is-active" : ""}`} aria-pressed={collection === "all" && space === "全部"} onClick={() => { setCollection("all"); setSpace("全部"); setMobileNav(false); }}><KeyRound size={18} /><span>所有项目</span><span className="nav-count">{items.length}</span></button>
+          <button className={`nav-item ${collection === "security" ? "is-active" : ""}`} aria-pressed={collection === "security"} onClick={() => { setCollection("security"); setSpace("全部"); setSecurityFocus("all"); setMobileNav(false); }}><ShieldEllipsis size={18} /><span>安全检查</span><span className="nav-alert">{securityIssueCount}</span></button>
 
-          {isAdmin && <><p className="nav-label nav-label-spaced">系统</p><button className="nav-item" onClick={openUserManagement}><UserCog size={18} /><span>用户管理</span></button></>}
+          {isAdmin && <><p className="nav-label nav-label-spaced">系统</p><button className="nav-item" onClick={() => { setMobileNav(false); void openUserManagement(); }}><UserCog size={18} /><span>用户管理</span></button></>}
 
           <p className="nav-label nav-label-spaced">空间</p>
-          <button className={`nav-item ${collection === "all" && space === "个人" ? "is-active" : ""}`} onClick={() => { setCollection("all"); setSpace("个人"); }}><UserRound size={18} /><span>个人</span></button>
-          <button className={`nav-item ${collection === "all" && space === "公共" ? "is-active" : ""}`} onClick={() => { setCollection("all"); setSpace("公共"); }}><UsersRound size={18} /><span>公共</span></button>
+          <button className={`nav-item ${collection === "all" && space === "个人" ? "is-active" : ""}`} aria-pressed={collection === "all" && space === "个人"} onClick={() => { setCollection("all"); setSpace("个人"); setMobileNav(false); }}><UserRound size={18} /><span>个人</span></button>
+          <button className={`nav-item ${collection === "all" && space === "公共" ? "is-active" : ""}`} aria-pressed={collection === "all" && space === "公共"} onClick={() => { setCollection("all"); setSpace("公共"); setMobileNav(false); }}><UsersRound size={18} /><span>公共</span></button>
         </nav>
 
         <div className="sidebar-tip">

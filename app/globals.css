@@ -128,10 +128,11 @@ button:disabled {
   height: 100dvh;
   display: flex;
   flex-direction: column;
-  padding: 22px 14px 16px;
+  padding: 18px 12px 12px;
   overflow-y: auto;
   background: var(--nav);
   color: var(--nav-ink);
+  border-right: 1px solid rgb(255 255 255 / 0.06);
   z-index: 40;
 }
 
@@ -150,7 +151,7 @@ button:disabled {
 
 .brand-lockup {
   gap: 12px;
-  padding: 0 8px 26px;
+  padding: 2px 8px 22px;
 }
 
 .brand-icon,
@@ -175,7 +176,7 @@ button:disabled {
 }
 
 .brand-lockup strong {
-  font-size: 18px;
+  font-size: 17px;
   line-height: 1.25;
   letter-spacing: 0.02em;
 }
@@ -193,47 +194,61 @@ button:disabled {
 .main-nav {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
 }
 
 .nav-label {
-  margin: 0 10px 5px;
-  color: var(--nav-muted);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.12em;
+  margin: 0 10px 6px;
+  color: #8f9bb0;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.13em;
   text-transform: uppercase;
 }
 
 .nav-label-spaced {
-  margin-top: 20px;
+  margin-top: 18px;
 }
 
 .nav-item {
+  position: relative;
   min-height: 36px;
   display: grid;
   grid-template-columns: 22px minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
   width: 100%;
-  padding: 0 11px;
+  padding: 0 10px;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--nav-muted);
+  color: #b5c0d0;
   text-align: left;
-  transition: background-color 180ms ease, color 180ms ease, border-color 180ms ease;
+  font-size: 12px;
+  transition: background-color 180ms ease, color 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
 }
 
 .nav-item:hover {
-  background: var(--nav-soft);
+  background: rgb(255 255 255 / 0.07);
   color: white;
 }
 
 .nav-item.is-active {
-  background: #1a3c51;
-  border-color: #2b5268;
+  border-color: rgb(157 180 235 / 0.24);
+  background: rgb(103 133 205 / 0.22);
   color: white;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.05);
+}
+
+.nav-item.is-active::before {
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  left: -1px;
+  width: 2px;
+  border-radius: 999px;
+  background: #b8c9fa;
+  content: "";
 }
 
 .nav-count,
@@ -247,8 +262,8 @@ button:disabled {
 }
 
 .nav-count {
-  background: #25475b;
-  color: #c8d8e1;
+  background: rgb(255 255 255 / 0.09);
+  color: #d4ddeb;
 }
 
 .nav-alert {
@@ -261,9 +276,12 @@ button:disabled {
   grid-template-columns: 20px 1fr;
   gap: 10px;
   margin-top: auto;
-  padding: 14px 12px;
-  border-top: 1px solid #28465a;
-  color: #c2d2f2;
+  margin-bottom: 8px;
+  padding: 11px 10px;
+  border: 1px solid rgb(193 210 246 / 0.14);
+  border-radius: var(--radius-md);
+  background: rgb(255 255 255 / 0.045);
+  color: #cfdbf5;
 }
 
 .sidebar-tip div,
@@ -287,9 +305,11 @@ button:disabled {
 
 .account-menu {
   gap: 10px;
-  margin-top: 8px;
-  padding: 12px 8px 0;
-  border-top: 1px solid #28465a;
+  margin-top: 0;
+  padding: 10px;
+  border: 1px solid rgb(255 255 255 / 0.08);
+  border-radius: var(--radius-md);
+  background: rgb(255 255 255 / 0.045);
 }
 
 .account-menu div {
@@ -304,7 +324,7 @@ button:disabled {
   align-items: center;
   justify-content: center;
   border-radius: 50%;
-  background: #d8e6eb;
+  background: #dce5fa;
   color: var(--nav);
   font-weight: 700;
 }
@@ -337,7 +357,7 @@ button:disabled {
 }
 
 .dark-icon:hover {
-  background: var(--nav-soft);
+  background: rgb(255 255 255 / 0.08);
   border-color: transparent;
   color: white;
 }
@@ -1341,16 +1361,18 @@ button:disabled {
   align-items: center;
   justify-content: center;
   padding: 20px;
-  background: rgb(11 27 40 / 0.62);
+  background: rgb(28 39 58 / 0.46);
+  backdrop-filter: blur(3px);
 }
 
 .modal {
   width: min(100%, 520px);
   max-height: calc(100dvh - 40px);
   overflow: auto;
-  border-radius: var(--radius-lg);
+  border: 1px solid rgb(217 223 234 / 0.92);
+  border-radius: 16px;
   background: var(--surface);
-  box-shadow: var(--shadow-modal);
+  box-shadow: 0 18px 54px rgb(23 32 50 / 0.2), 0 2px 6px rgb(23 32 50 / 0.08);
 }
 
 .modal > header,
@@ -1360,10 +1382,15 @@ button:disabled {
 }
 
 .modal > header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
   justify-content: space-between;
   gap: 12px;
   padding: 16px 18px;
   border-bottom: 1px solid var(--line);
+  background: rgb(255 255 255 / 0.96);
+  backdrop-filter: blur(8px);
 }
 
 .modal > header > div {
@@ -1371,16 +1398,18 @@ button:disabled {
 }
 
 .modal-icon {
-  width: 40px;
-  height: 40px;
+  width: 38px;
+  height: 38px;
   border-radius: 10px;
+  background: #eef3ff;
+  color: var(--accent-strong);
 }
 
 .modal h2,
 .lock-card h2 {
   margin: 0;
   color: var(--ink);
-  font-size: 19px;
+  font-size: 18px;
 }
 
 .modal header p {
@@ -1391,7 +1420,7 @@ button:disabled {
 
 .modal form {
   display: grid;
-  gap: 14px;
+  gap: 13px;
   padding: 18px;
 }
 
@@ -1412,9 +1441,18 @@ button:disabled {
   padding: 0 12px;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-sm);
-  background: var(--surface);
+  background: #fbfcff;
   color: var(--ink);
   outline: 0;
+  transition: border-color 180ms ease, background-color 180ms ease, box-shadow 180ms ease;
+}
+
+.modal input:hover,
+.modal select:hover,
+.lock-card input:hover,
+.system-user-actions select:hover {
+  border-color: #bfc9dc;
+  background: var(--surface);
 }
 
 .modal input:focus,
@@ -1428,6 +1466,25 @@ button:disabled {
   color: var(--ink-soft);
   font-size: 10px;
   font-weight: 400;
+}
+
+.modal select,
+.system-user-actions select {
+  cursor: pointer;
+  color: var(--ink);
+}
+
+.modal select option,
+.system-user-actions select option {
+  background: #ffffff;
+  color: var(--ink);
+}
+
+.modal select:disabled,
+.system-user-actions select:disabled {
+  cursor: not-allowed;
+  background: #f5f6f8;
+  color: var(--ink-faint);
 }
 
 .form-note {
@@ -1556,18 +1613,30 @@ button:disabled {
 }
 
 .modal form footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
   display: flex;
   justify-content: flex-end;
   gap: 9px;
   margin: 4px -18px -18px;
   padding: 12px 18px;
   border-top: 1px solid var(--line);
-  background: var(--surface-subtle);
+  background: rgb(250 251 252 / 0.96);
+  box-shadow: 0 -8px 18px rgb(16 24 40 / 0.035);
 }
 
 .danger-icon {
   background: var(--danger-soft);
   color: var(--danger);
+}
+
+.sharing-modal {
+  width: min(100%, 620px);
+}
+
+.user-management-modal {
+  width: min(100%, 660px);
 }
 
 .delete-summary {
@@ -1629,7 +1698,7 @@ button:disabled {
 .sharing-modal form footer {
   margin: 4px 0 0;
   padding: 14px 0 0;
-  background: transparent;
+  background: rgb(250 251 252 / 0.96);
 }
 
 .user-management-modal form {
@@ -1639,7 +1708,7 @@ button:disabled {
 .user-management-modal form footer {
   margin: 4px 0 0;
   padding: 14px 0 0;
-  background: transparent;
+  background: rgb(250 251 252 / 0.96);
 }
 
 .sharing-guide {
@@ -1776,9 +1845,10 @@ button:disabled {
   padding: 0 8px;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-sm);
-  background: var(--surface);
+  background: #fbfcff;
   color: var(--ink);
   font-size: 11px;
+  transition: border-color 180ms ease, background-color 180ms ease, box-shadow 180ms ease;
 }
 
 .system-user-actions .secondary-button {
@@ -2489,6 +2559,39 @@ button:disabled {
   .modal-layer,
   .lock-layer {
     padding: 12px;
+  }
+
+  .modal {
+    border-radius: 14px;
+  }
+
+  .modal > header {
+    padding: 14px 15px;
+  }
+
+  .modal form {
+    padding: 15px;
+  }
+
+  .modal form footer {
+    margin: 4px -15px -15px;
+    padding: 11px 15px;
+  }
+
+  .sharing-guide {
+    margin-right: 15px;
+    margin-left: 15px;
+  }
+
+  .sharing-section,
+  .user-management-section {
+    padding: 15px;
+  }
+
+  .sharing-modal form footer,
+  .user-management-modal form footer {
+    margin: 4px 0 0;
+    padding: 12px 0 0;
   }
 
   .lock-card {

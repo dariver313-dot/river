@@ -397,8 +397,10 @@ function AuthenticatorCode({ entry, itemId, onCopy, onReveal }: { entry: VaultTo
       <div className="totp-heading"><span>{entry.label}</span><small>{totpLabel(config)}</small></div>
       <div className="totp-value">
         <strong>{visible ? (error || (code ? <>{code.slice(0, splitAt)} <span>{code.slice(splitAt)}</span></> : "··· ···")) : "••• •••"}</strong>
-        <button className="icon-button" onClick={() => { const next = !visible; if (next) { setNow(Date.now()); onReveal(); setVisible(true); } else { setVisible(false); setCode(""); setError(""); } }} aria-label={visible ? "隐藏验证器代码" : "显示验证器代码"}>{visible ? <EyeOff size={17} /> : <Eye size={17} />}</button>
-        <button className="icon-button" onClick={() => code && onCopy(code, `${entry.label}验证码`, itemId)} aria-label={`复制${entry.label}验证码`} disabled={!visible || !code}><Copy size={17} /></button>
+        <div className="totp-actions">
+          <button className="icon-button" onClick={() => { const next = !visible; if (next) { setNow(Date.now()); onReveal(); setVisible(true); } else { setVisible(false); setCode(""); setError(""); } }} aria-label={visible ? "隐藏验证器代码" : "显示验证器代码"}>{visible ? <EyeOff size={17} /> : <Eye size={17} />}</button>
+          <button className="icon-button" onClick={() => code && onCopy(code, `${entry.label}验证码`, itemId)} aria-label={`复制${entry.label}验证码`} disabled={!visible || !code}><Copy size={17} /></button>
+        </div>
       </div>
       <div className="totp-timer"><span style={{ width: `${(remaining / config.period) * 100}%` }} /><small>{remaining} 秒后刷新</small></div>
     </div>

@@ -19,18 +19,18 @@
 
 | Role | Hex | CSS Variable |
 |------|-----|--------------|
-| Primary | `#1E3A5F` | `--color-primary` |
+| Primary | `#30483A` | `--color-primary` |
 | On Primary | `#FFFFFF` | `--color-on-primary` |
-| Secondary | `#334155` | `--color-secondary` |
-| Accent/CTA | `#506FC4` | `--color-accent` |
-| Background | `#0F172A` | `--color-background` |
-| Foreground | `#FFFFFF` | `--color-foreground` |
-| Muted | `#10192E` | `--color-muted` |
-| Border | `rgba(255,255,255,0.08)` | `--color-border` |
+| Secondary | `#3B5747` | `--color-secondary` |
+| Accent/CTA | `#3F7A5B` | `--color-accent` |
+| Background | `#F8FCF8` | `--color-background` |
+| Foreground | `#2E4134` | `--color-foreground` |
+| Muted | `#EDF7F0` | `--color-muted` |
+| Border | `#D1E0D4` | `--color-border` |
 | Destructive | `#DC2626` | `--color-destructive` |
-| Ring | `#1E3A5F` | `--color-ring` |
+| Ring | `#79AD8C` | `--color-ring` |
 
-**Color Notes:** Vault navy + clear blue, cool-gray surfaces, and restrained shadows
+**Color Notes:** Very pale sage canvas, white surfaces, deep leaf-green navigation and restrained shadows. Keep red and amber only for explicit destructive or risk states.
 
 ### Typography
 
@@ -62,10 +62,10 @@
 
 | Level | Value | Usage |
 |-------|-------|-------|
-| `--shadow-sm` | `0 1px 2px rgba(0,0,0,0.05)` | Subtle lift |
-| `--shadow-md` | `0 4px 6px rgba(0,0,0,0.1)` | Cards, buttons |
-| `--shadow-lg` | `0 10px 15px rgba(0,0,0,0.1)` | Modals, dropdowns |
-| `--shadow-xl` | `0 20px 25px rgba(0,0,0,0.15)` | Hero images, featured cards |
+| `--shadow-sm` | `0 1px 2px rgba(30,52,39,0.04)` | Subtle lift |
+| `--shadow-md` | `0 3px 10px rgba(30,52,39,0.06)` | Cards, buttons |
+| `--shadow-lg` | `0 10px 24px rgba(30,52,39,0.12)` | Modals, dropdowns |
+| `--shadow-xl` | `0 18px 54px rgba(30,52,39,0.18)` | Modals and critical confirmation sheets |
 
 ---
 
@@ -76,7 +76,7 @@
 ```css
 /* Primary Button */
 .btn-primary {
-  background: #506FC4;
+  background: #3F7A5B;
   color: white;
   padding: 8px 14px;
   border-radius: 8px;
@@ -93,8 +93,8 @@
 /* Secondary Button */
 .btn-secondary {
   background: transparent;
-  color: #1E3A5F;
-  border: 2px solid #1E3A5F;
+  color: #2E6548;
+  border: 1px solid #D1E0D4;
   padding: 8px 14px;
   border-radius: 8px;
   font-weight: 600;
@@ -107,7 +107,7 @@
 
 ```css
 .card {
-  background: #0F172A;
+  background: #FFFFFF;
   border-radius: 12px;
   padding: 24px;
   box-shadow: var(--shadow-md);
@@ -133,9 +133,9 @@
 }
 
 .input:focus {
-  border-color: #1E3A5F;
+  border-color: #79AD8C;
   outline: none;
-  box-shadow: 0 0 0 3px #1E3A5F20;
+  box-shadow: 0 0 0 3px #79AD8C29;
 }
 ```
 
@@ -161,13 +161,13 @@
 
 ## Style Guidelines
 
-**Style:** Modern Dark (Cinema Mobile)
+**Style:** Restrained Security Utility (Desktop Web)
 
-**Keywords:** dark mode, cinematic, ambient light, glassmorphism, deep black, indigo, glow, blur, atmospheric, reanimated, haptic, premium, layered, frosted glass, linear gradient
+**Keywords:** pale sage, security utility, compact, high-contrast, calm, precise, desktop-first, low-elevation, restrained
 
-**Best For:** Developer tools, pro productivity apps, fintech/trading dashboards, media/streaming platforms, AI tool interfaces, high-end gaming companion apps
+**Best For:** Password managers, internal administration tools, professional productivity apps, compliance dashboards, and security settings
 
-**Key Effects:** Expo.out Bezier(0.16,1,0.3,1) easing; spring modals (damping:20 stiffness:90); haptic-linked press (Impact Light/Medium); animated ambient light blobs (Reanimated translateX/Y slow oscillation); BlurView glassmorphism headers/nav (intensity 20); scale press 0.97 → 1.0; avoid pure #000000 (OLED smear)
+**Key Effects:** 180–220ms opacity, color, and transform transitions for clear state changes; controlled 1–2 layer shadows; no decorative motion, glass, gradients, or ambient effects.
 
 ### Page Pattern
 

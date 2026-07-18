@@ -1050,7 +1050,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
 
             <div className="detail-footer">
               <div><Clock3 size={15} /><span>上次修改：{selected.updated}</span></div>
-              {selected.canEdit && <button className="detail-delete-button" onClick={() => setDeleteTarget(selected)} disabled={isSaving}><Trash2 size={16} />删除项目</button>}
+              {selected.canEdit && <button className="secondary-button detail-delete-button" onClick={() => setDeleteTarget(selected)} disabled={isSaving}><Trash2 size={16} />删除项目</button>}
             </div>
           </aside>
           ) : items.length > 0 ? (
@@ -1136,9 +1136,9 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
           <section className="modal user-create-modal" role="dialog" aria-modal="true" aria-labelledby="create-system-user-title">
             <header><div><span className="modal-icon"><UserCog size={20} /></span><div><h2 id="create-system-user-title">添加系统用户</h2><p>创建后可在用户管理页继续调整角色与状态</p></div></div><button className="icon-button" type="button" onClick={() => setShowUserCreateDialog(false)} aria-label="关闭添加用户"><X size={20} /></button></header>
             <form onSubmit={createSystemUser}>
-              <label>用户邮箱<input required type="email" value={systemUserEmail} onChange={(event) => setSystemUserEmail(event.target.value)} placeholder="name@example.com" autoComplete="email" autoFocus /></label>
+              <label>登录邮箱（必须）<input required type="email" value={systemUserEmail} onChange={(event) => setSystemUserEmail(event.target.value)} placeholder="name@example.com" autoComplete="email" autoFocus /><small>请填写对方用于登录 ChatGPT、并在站点访问控制中获授权的同一邮箱。</small></label>
               <div className="field-control"><span>系统角色</span><SurfaceSelect id="new-user-role" ariaLabel="系统角色" value={systemUserRole} onChange={setSystemUserRole} options={[{ value: "user", label: "普通用户" }, { value: "admin", label: "管理员" }]} /></div>
-              <aside className="access-setup-note" role="note"><ShieldCheck size={17} aria-hidden="true" /><div><strong>创建后还需完成站点访问授权</strong><p>系统用户创建成功后，请在站点访问控制中允许该邮箱访问；完成后，对方登录即可使用对应权限。</p></div></aside>
+              <aside className="access-setup-note" role="note"><ShieldCheck size={17} aria-hidden="true" /><div><strong>邮箱就是该用户的登录身份</strong><p>系统用户创建成功后，请在站点访问控制中允许该邮箱访问；不支持使用单独的用户名登录。</p></div></aside>
               <footer><button type="button" className="secondary-button" onClick={() => setShowUserCreateDialog(false)} disabled={isSaving}>取消</button><button type="submit" className="primary-button" disabled={isSaving}><UserCog size={17} />{isSaving ? "正在创建" : "创建用户"}</button></footer>
             </form>
           </section>

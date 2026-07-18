@@ -393,10 +393,16 @@ function AuthenticatorCode({ entry, itemId, onCopy, onReveal }: { entry: VaultTo
   const [visible, setVisible] = useState(false);
 
   useEffect(() => {
-    if (!visible) return;
-    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
-    return () => window.clearInterval(timer);
-  }, [visible]);
+    let timer: number | undefined;
+    const syncClock = () => {
+      setNow(Date.now());
+      timer = window.setTimeout(syncClock, 1_016 - (Date.now() % 1_000));
+    };
+    syncClock();
+    return () => {
+      if (timer) window.clearTimeout(timer);
+    };
+  }, []);
 
   useEffect(() => {
     if (!visible) {
@@ -439,7 +445,7 @@ function AuthenticatorCode({ entry, itemId, onCopy, onReveal }: { entry: VaultTo
           <button className="icon-button" onClick={() => code && onCopy(code, `${entry.label}验证码`, itemId)} aria-label={`复制${entry.label}验证码`} disabled={!visible || !code}><Copy size={17} /></button>
         </div>
       </div>
-      <div className="totp-timer"><span style={{ width: `${(remaining / config.period) * 100}%` }} /><small>{remaining} 秒后刷新</small></div>
+      <div className="totp-timer" role="progressbar" aria-label="验证码有效时间" aria-valuemin={0} aria-valuemax={config.period} aria-valuenow={remaining}><span style={{ width: `${(remaining / config.period) * 100}%` }} /><small>{remaining} 秒后刷新</small></div>
     </div>
   );
 }
@@ -1030,6 +1036,11 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
     setMobileNav(false);
   }
 
+  function openProfile() {
+    setPage("profile");
+    setMobileNav(false);
+  }
+
   function openSecurityReview(focus: SecurityFocus = "all") {
     setPage("vault");
     setCollection("security");
@@ -1239,7 +1250,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
           {isAdmin && <><p className="nav-label nav-label-spaced">系统</p><button className={`nav-item ${page === "users" ? "is-active" : ""}`} aria-current={page === "users" ? "page" : undefined} onClick={() => { setMobileNav(false); openUserManagement(); }}><UserCog size={18} /><span>用户管理</span></button></>}
 
           <p className="nav-label nav-label-spaced">个人</p>
-          <button className={`nav-item ${page === "profile" ? "is-active" : ""}`} aria-current={page === "profile" ? "page" : undefined} onClick={() => { setPage("profile"); setMobileNav(false); }}><UserRound size={18} /><span>个人信息</span></button>
+          <button className={`nav-item ${page === "profile" ? "is-active" : ""}`} aria-current={page === "profile" ? "page" : undefined} onClick={openProfile}><UserRound size={18} /><span>个人信息</span></button>
         </nav>
 
         <div className="sidebar-tip">
@@ -1247,10 +1258,11 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
           <div><strong>安全会话已开启</strong><span>密码记录会加密保存</span></div>
         </div>
 
-        <div className="account-menu">
+        <button type="button" className={`account-menu ${page === "profile" ? "is-active" : ""}`} onClick={openProfile} aria-current={page === "profile" ? "page" : undefined} aria-label="打开个人信息">
           <span className="avatar" aria-hidden="true">{viewerInitial}</span>
-          <div><strong title={viewer.displayName}>{viewer.displayName}</strong><span title={viewer.email}>{viewer.role === "admin" ? "管理员 · " : "普通用户 · "}{viewer.email}</span></div>
-        </div>
+          <span className="account-menu-copy"><strong title={viewer.displayName}>{viewer.displayName}</strong><span title={viewer.email}>{viewer.role === "admin" ? "管理员 · " : "普通用户 · "}{viewer.email}</span></span>
+          <ChevronRight className="account-menu-chevron" size={16} aria-hidden="true" />
+        </button>
       </aside>
 
       <main id="main-content" className="main-shell">

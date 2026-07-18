@@ -267,7 +267,7 @@ button:disabled {
 }
 
 .sidebar-tip div,
-.account-menu div {
+.account-menu-copy {
   display: flex;
   flex-direction: column;
 }
@@ -278,7 +278,7 @@ button:disabled {
 }
 
 .sidebar-tip span,
-.account-menu span {
+.account-menu-copy > span {
   margin-top: 2px;
   color: var(--nav-muted);
   font-size: 11px;
@@ -286,23 +286,53 @@ button:disabled {
 }
 
 .account-menu {
+  width: 100%;
+  min-height: 58px;
   gap: 10px;
   margin-top: 8px;
-  padding: 12px 8px 0;
-  border-top: 1px solid #466653;
+  padding: 11px 8px;
+  border: 1px solid transparent;
+  border-top-color: #466653;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--nav-ink);
+  text-align: left;
+  transition: background-color 180ms ease, border-color 180ms ease, color 180ms ease;
 }
 
-.account-menu div {
+.account-menu:hover {
+  background: rgb(59 87 71 / 0.7);
+  border-color: #466653;
+}
+
+.account-menu.is-active {
+  border-color: #496c57;
+  background: #294837;
+}
+
+.account-menu-copy {
   min-width: 0;
   flex: 1;
 }
 
-.account-menu div > strong,
-.account-menu div > span {
+.account-menu-copy > strong,
+.account-menu-copy > span {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.account-menu-chevron {
+  flex: 0 0 auto;
+  color: var(--nav-muted);
+  transition: color 180ms ease, transform 180ms ease;
+}
+
+.account-menu:hover .account-menu-chevron,
+.account-menu.is-active .account-menu-chevron {
+  color: white;
+  transform: translateX(2px);
 }
 
 .avatar {
@@ -940,16 +970,17 @@ button:disabled {
 }
 
 .toolbar-selects {
-  display: flex;
-  align-items: flex-end;
-  flex-wrap: wrap;
-  gap: 8px;
+  display: grid;
+  grid-template-columns: 110px 128px 110px;
+  align-items: start;
+  gap: 10px;
   min-width: 0;
 }
 
 .toolbar-select {
   display: grid;
-  gap: 3px;
+  grid-template-rows: 11px 34px;
+  gap: 4px;
   min-width: 0;
 }
 
@@ -957,7 +988,7 @@ button:disabled {
   color: var(--ink-faint);
   font-size: 10px;
   font-weight: 650;
-  line-height: 1;
+  line-height: 11px;
 }
 
 .toolbar-select .surface-select.is-compact {
@@ -1659,6 +1690,10 @@ button:disabled {
   font-size: 10px;
 }
 
+.totp-timer small {
+  font-variant-numeric: tabular-nums;
+}
+
 .totp-value strong {
   color: var(--ink);
   font-family: var(--font-mono), ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -1694,7 +1729,7 @@ button:disabled {
 
 .totp-timer > span {
   background: var(--accent-strong);
-  transition: width 0.3s linear;
+  transition: width 180ms linear;
 }
 
 

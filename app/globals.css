@@ -298,6 +298,14 @@ button:disabled {
   flex: 1;
 }
 
+.account-menu div > strong,
+.account-menu div > span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .avatar {
   width: 34px;
   height: 34px;
@@ -580,6 +588,198 @@ button:disabled {
   gap: 16px;
   margin-top: 16px;
   align-items: start;
+}
+
+.topbar.is-profile {
+  grid-template-columns: minmax(195px, 1fr) auto;
+}
+
+.profile-page {
+  display: grid;
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.profile-hero,
+.profile-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+}
+
+.profile-hero {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  padding: 20px;
+}
+
+.profile-avatar {
+  width: 52px;
+  height: 52px;
+  flex: 0 0 52px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 15px;
+  background: #eaf0ff;
+  color: var(--accent-strong);
+  font-size: 20px;
+  font-weight: 720;
+}
+
+.profile-hero-copy {
+  min-width: 0;
+}
+
+.profile-hero-copy .eyebrow {
+  margin-bottom: 3px;
+}
+
+.profile-hero-copy h2 {
+  overflow: hidden;
+  margin: 0;
+  color: var(--ink);
+  font-size: 21px;
+  letter-spacing: -0.025em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.profile-hero-copy p {
+  margin: 4px 0 0;
+  color: var(--ink-soft);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.profile-hero > .role-badge {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.profile-layout {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.profile-card {
+  padding: 18px;
+}
+
+.profile-card-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.profile-card-icon {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.profile-card-heading h3 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.profile-card-heading p {
+  margin: 2px 0 0;
+  color: var(--ink-soft);
+  font-size: 11px;
+}
+
+.profile-details,
+.profile-permission-list {
+  display: grid;
+  gap: 0;
+  margin: 14px 0 0;
+}
+
+.profile-details > div,
+.profile-permission-list > div {
+  display: grid;
+  grid-template-columns: minmax(92px, 0.65fr) minmax(0, 1fr);
+  gap: 14px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.profile-details > div:last-child,
+.profile-permission-list > div:last-child {
+  border-bottom: 0;
+}
+
+.profile-details dt,
+.profile-permission-list span {
+  color: var(--ink-soft);
+  font-size: 11px;
+}
+
+.profile-details dd,
+.profile-permission-list strong {
+  min-width: 0;
+  margin: 0;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.profile-security-card {
+  grid-column: 1 / -1;
+}
+
+.profile-security-summary {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  margin-top: 16px;
+}
+
+.profile-security-summary > div {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+}
+
+.profile-security-summary strong {
+  color: var(--accent-strong);
+  font-size: 30px;
+  line-height: 1;
+  letter-spacing: -0.04em;
+}
+
+.profile-security-summary span,
+.profile-security-summary p,
+.profile-security-footer > span {
+  color: var(--ink-soft);
+  font-size: 12px;
+}
+
+.profile-security-summary p {
+  margin: 0;
+}
+
+.profile-security-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
 }
 
 .vault-panel,
@@ -2523,6 +2723,10 @@ button:disabled {
     grid-template-columns: auto minmax(160px, 1fr) auto;
   }
 
+  .topbar.is-profile {
+    grid-template-columns: auto minmax(160px, 1fr) auto;
+  }
+
   .topbar-search {
     grid-column: 1 / -1;
     grid-row: 2;
@@ -2579,6 +2783,45 @@ button:disabled {
 
   .topbar-search kbd {
     display: none;
+  }
+
+  .profile-hero {
+    align-items: flex-start;
+    flex-wrap: wrap;
+    padding: 16px;
+  }
+
+  .profile-hero-copy {
+    flex: 1;
+  }
+
+  .profile-hero > .role-badge {
+    margin-left: 67px;
+  }
+
+  .profile-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .profile-security-card {
+    grid-column: auto;
+  }
+
+  .profile-details > div,
+  .profile-permission-list > div {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+
+  .profile-security-summary,
+  .profile-security-footer {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .profile-security-footer .secondary-button {
+    width: 100%;
   }
 
   .security-strip {

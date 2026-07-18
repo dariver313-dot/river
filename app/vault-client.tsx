@@ -42,6 +42,7 @@ type Strength = "安全" | "一般" | "风险";
 type ItemType = "登录" | "卡片" | "安全笔记";
 type Space = "全部" | "个人" | "公共";
 type Collection = "all" | "security";
+type Page = "vault" | "profile";
 type SecurityFocus = "all" | SecurityIssue;
 
 type VaultItem = {
@@ -241,6 +242,59 @@ function SurfaceSelect<T extends string>({
   );
 }
 
+function ProfileOverview({
+  viewer,
+  viewerInitial,
+  isLoading,
+  securityScore,
+  securityIssueCount,
+  onOpenSecurity,
+}: {
+  viewer: Viewer;
+  viewerInitial: string;
+  isLoading: boolean;
+  securityScore: number;
+  securityIssueCount: number;
+  onOpenSecurity: () => void;
+}) {
+  const isAdmin = viewer.role === "admin";
+  return (
+    <section className="profile-page" aria-labelledby="profile-page-title">
+      <div className="profile-hero">
+        <span className="profile-avatar" aria-hidden="true">{viewerInitial}</span>
+        <div className="profile-hero-copy"><span className="eyebrow">账户资料</span><h2 id="profile-page-title">{viewer.displayName}</h2><p title={viewer.email}>{viewer.email}</p></div>
+        <span className={`role-badge role-${viewer.role}`}>{isAdmin ? "管理员" : "普通用户"}</span>
+      </div>
+
+      <div className="profile-layout">
+        <section className="profile-card" aria-labelledby="profile-account-title">
+          <div className="profile-card-heading"><span className="profile-card-icon"><UserRound size={18} /></span><div><h3 id="profile-account-title">基本信息</h3><p>账号信息由当前登录账户提供</p></div></div>
+          <dl className="profile-details">
+            <div><dt>账号名称</dt><dd>{viewer.displayName}</dd></div>
+            <div><dt>登录邮箱</dt><dd title={viewer.email}>{viewer.email}</dd></div>
+            <div><dt>身份来源</dt><dd>ChatGPT 账号登录</dd></div>
+          </dl>
+        </section>
+
+        <section className="profile-card" aria-labelledby="profile-permission-title">
+          <div className="profile-card-heading"><span className="profile-card-icon"><UsersRound size={18} /></span><div><h3 id="profile-permission-title">空间权限</h3><p>权限随系统角色自动生效</p></div></div>
+          <div className="profile-permission-list">
+            <div><span>个人空间</span><strong>仅你可查看和管理</strong></div>
+            <div><span>公共空间</span><strong>{isAdmin ? "可查看并配置公共项目" : "可查看公共项目"}</strong></div>
+            <div><span>系统用户</span><strong>{isAdmin ? "可创建、调整与停用用户" : "由管理员统一维护"}</strong></div>
+          </div>
+        </section>
+
+        <section className="profile-card profile-security-card" aria-labelledby="profile-security-title">
+          <div className="profile-card-heading"><span className="profile-card-icon"><ShieldCheck size={18} /></span><div><h3 id="profile-security-title">账户安全</h3><p>基础安全与会话保护状态</p></div></div>
+          <div className="profile-security-summary"><div><strong>{isLoading ? "—" : securityScore}</strong><span>基础安全评分</span></div><p>{isLoading ? "正在读取密码库状态" : securityIssueCount === 0 ? "未发现需要处理的基础风险" : `${securityIssueCount} 条基础风险待处理`}</p></div>
+          <div className="profile-security-footer"><span>空闲 15 分钟后自动结束会话</span><button type="button" className="secondary-button" onClick={onOpenSecurity}>查看安全检查</button></div>
+        </section>
+      </div>
+    </section>
+  );
+}
+
 function AuthenticatorCode({ config, itemId, onCopy, onReveal }: { config: TotpConfig; itemId: string; onCopy: (value: string, label: string, itemId: string) => void; onReveal: () => void }) {
   const [now, setNow] = useState(() => Date.now());
   const [code, setCode] = useState("");
@@ -354,6 +408,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
   const [filter, setFilter] = useState<(typeof filters)[number]>("全部");
   const [space, setSpace] = useState<Space>("全部");
   const [collection, setCollection] = useState<Collection>("all");
+  const [page, setPage] = useState<Page>("vault");
   const [securityFocus, setSecurityFocus] = useState<SecurityFocus>("all");
   const [revealed, setRevealed] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
@@ -420,7 +475,12 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
     const closeOnEscape = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
-        searchInputRef.current?.focus();
+        if (page === "profile") {
+          setPage("vault");
+          window.setTimeout(() => searchInputRef.current?.focus(), 0);
+        } else {
+          searchInputRef.current?.focus();
+        }
         return;
       }
       if (event.key === "Escape") {
@@ -434,7 +494,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
     };
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-  }, []);
+  }, [page]);
 
   useEffect(() => {
     let cancelled = false;
@@ -782,14 +842,17 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
 
         <nav className="main-nav">
           <p className="nav-label">密码库</p>
-          <button className={`nav-item ${collection === "all" && space === "全部" ? "is-active" : ""}`} aria-pressed={collection === "all" && space === "全部"} onClick={() => { setCollection("all"); setSpace("全部"); setMobileNav(false); }}><KeyRound size={18} /><span>所有项目</span><span className="nav-count">{items.length}</span></button>
-          <button className={`nav-item ${collection === "security" ? "is-active" : ""}`} aria-pressed={collection === "security"} onClick={() => { setCollection("security"); setSpace("全部"); setSecurityFocus("all"); setMobileNav(false); }}><ShieldEllipsis size={18} /><span>安全检查</span><span className="nav-alert">{securityIssueCount}</span></button>
+          <button className={`nav-item ${page === "vault" && collection === "all" && space === "全部" ? "is-active" : ""}`} aria-pressed={page === "vault" && collection === "all" && space === "全部"} onClick={() => { setPage("vault"); setCollection("all"); setSpace("全部"); setMobileNav(false); }}><KeyRound size={18} /><span>所有项目</span><span className="nav-count">{items.length}</span></button>
+          <button className={`nav-item ${page === "vault" && collection === "security" ? "is-active" : ""}`} aria-pressed={page === "vault" && collection === "security"} onClick={() => { setPage("vault"); setCollection("security"); setSpace("全部"); setSecurityFocus("all"); setMobileNav(false); }}><ShieldEllipsis size={18} /><span>安全检查</span><span className="nav-alert">{securityIssueCount}</span></button>
 
-          {isAdmin && <><p className="nav-label nav-label-spaced">系统</p><button className="nav-item" onClick={() => { setMobileNav(false); void openUserManagement(); }}><UserCog size={18} /><span>用户管理</span></button></>}
+          {isAdmin && <><p className="nav-label nav-label-spaced">系统</p><button className="nav-item" onClick={() => { setPage("vault"); setMobileNav(false); void openUserManagement(); }}><UserCog size={18} /><span>用户管理</span></button></>}
 
           <p className="nav-label nav-label-spaced">空间</p>
-          <button className={`nav-item ${collection === "all" && space === "个人" ? "is-active" : ""}`} aria-pressed={collection === "all" && space === "个人"} onClick={() => { setCollection("all"); setSpace("个人"); setMobileNav(false); }}><UserRound size={18} /><span>个人</span></button>
-          <button className={`nav-item ${collection === "all" && space === "公共" ? "is-active" : ""}`} aria-pressed={collection === "all" && space === "公共"} onClick={() => { setCollection("all"); setSpace("公共"); setMobileNav(false); }}><UsersRound size={18} /><span>公共</span></button>
+          <button className={`nav-item ${page === "vault" && collection === "all" && space === "个人" ? "is-active" : ""}`} aria-pressed={page === "vault" && collection === "all" && space === "个人"} onClick={() => { setPage("vault"); setCollection("all"); setSpace("个人"); setMobileNav(false); }}><UserRound size={18} /><span>个人</span></button>
+          <button className={`nav-item ${page === "vault" && collection === "all" && space === "公共" ? "is-active" : ""}`} aria-pressed={page === "vault" && collection === "all" && space === "公共"} onClick={() => { setPage("vault"); setCollection("all"); setSpace("公共"); setMobileNav(false); }}><UsersRound size={18} /><span>公共</span></button>
+
+          <p className="nav-label nav-label-spaced">账户</p>
+          <button className={`nav-item ${page === "profile" ? "is-active" : ""}`} aria-pressed={page === "profile"} onClick={() => { setPage("profile"); setMobileNav(false); }}><UserRound size={18} /><span>个人信息</span></button>
         </nav>
 
         <div className="sidebar-tip">
@@ -799,25 +862,26 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
 
         <div className="account-menu">
           <span className="avatar" aria-hidden="true">{viewerInitial}</span>
-          <div><strong>{viewer.displayName}</strong><span>{viewer.role === "admin" ? "管理员 · " : "普通用户 · "}{viewer.email}</span></div>
+          <div><strong title={viewer.displayName}>{viewer.displayName}</strong><span title={viewer.email}>{viewer.role === "admin" ? "管理员 · " : "普通用户 · "}{viewer.email}</span></div>
           <button className="icon-button dark-icon" onClick={() => setShowSharing(true)} aria-label="公共空间说明"><MoreHorizontal size={19} /></button>
         </div>
       </aside>
 
       <main id="main-content" className="main-shell">
-        <header className="topbar">
+        <header className={`topbar ${page === "profile" ? "is-profile" : ""}`}>
           <button className="icon-button mobile-menu" onClick={() => setMobileNav(true)} aria-label="打开导航"><Menu size={21} /></button>
-          <div className="page-title"><h1>密码库</h1><p>集中管理账号、密码与验证器代码</p></div>
-          <div className="topbar-search">
+          <div className="page-title"><h1>{page === "profile" ? "个人信息" : "密码库"}</h1><p>{page === "profile" ? "查看你的账户资料、系统角色与空间权限" : "集中管理账号、密码与验证器代码"}</p></div>
+          {page === "vault" && <div className="topbar-search">
             <Search size={18} aria-hidden="true" />
             <label className="sr-only" htmlFor="vault-search">搜索密码库</label>
             <input ref={searchInputRef} id="vault-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索账号、网址或分类" />
             <kbd>⌘ K</kbd>
-          </div>
+          </div>}
           <button className="secondary-button lock-button" onClick={endSession}><LogOut size={17} />结束会话</button>
-          <button className="primary-button" onClick={() => setShowAdd(true)} disabled={isLoading || isSaving}><Plus size={18} />新建项目</button>
+          {page === "vault" && <button className="primary-button" onClick={() => setShowAdd(true)} disabled={isLoading || isSaving}><Plus size={18} />新建项目</button>}
         </header>
 
+        {page === "profile" ? <ProfileOverview viewer={viewer} viewerInitial={viewerInitial} isLoading={isLoading} securityScore={securityScore} securityIssueCount={securityIssueCount} onOpenSecurity={() => { setPage("vault"); setCollection("security"); setSpace("全部"); setSecurityFocus("all"); }} /> : <>
         <section className="security-strip" aria-labelledby="security-heading">
           <div className="score-block">
           <div className="score-copy"><span>基础安全评分</span><strong id="security-heading">{securityScore}<small>/100</small></strong></div>
@@ -933,6 +997,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
             </aside>
           )}
         </div>
+        </>}
       </main>
 
       {showAdd && (

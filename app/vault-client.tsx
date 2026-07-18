@@ -15,7 +15,6 @@ import {
   EyeOff,
   FileKey2,
   Globe2,
-  Heart,
   ImageUp,
   KeyRound,
   LogOut,
@@ -26,7 +25,6 @@ import {
   ShieldCheck,
   ShieldEllipsis,
   Smartphone,
-  Star,
   Trash2,
   UserCog,
   UserRound,
@@ -36,12 +34,14 @@ import {
 } from "lucide-react";
 import jsQR from "jsqr";
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import type { SecurityIssue } from "./lib/security-review";
 import { generateTotpCode, parseTotpInput, totpLabel, totpSecondsRemaining, type TotpConfig } from "./lib/totp";
 
 type Strength = "安全" | "一般" | "风险";
 type ItemType = "登录" | "卡片" | "安全笔记";
 type Space = "全部" | "个人" | "公共";
-type Collection = "all" | "favorites" | "security";
+type Collection = "all" | "security";
+type SecurityFocus = "all" | SecurityIssue;
 
 type VaultItem = {
   id: string;
@@ -65,6 +65,7 @@ type VaultItem = {
 type VaultItemSummary = Omit<VaultItem, "password" | "note" | "totp"> & {
   passwordLength: number;
   hasTotp: boolean;
+  securityIssues: SecurityIssue[];
 };
 
 type Viewer = {
@@ -108,7 +109,7 @@ function generateStrongPassword() {
   return password.join("");
 }
 
-function toItemSummary(item: VaultItem): VaultItemSummary {
+function toItemSummary(item: VaultItem, securityIssues: SecurityIssue[] = []): VaultItemSummary {
   return {
     id: item.id,
     name: item.name,
@@ -125,6 +126,7 @@ function toItemSummary(item: VaultItem): VaultItemSummary {
     ...(item.sharedBy ? { sharedBy: item.sharedBy } : {}),
     passwordLength: item.password.length,
     hasTotp: Boolean(item.totp),
+    securityIssues,
   };
 }
 
@@ -145,6 +147,16 @@ function StrengthBadge({ strength }: { strength: Strength }) {
       {strength}
     </span>
   );
+}
+
+const securityIssueCopy: Record<SecurityIssue, { label: string; detail: string }> = {
+  weak_password: { label: "密码过短", detail: "建议使用至少 14 位的随机密码" },
+  reused_password: { label: "密码重复", detail: "同一密码正用于多个项目" },
+  missing_two_factor: { label: "未开启双重验证", detail: "建议在服务网站开启验证器保护" },
+};
+
+function SecurityIssueBadges({ issues }: { issues: SecurityIssue[] }) {
+  return <div className="security-issue-badges">{issues.map((issue) => <span className={`security-issue security-issue-${issue}`} key={issue}>{securityIssueCopy[issue].label}</span>)}</div>;
 }
 
 function AuthenticatorCode({ config, itemId, onCopy, onReveal }: { config: TotpConfig; itemId: string; onCopy: (value: string, label: string, itemId: string) => void; onReveal: () => void }) {
@@ -260,6 +272,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
   const [filter, setFilter] = useState<(typeof filters)[number]>("全部");
   const [space, setSpace] = useState<Space>("全部");
   const [collection, setCollection] = useState<Collection>("all");
+  const [securityFocus, setSecurityFocus] = useState<SecurityFocus>("all");
   const [revealed, setRevealed] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const [editingItem, setEditingItem] = useState<VaultItem | null>(null);
@@ -295,25 +308,25 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
       const matchesFilter = filter === "全部" || item.type === filter;
       const matchesSpace = space === "全部" || item.group === space;
       const matchesCollection = collection === "all"
-        || (collection === "favorites" && item.favorite)
-        || (collection === "security" && (item.strength === "风险" || !item.twoFactor));
+        || (collection === "security" && item.securityIssues.length > 0 && (securityFocus === "all" || item.securityIssues.includes(securityFocus)));
       const matchesQuery = !normalized || [item.name, item.domain, item.username, item.group].some((value) => value.toLowerCase().includes(normalized));
       return matchesFilter && matchesSpace && matchesCollection && matchesQuery;
     });
-  }, [collection, filter, items, query, space]);
+  }, [collection, filter, items, query, securityFocus, space]);
 
   const activeSelectedId = visibleItems.some((item) => item.id === selectedId) ? selectedId : visibleItems[0]?.id ?? selectedId;
   const selected = selectedDetail?.id === activeSelectedId ? selectedDetail : null;
-  const listTitle = collection === "favorites"
-    ? "收藏"
-    : collection === "security"
+  const selectedSummary = items.find((item) => item.id === activeSelectedId) ?? null;
+  const listTitle = collection === "security"
       ? "需处理的安全项"
       : space === "全部" ? (filter === "全部" ? "全部项目" : filter) : `${space} · ${filter === "全部" ? "全部项目" : filter}`;
   const viewerInitial = viewer.displayName.trim().slice(0, 1).toLocaleUpperCase() || "你";
   const isAdmin = viewer.role === "admin";
-  const weakPasswordCount = items.filter((item) => item.strength === "风险").length;
-  const missingTwoFactorCount = items.filter((item) => !item.twoFactor).length;
-  const securityScore = items.length === 0 ? 0 : Math.max(0, 100 - weakPasswordCount * 18 - missingTwoFactorCount * 5);
+  const weakPasswordCount = items.filter((item) => item.securityIssues.includes("weak_password")).length;
+  const reusedPasswordCount = items.filter((item) => item.securityIssues.includes("reused_password")).length;
+  const missingTwoFactorCount = items.filter((item) => item.securityIssues.includes("missing_two_factor")).length;
+  const securityIssueCount = items.reduce((count, item) => count + item.securityIssues.length, 0);
+  const securityScore = items.length === 0 ? 0 : Math.max(0, 100 - weakPasswordCount * 14 - reusedPasswordCount * 24 - missingTwoFactorCount * 8);
 
   useEffect(() => {
     if (!toast) return;
@@ -466,19 +479,14 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
         method: "PATCH",
         body: JSON.stringify({ ...item, ...changes }),
       });
-      setItems((current) => current.map((currentItem) => currentItem.id === item.id ? toItemSummary(payload.item) : currentItem));
+      setItems((current) => current.map((currentItem) => currentItem.id === item.id ? toItemSummary(payload.item, currentItem.securityIssues) : currentItem));
       setSelectedId(payload.item.id);
       setSelectedDetail(payload.item);
+      setLoadAttempt((current) => current + 1);
       return payload.item;
     } finally {
       setIsSaving(false);
     }
-  }
-
-  function toggleFavorite(item: VaultItem) {
-    void updateRemoteItem(item, { favorite: !item.favorite })
-      .then(() => setToast(item.favorite ? "已取消收藏" : "已添加到收藏"))
-      .catch((error) => setToast(error instanceof Error ? error.message : "收藏状态未更新。"));
   }
 
   async function submitCredential(event: FormEvent<HTMLFormElement>) {
@@ -492,6 +500,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
       setItems((current) => [toItemSummary(payload.item), ...current]);
       setSelectedId(payload.item.id);
       setSelectedDetail(payload.item);
+      setLoadAttempt((current) => current + 1);
       setForm(emptyCredentialForm());
       setShowNewPassword(false);
       setShowAdd(false);
@@ -692,8 +701,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
         <nav className="main-nav">
           <p className="nav-label">密码库</p>
           <button className={`nav-item ${collection === "all" && space === "全部" ? "is-active" : ""}`} onClick={() => { setCollection("all"); setSpace("全部"); }}><KeyRound size={18} /><span>所有项目</span><span className="nav-count">{items.length}</span></button>
-          <button className={`nav-item ${collection === "favorites" ? "is-active" : ""}`} onClick={() => { setCollection("favorites"); setSpace("全部"); }}><Star size={18} /><span>收藏</span><span className="nav-count">{items.filter((item) => item.favorite).length}</span></button>
-          <button className={`nav-item ${collection === "security" ? "is-active" : ""}`} onClick={() => { setCollection("security"); setSpace("全部"); }}><ShieldEllipsis size={18} /><span>安全检查</span><span className="nav-alert">{weakPasswordCount + missingTwoFactorCount}</span></button>
+          <button className={`nav-item ${collection === "security" ? "is-active" : ""}`} onClick={() => { setCollection("security"); setSpace("全部"); setSecurityFocus("all"); }}><ShieldEllipsis size={18} /><span>安全检查</span><span className="nav-alert">{securityIssueCount}</span></button>
 
           {isAdmin && <><p className="nav-label nav-label-spaced">系统</p><button className="nav-item" onClick={openUserManagement}><UserCog size={18} /><span>用户管理</span></button></>}
 
@@ -732,15 +740,24 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
           <div className="score-block">
           <div className="score-copy"><span>基础安全评分</span><strong id="security-heading">{securityScore}<small>/100</small></strong></div>
             <div className="score-meter" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={securityScore} aria-label={`安全评分 ${securityScore} 分`}><span style={{ width: `${securityScore}%` }} /></div>
-            <p>{securityScore >= 80 ? <Check size={15} aria-hidden="true" /> : <AlertTriangle size={15} aria-hidden="true" />}{securityScore >= 80 ? "长度与双重验证状态良好" : "建议处理安全项"}</p>
+            <p>{securityScore >= 80 ? <Check size={15} aria-hidden="true" /> : <AlertTriangle size={15} aria-hidden="true" />}{securityScore >= 80 ? "未发现需要处理的基础风险" : `${securityIssueCount} 条风险需要处理`}</p>
           </div>
-          <button className="risk-item" onClick={() => { setCollection("security"); setSpace("全部"); }}><span className="risk-icon risk-danger"><AlertTriangle size={17} /></span><span><strong>{weakPasswordCount} 个弱密码</strong><small>查看需处理项目</small></span><ChevronRight size={18} /></button>
-          <button className="risk-item" onClick={() => setShowSharing(true)}><span className="risk-icon risk-warning"><UsersRound size={17} /></span><span><strong>{publicUserCount} 位已启用用户</strong><small>公共项目全员可查看</small></span><ChevronRight size={18} /></button>
-          <button className="risk-item" onClick={() => { setCollection("security"); setSpace("全部"); }}><span className="risk-icon risk-info"><Smartphone size={17} /></span><span><strong>{missingTwoFactorCount} 个未启用双重验证</strong><small>查看需处理项目</small></span><ChevronRight size={18} /></button>
+          <button className="risk-item" onClick={() => { setCollection("security"); setSpace("全部"); setSecurityFocus("weak_password"); }}><span className="risk-icon risk-danger"><AlertTriangle size={17} /></span><span><strong>{weakPasswordCount} 个密码过短</strong><small>建议立即更换</small></span><ChevronRight size={18} /></button>
+          <button className="risk-item" onClick={() => { setCollection("security"); setSpace("全部"); setSecurityFocus("reused_password"); }}><span className="risk-icon risk-warning"><ShieldEllipsis size={17} /></span><span><strong>{reusedPasswordCount} 个重复密码</strong><small>避免一个泄露影响多个账号</small></span><ChevronRight size={18} /></button>
+          <button className="risk-item" onClick={() => { setCollection("security"); setSpace("全部"); setSecurityFocus("missing_two_factor"); }}><span className="risk-icon risk-info"><Smartphone size={17} /></span><span><strong>{missingTwoFactorCount} 个未启用双重验证</strong><small>查看需处理项目</small></span><ChevronRight size={18} /></button>
         </section>
 
         <div className="content-grid">
           <section className="vault-panel" aria-labelledby="vault-list-title">
+            {collection === "security" && <div className="security-review" role="region" aria-labelledby="security-review-title">
+              <div className="security-review-head"><div><span className="eyebrow">安全检查</span><h2 id="security-review-title">{securityIssueCount > 0 ? `${securityIssueCount} 条基础风险待处理` : "基础检查已通过"}</h2><p>检查密码长度、重复使用情况和双重验证状态。</p></div><ShieldCheck size={21} aria-hidden="true" /></div>
+              <div className="security-focuses" role="group" aria-label="安全风险筛选">
+                <button className={securityFocus === "all" ? "is-selected" : ""} onClick={() => setSecurityFocus("all")}>全部 {securityIssueCount}</button>
+                <button className={securityFocus === "weak_password" ? "is-selected" : ""} onClick={() => setSecurityFocus("weak_password")}>密码过短 {weakPasswordCount}</button>
+                <button className={securityFocus === "reused_password" ? "is-selected" : ""} onClick={() => setSecurityFocus("reused_password")}>密码重复 {reusedPasswordCount}</button>
+                <button className={securityFocus === "missing_two_factor" ? "is-selected" : ""} onClick={() => setSecurityFocus("missing_two_factor")}>未开双重验证 {missingTwoFactorCount}</button>
+              </div>
+            </div>}
             <div className="panel-toolbar">
               <div className="filter-tabs" role="group" aria-label="项目类型筛选">
                 {filters.map((item) => (
@@ -763,7 +780,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
               ) : visibleItems.length > 0 ? visibleItems.map((item) => (
                 <button key={item.id} className={`vault-row ${activeSelectedId === item.id ? "is-selected" : ""}`} onClick={() => { setSelectedId(item.id); setRevealed(false); }} aria-pressed={activeSelectedId === item.id}>
                   <div className="item-identity"><BrandMark item={item} /><span><strong>{item.name}</strong><small>{item.username}</small></span></div>
-                  <div><StrengthBadge strength={item.strength} /></div>
+                  <div>{collection === "security" ? <SecurityIssueBadges issues={item.securityIssues} /> : <StrengthBadge strength={item.strength} />}</div>
                   <span className="updated-at">{item.updated}</span>
                   <span className="row-chevron"><ChevronRight size={18} /></span>
                 </button>
@@ -778,7 +795,6 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
             <div className="detail-head">
               <div className="detail-brand"><BrandMark item={selected} /><div><span className="eyebrow">{selected.type} · {selected.group}</span><h2 id="detail-title">{selected.name}</h2><a href={selected.domain.includes(".") ? `https://${selected.domain}` : "#"} target="_blank" rel="noreferrer">{selected.domain}<ArrowUpRight size={14} /></a></div></div>
               <div className="detail-actions">
-                <button className={`icon-button ${selected.favorite ? "is-favorite" : ""}`} onClick={() => toggleFavorite(selected)} aria-label={selected.favorite ? "取消收藏" : "添加收藏"} disabled={!selected.canEdit || isSaving}><Heart size={19} fill={selected.favorite ? "currentColor" : "none"} /></button>
                 <button className="icon-button" onClick={() => openEdit(selected)} aria-label={`编辑${selected.name}`} disabled={!selected.canEdit || isSaving}><Edit3 size={18} /></button>
                 <button className="icon-button destructive-icon" onClick={() => setDeleteTarget(selected)} aria-label={`删除${selected.name}`} disabled={!selected.canEdit || isSaving}><Trash2 size={18} /></button>
               </div>
@@ -794,6 +810,11 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
               <div className="secret-field password-field"><span className={revealed ? "password-revealed" : "password-masked"}>{revealed ? selected.password : "••••••••••••••••"}</span><button className="icon-button" onClick={() => { const next = !revealed; setRevealed(next); if (next) recordAudit("password_revealed", selected.id); }} aria-label={revealed ? "隐藏密码" : "显示密码"}>{revealed ? <EyeOff size={17} /> : <Eye size={17} />}</button><button className="icon-button" onClick={() => copyValue(selected.password, "密码", selected.id)} aria-label="复制密码"><Copy size={17} /></button></div>
               <div className={`password-health health-${selected.strength}`}><span /><p><strong>密码{selected.strength}</strong>{selected.strength === "风险" ? "密码长度偏短，建议立即更换" : selected.strength === "一般" ? "建议增加长度后再使用" : "长度符合基础建议"}</p></div>
             </div>
+
+            {selectedSummary && selectedSummary.securityIssues.length > 0 && <div className="detail-section security-findings">
+              <div className="field-label"><span>需处理的安全项</span></div>
+              <div className="security-finding-list">{selectedSummary.securityIssues.map((issue) => <div className={`security-finding security-finding-${issue}`} key={issue}><AlertTriangle size={16} aria-hidden="true" /><div><strong>{securityIssueCopy[issue].label}</strong><span>{securityIssueCopy[issue].detail}</span></div></div>)}</div>
+            </div>}
 
             {selected.totp && <div className="detail-section"><AuthenticatorCode config={selected.totp} itemId={selected.id} onCopy={copyValue} onReveal={() => recordAudit("totp_revealed", selected.id)} /></div>}
 

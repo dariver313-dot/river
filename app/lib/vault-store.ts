@@ -3,6 +3,7 @@ import { parseTotpInput, toTotpConfig, type TotpConfig } from "./totp";
 import { countActiveApplicationUsers, getActiveApplicationActor } from "./user-store";
 import { decryptVaultPayload, encryptVaultPayload } from "./vault-crypto";
 import { assertVaultMoveAllowed, boundedText, isVaultSpace, type VaultSpace } from "./vault-policy";
+import { reviewCredentialSecurity, type SecurityIssue } from "./security-review";
 
 export type VaultItemType = "登录" | "卡片" | "安全笔记";
 export type VaultStrength = "安全" | "一般" | "风险";
@@ -29,6 +30,7 @@ export type VaultCredential = {
 export type VaultItemSummary = Omit<VaultCredential, "password" | "note" | "totp"> & {
   passwordLength: number;
   hasTotp: boolean;
+  securityIssues: SecurityIssue[];
 };
 
 export type ApprovalRequest = {
@@ -225,7 +227,7 @@ function toCredential(row: VaultItemRow, payload: StoredCredential, vault: Acces
   };
 }
 
-function toSummary(credential: VaultCredential): VaultItemSummary {
+function toSummary(credential: VaultCredential, securityIssues: SecurityIssue[] = []): VaultItemSummary {
   return {
     id: credential.id,
     name: credential.name,
@@ -242,6 +244,7 @@ function toSummary(credential: VaultCredential): VaultItemSummary {
     ...(credential.sharedBy ? { sharedBy: credential.sharedBy } : {}),
     passwordLength: credential.password.length,
     hasTotp: Boolean(credential.totp),
+    securityIssues,
   };
 }
 
@@ -284,7 +287,8 @@ export async function listVaultData(email: string) {
 
 export async function listVaultSummaryData(email: string) {
   const data = await listVaultData(email);
-  return { ...data, items: data.items.map(toSummary) };
+  const issuesByItem = reviewCredentialSecurity(data.items);
+  return { ...data, items: data.items.map((item) => toSummary(item, issuesByItem.get(item.id) ?? [])) };
 }
 
 export async function createVaultItem(email: string, input: Record<string, unknown>) {

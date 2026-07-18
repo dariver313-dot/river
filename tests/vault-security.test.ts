@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { secureHeaders, secureJson } from "../app/lib/response-security.ts";
+import { reviewCredentialSecurity } from "../app/lib/security-review.ts";
 import { generateTotpCode, parseTotpInput } from "../app/lib/totp.ts";
 import { assertVaultMoveAllowed, boundedText } from "../app/lib/vault-policy.ts";
 
@@ -42,4 +43,16 @@ test("验证器配置会被规范化且可以生成六码动态验证码", async
   assert.equal(config.digits, 6);
   assert.equal(config.issuer, "守钥");
   assert.match(await generateTotpCode(config, 1_700_000_000_000), /^\d{6}$/);
+});
+
+test("安全检查会标记短密码、重复密码和缺少双重验证", () => {
+  const review = reviewCredentialSecurity([
+    { id: "one", password: "same-password", strength: "风险", twoFactor: false },
+    { id: "two", password: "same-password", strength: "安全", twoFactor: true },
+    { id: "three", password: "different-password", strength: "安全", twoFactor: false },
+  ]);
+
+  assert.deepEqual(review.get("one"), ["weak_password", "reused_password", "missing_two_factor"]);
+  assert.deepEqual(review.get("two"), ["reused_password"]);
+  assert.deepEqual(review.get("three"), ["missing_two_factor"]);
 });

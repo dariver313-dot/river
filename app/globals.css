@@ -596,6 +596,63 @@ button:disabled {
   box-shadow: var(--shadow-card-hover);
 }
 
+.security-review {
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid var(--line);
+  background: #f9fbff;
+}
+
+.security-review-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  color: var(--accent-strong);
+}
+
+.security-review-head h2 {
+  margin: 1px 0 3px;
+  color: var(--ink);
+  font-size: 15px;
+  letter-spacing: -0.01em;
+}
+
+.security-review-head p {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 11px;
+}
+
+.security-focuses,
+.security-issue-badges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.security-focuses {
+  margin-top: 12px;
+}
+
+.security-focuses button {
+  min-height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink-soft);
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.security-focuses button:hover,
+.security-focuses button.is-selected {
+  border-color: #cad5f0;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
 .panel-toolbar {
   min-height: 52px;
   display: flex;
@@ -786,6 +843,36 @@ button:disabled {
 .strength-安全 { background: var(--accent-soft); color: var(--accent-strong); }
 .strength-一般 { background: var(--warning-soft); color: var(--warning); }
 .strength-风险 { background: var(--danger-soft); color: var(--danger); }
+
+.security-issue-badges {
+  justify-content: flex-start;
+}
+
+.security-issue {
+  display: inline-flex;
+  align-items: center;
+  min-height: 23px;
+  padding: 0 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.security-issue-weak_password {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.security-issue-reused_password {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.security-issue-missing_two_factor {
+  background: var(--info-soft);
+  color: var(--info);
+}
 
 .updated-at {
   color: var(--ink-soft);
@@ -984,6 +1071,45 @@ button:disabled {
   margin-right: 5px;
   color: var(--ink);
 }
+
+.security-findings {
+  padding-top: 16px;
+}
+
+.security-finding-list {
+  display: grid;
+  gap: 7px;
+}
+
+.security-finding {
+  display: grid;
+  grid-template-columns: 18px 1fr;
+  gap: 8px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-subtle);
+}
+
+.security-finding > div {
+  display: grid;
+  gap: 1px;
+}
+
+.security-finding strong {
+  color: var(--ink);
+  font-size: 11px;
+}
+
+.security-finding span {
+  color: var(--ink-soft);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.security-finding-weak_password > svg { color: var(--danger); }
+.security-finding-reused_password > svg { color: var(--warning); }
+.security-finding-missing_two_factor > svg { color: var(--info); }
 
 .totp-card {
   display: grid;

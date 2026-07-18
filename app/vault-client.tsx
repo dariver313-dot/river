@@ -192,13 +192,13 @@ function PaginationControls({ pagination, onChange, label }: { pagination: Pagin
   if (pagination.total === 0) return null;
   return <nav className="pagination" aria-label={`${label}分页`}>
     <span className="pagination-summary">第 {pagination.page} / {pagination.pageCount} 页，共 {pagination.total} 项</span>
-    {pagination.pageCount > 1 && <div className="pagination-controls">
-      <button type="button" className="pagination-button" onClick={() => onChange(pagination.page - 1)} disabled={pagination.page === 1} aria-label="上一页"><ChevronLeft size={16} /></button>
+    <div className="pagination-controls">
+      <button type="button" className="pagination-button pagination-step" onClick={() => onChange(pagination.page - 1)} disabled={pagination.page === 1}><ChevronLeft size={15} aria-hidden="true" /><span>上一页</span></button>
       {pageNumbers(pagination.page, pagination.pageCount).map((page, index) => page === "ellipsis"
         ? <span className="pagination-ellipsis" key={`ellipsis-${index}`} aria-hidden="true">…</span>
         : <button type="button" className={`pagination-button ${page === pagination.page ? "is-current" : ""}`} key={page} onClick={() => onChange(page)} aria-current={page === pagination.page ? "page" : undefined}>{page}</button>)}
-      <button type="button" className="pagination-button" onClick={() => onChange(pagination.page + 1)} disabled={pagination.page === pagination.pageCount} aria-label="下一页"><ChevronRight size={16} /></button>
-    </div>}
+      <button type="button" className="pagination-button pagination-step" onClick={() => onChange(pagination.page + 1)} disabled={pagination.page === pagination.pageCount}><span>下一页</span><ChevronRight size={15} aria-hidden="true" /></button>
+    </div>
   </nav>;
 }
 

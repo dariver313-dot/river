@@ -1063,6 +1063,12 @@ button:disabled {
   font-weight: 650;
 }
 
+.pagination-step {
+  width: auto;
+  gap: 3px;
+  padding: 0 9px;
+}
+
 .pagination-button:hover:not(:disabled) {
   border-color: #cad5f0;
   background: var(--accent-soft);

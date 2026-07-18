@@ -1156,7 +1156,8 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
         <div className="modal-layer" role="presentation">
           <section className="modal credential-modal" role="dialog" aria-modal="true" aria-labelledby="add-title">
             <header><div><span className="modal-icon"><KeyRound size={20} /></span><div><h2 id="add-title">添加登录信息</h2><p>保存后以加密形式写入你的密码库</p></div></div><button className="icon-button" onClick={() => setShowAdd(false)} aria-label="关闭"><X size={20} /></button></header>
-            <form onSubmit={submitCredential}>
+            <form className="modal-form" onSubmit={submitCredential}>
+              <div className="modal-body credential-modal-body">
               <div className="credential-form-pair"><label>名称<input required value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="例如：公司邮箱" autoFocus /></label><label>网站地址<input required value={form.domain} onChange={(event) => setForm({ ...form, domain: event.target.value })} placeholder="example.com" inputMode="url" /></label></div>
               <label>分类（可选）<input list="credential-category-options" value={form.category} onChange={(event) => setForm({ ...form, category: event.target.value })} placeholder="例如：部门一" maxLength={60} /><small>可输入新名称；分类会随加密项目保存，用于搜索和筛选。</small></label>
               <datalist id="credential-category-options">{categoryNames.map((name) => <option value={name} key={name} />)}</datalist>
@@ -1164,7 +1165,8 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
               <label>密码<div className="form-password"><input required type={showNewPassword ? "text" : "password"} value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} placeholder="输入或生成强密码" autoComplete="new-password" /><button type="button" className="password-visibility" onClick={() => setShowNewPassword((current) => !current)} aria-label={showNewPassword ? "隐藏输入的密码" : "显示输入的密码"}>{showNewPassword ? <EyeOff size={16} /> : <Eye size={16} />}</button><button type="button" onClick={generatePassword}><WandSparkles size={16} />生成</button></div><small>建议至少 14 位，并混合字母、数字和符号。</small></label>
               <TotpEntryFields entries={form.totpEntries} formId="add" isReading={isReadingTotp} onChange={(id, changes) => updateTotpEntry("add", id, changes)} onAdd={() => addTotpEntry("add")} onRemove={(id) => removeTotpEntry("add", id)} onReadImage={(event, id) => void importTotpFromImage(event, "add", id)} />
               <div className="field-control"><span>可见范围</span><SurfaceSelect id="add-space" ariaLabel="可见范围" value={form.group} onChange={(group) => setForm({ ...form, group })} options={[{ value: "个人", label: "个人项目" }, ...(isAdmin ? [{ value: "公共", label: "公共项目" }] : [])]} /></div>
-              <footer><button type="button" className="secondary-button" onClick={() => setShowAdd(false)} disabled={isSaving}>取消</button><button type="submit" className="primary-button" disabled={isSaving}><Plus size={17} />{isSaving ? "正在保存" : "添加项目"}</button></footer>
+              </div>
+              <footer className="modal-footer"><button type="button" className="secondary-button" onClick={() => setShowAdd(false)} disabled={isSaving}>取消</button><button type="submit" className="primary-button" disabled={isSaving}><Plus size={17} />{isSaving ? "正在保存" : "添加项目"}</button></footer>
             </form>
           </section>
         </div>
@@ -1174,7 +1176,8 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
         <div className="modal-layer" role="presentation">
           <section className="modal credential-modal" role="dialog" aria-modal="true" aria-labelledby="edit-title">
             <header><div><span className="modal-icon"><Edit3 size={20} /></span><div><h2 id="edit-title">编辑项目</h2><p>变更会重新加密后保存</p></div></div><button className="icon-button" onClick={() => setEditingItem(null)} aria-label="关闭编辑"><X size={20} /></button></header>
-            <form onSubmit={submitEditCredential}>
+            <form className="modal-form" onSubmit={submitEditCredential}>
+              <div className="modal-body credential-modal-body">
               <div className="credential-form-pair"><label>名称<input required value={editForm.name} onChange={(event) => setEditForm({ ...editForm, name: event.target.value })} autoFocus /></label><label>网站地址<input required value={editForm.domain} onChange={(event) => setEditForm({ ...editForm, domain: event.target.value })} inputMode="url" /></label></div>
               <label>分类（可选）<input list="credential-category-options" value={editForm.category} onChange={(event) => setEditForm({ ...editForm, category: event.target.value })} placeholder="例如：部门一" maxLength={60} /><small>可输入新名称；分类会随加密项目保存，用于搜索和筛选。</small></label>
               <datalist id="credential-category-options">{categoryNames.map((name) => <option value={name} key={name} />)}</datalist>
@@ -1182,7 +1185,8 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
               <label>密码<div className="form-password"><input required type={showEditPassword ? "text" : "password"} value={editForm.password} onChange={(event) => setEditForm({ ...editForm, password: event.target.value })} autoComplete="new-password" /><button type="button" className="password-visibility" onClick={() => setShowEditPassword((current) => !current)} aria-label={showEditPassword ? "隐藏输入的密码" : "显示输入的密码"}>{showEditPassword ? <EyeOff size={16} /> : <Eye size={16} />}</button><button type="button" onClick={generateEditPassword}><WandSparkles size={16} />生成</button></div><small>建议至少 14 位，并混合字母、数字和符号。</small></label>
               <TotpEntryFields entries={editForm.totpEntries} formId="edit" isReading={isReadingTotp} onChange={(id, changes) => updateTotpEntry("edit", id, changes)} onAdd={() => addTotpEntry("edit")} onRemove={(id) => removeTotpEntry("edit", id)} onReadImage={(event, id) => void importTotpFromImage(event, "edit", id)} />
               <div className="field-control"><span>可见范围</span><SurfaceSelect id="edit-space" ariaLabel="可见范围" value={editForm.group} onChange={(group) => setEditForm({ ...editForm, group })} options={[{ value: "个人", label: "个人项目" }, ...(isAdmin ? [{ value: "公共", label: "公共项目" }] : [])]} disabled={editingItem.group === "公共"} />{editingItem.group === "公共" && <small>公共项目保持为公共范围，避免误移除所有用户的查看权限。</small>}</div>
-              <footer><button type="button" className="secondary-button" onClick={() => setEditingItem(null)} disabled={isSaving}>取消</button><button type="submit" className="primary-button" disabled={isSaving}><Check size={17} />{isSaving ? "正在保存" : "保存变更"}</button></footer>
+              </div>
+              <footer className="modal-footer"><button type="button" className="secondary-button" onClick={() => setEditingItem(null)} disabled={isSaving}>取消</button><button type="submit" className="primary-button" disabled={isSaving}><Check size={17} />{isSaving ? "正在保存" : "保存变更"}</button></footer>
             </form>
           </section>
         </div>
@@ -1192,10 +1196,12 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
         <div className="modal-layer" role="presentation">
           <section className="modal danger-modal" role="dialog" aria-modal="true" aria-labelledby="delete-title">
             <header><div><span className="modal-icon danger-icon"><AlertTriangle size={20} /></span><div><h2 id="delete-title">删除项目？</h2><p>请确认你不再需要这条登录信息</p></div></div><button className="icon-button" onClick={() => setDeleteTarget(null)} aria-label="关闭删除确认"><X size={20} /></button></header>
-            <form onSubmit={(event) => { event.preventDefault(); deleteCredential(); }}>
+            <form className="modal-form" onSubmit={(event) => { event.preventDefault(); deleteCredential(); }}>
+              <div className="modal-body">
               <div className="delete-summary"><strong>{deleteTarget.name}</strong><span>{deleteTarget.username} · {deleteTarget.type}</span></div>
               <p className="delete-description">删除后会从加密密码库中移除，操作记录会保留在审计日志中。</p>
-              <footer><button type="button" className="secondary-button" onClick={() => setDeleteTarget(null)} disabled={isSaving}>取消</button><button type="submit" className="danger-button" disabled={isSaving}><Trash2 size={17} />{isSaving ? "正在删除" : "删除项目"}</button></footer>
+              </div>
+              <footer className="modal-footer"><button type="button" className="secondary-button" onClick={() => setDeleteTarget(null)} disabled={isSaving}>取消</button><button type="submit" className="danger-button" disabled={isSaving}><Trash2 size={17} />{isSaving ? "正在删除" : "删除项目"}</button></footer>
             </form>
           </section>
         </div>
@@ -1205,11 +1211,13 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
         <div className="modal-layer" role="presentation">
           <section className="modal user-create-modal" role="dialog" aria-modal="true" aria-labelledby="create-system-user-title">
             <header><div><span className="modal-icon"><UserCog size={20} /></span><div><h2 id="create-system-user-title">添加系统用户</h2><p>创建后可在用户管理页继续调整角色与状态</p></div></div><button className="icon-button" type="button" onClick={() => setShowUserCreateDialog(false)} aria-label="关闭添加用户"><X size={20} /></button></header>
-            <form onSubmit={createSystemUser}>
+            <form className="modal-form" onSubmit={createSystemUser}>
+              <div className="modal-body">
               <label>登录邮箱（必须）<input required type="email" value={systemUserEmail} onChange={(event) => setSystemUserEmail(event.target.value)} placeholder="name@example.com" autoComplete="email" autoFocus /><small>请填写对方用于登录 ChatGPT、并在站点访问控制中获授权的同一邮箱。</small></label>
               <div className="field-control"><span>系统角色</span><SurfaceSelect id="new-user-role" ariaLabel="系统角色" value={systemUserRole} onChange={setSystemUserRole} options={[{ value: "user", label: "普通用户" }, { value: "admin", label: "管理员" }]} /></div>
               <aside className="access-setup-note" role="note"><ShieldCheck size={17} aria-hidden="true" /><div><strong>邮箱就是该用户的登录身份</strong><p>系统用户创建成功后，请在站点访问控制中允许该邮箱访问；不支持使用单独的用户名登录。</p></div></aside>
-              <footer><button type="button" className="secondary-button" onClick={() => setShowUserCreateDialog(false)} disabled={isSaving}>取消</button><button type="submit" className="primary-button" disabled={isSaving}><UserCog size={17} />{isSaving ? "正在创建" : "创建用户"}</button></footer>
+              </div>
+              <footer className="modal-footer"><button type="button" className="secondary-button" onClick={() => setShowUserCreateDialog(false)} disabled={isSaving}>取消</button><button type="submit" className="primary-button" disabled={isSaving}><UserCog size={17} />{isSaving ? "正在创建" : "创建用户"}</button></footer>
             </form>
           </section>
         </div>
@@ -1219,31 +1227,33 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
         <div className="modal-layer" role="presentation">
           <section className="modal sharing-modal" role="dialog" aria-modal="true" aria-labelledby="sharing-title">
             <header><div><span className="modal-icon"><UsersRound size={20} /></span><div><h2 id="sharing-title">公共项目权限</h2><p>已启用用户可查看，管理员可维护</p></div></div><button className="icon-button" onClick={() => setShowSharing(false)} aria-label="关闭公共项目说明"><X size={20} /></button></header>
-            <aside className="sharing-guide" role="note"><ShieldCheck size={18} aria-hidden="true" /><div><div className="sharing-guide-title"><strong>公共项目规则</strong><span>{publicUserCount} 位已启用成员</span></div><p>所有已启用用户均可查看账号、密码和验证码；仅管理员可新建、编辑与删除。</p></div></aside>
-            <div className="sharing-section">
-              <div className="sharing-section-title"><h3>系统用户</h3><span>{publicUserCount} 位已启用</span></div>
-              <p className="sharing-member-note"><UserCog size={16} aria-hidden="true" />添加用户后，还需在站点访问控制中授权该邮箱。</p>
-              {isAdmin ? <button type="button" className="secondary-button" onClick={() => { setShowSharing(false); void openUserManagement(); }}><UserCog size={17} />管理系统用户</button> : <p className="sharing-empty">系统用户与公共项目权限由管理员维护。</p>}
-            </div>
-            <div className="sharing-section approval-section">
-              <div className="sharing-section-title"><h3>双人确认导出</h3><span>有效期 10 分钟</span></div>
-              <p className="form-note">导出的文件包含明文密码，其中包括你的个人项目和全部公共项目。另一位已启用用户批准后才能下载。</p>
-              {publicUserCount > 1 && !approvals.some((approval) => approval.isRequester && approval.status === "pending") && <button type="button" className="secondary-button" onClick={requestExportApproval} disabled={isSaving}><Archive size={17} />发起导出确认</button>}
-              {publicUserCount <= 1 && <p className="sharing-empty">请先创建并启用另一位系统用户，才能使用双人确认导出。</p>}
-              {approvals.length > 0 ? <div className="approval-list">{approvals.map((approval) => (
-                <div className="approval-row" key={approval.id}>
-                  <div><strong>{approval.isRequester ? "你的导出确认" : `${approval.requestedBy} 请求导出确认`}</strong><span>{approvalStatusLabel(approval)}</span></div>
-                  <div className="approval-actions">
-                    {approval.canDecide && <><button type="button" className="secondary-button" onClick={() => decideExportApproval(approval.id, "rejected")} disabled={isSaving}>拒绝</button><button type="button" className="primary-button" onClick={() => decideExportApproval(approval.id, "approved")} disabled={isSaving}>批准</button></>}
-                    {approval.isRequester && approval.status === "approved" && <button type="button" className="primary-button" onClick={() => downloadApprovedExport(approval.id)} disabled={isSaving}><Archive size={17} />下载副本</button>}
-                    {approval.isRequester && approval.status === "pending" && <span className="approval-pending">等待另一位已启用用户批准</span>}
+            <div className="modal-body sharing-modal-body">
+              <aside className="sharing-guide" role="note"><ShieldCheck size={18} aria-hidden="true" /><div><div className="sharing-guide-title"><strong>公共项目规则</strong><span>{publicUserCount} 位已启用成员</span></div><p>所有已启用用户均可查看账号、密码和验证码；仅管理员可新建、编辑与删除。</p></div></aside>
+              <div className="sharing-section">
+                <div className="sharing-section-title"><h3>系统用户</h3><span>{publicUserCount} 位已启用</span></div>
+                <p className="sharing-member-note"><UserCog size={16} aria-hidden="true" />添加用户后，还需在站点访问控制中授权该邮箱。</p>
+                {isAdmin ? <button type="button" className="secondary-button" onClick={() => { setShowSharing(false); void openUserManagement(); }}><UserCog size={17} />管理系统用户</button> : <p className="sharing-empty">系统用户与公共项目权限由管理员维护。</p>}
+              </div>
+              <div className="sharing-section approval-section">
+                <div className="sharing-section-title"><h3>双人确认导出</h3><span>有效期 10 分钟</span></div>
+                <p className="form-note">导出的文件包含明文密码，其中包括你的个人项目和全部公共项目。另一位已启用用户批准后才能下载。</p>
+                {publicUserCount > 1 && !approvals.some((approval) => approval.isRequester && approval.status === "pending") && <button type="button" className="secondary-button" onClick={requestExportApproval} disabled={isSaving}><Archive size={17} />发起导出确认</button>}
+                {publicUserCount <= 1 && <p className="sharing-empty">请先创建并启用另一位系统用户，才能使用双人确认导出。</p>}
+                {approvals.length > 0 ? <div className="approval-list">{approvals.map((approval) => (
+                  <div className="approval-row" key={approval.id}>
+                    <div><strong>{approval.isRequester ? "你的导出确认" : `${approval.requestedBy} 请求导出确认`}</strong><span>{approvalStatusLabel(approval)}</span></div>
+                    <div className="approval-actions">
+                      {approval.canDecide && <><button type="button" className="secondary-button" onClick={() => decideExportApproval(approval.id, "rejected")} disabled={isSaving}>拒绝</button><button type="button" className="primary-button" onClick={() => decideExportApproval(approval.id, "approved")} disabled={isSaving}>批准</button></>}
+                      {approval.isRequester && approval.status === "approved" && <button type="button" className="primary-button" onClick={() => downloadApprovedExport(approval.id)} disabled={isSaving}><Archive size={17} />下载副本</button>}
+                      {approval.isRequester && approval.status === "pending" && <span className="approval-pending">等待另一位已启用用户批准</span>}
+                    </div>
                   </div>
-                </div>
-              ))}</div> : <p className="sharing-empty">没有待处理的导出确认。</p>}
-            </div>
-            <div className="sharing-section audit-section">
-              <div className="sharing-section-title"><h3>最近操作记录</h3><span>最近 5 条</span></div>
-              {audit.length > 0 ? <ul className="audit-list">{audit.slice(0, 5).map((entry, index) => <li key={`${entry.action}-${entry.createdAt}-${index}`}><span><strong>{entry.actorEmail}</strong>{auditLabel(entry.action)}</span><time>{entry.createdAt}</time></li>)}</ul> : <p className="sharing-empty">公共项目的关键操作会显示在这里。</p>}
+                ))}</div> : <p className="sharing-empty">没有待处理的导出确认。</p>}
+              </div>
+              <div className="sharing-section audit-section">
+                <div className="sharing-section-title"><h3>最近操作记录</h3><span>最近 5 条</span></div>
+                {audit.length > 0 ? <ul className="audit-list">{audit.slice(0, 5).map((entry, index) => <li key={`${entry.action}-${entry.createdAt}-${index}`}><span><strong>{entry.actorEmail}</strong>{auditLabel(entry.action)}</span><time>{entry.createdAt}</time></li>)}</ul> : <p className="sharing-empty">公共项目的关键操作会显示在这里。</p>}
+              </div>
             </div>
           </section>
         </div>

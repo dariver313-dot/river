@@ -1741,9 +1741,9 @@ button:disabled {
 }
 
 .modal > header {
-  position: sticky;
-  top: 0;
+  position: relative;
   z-index: 2;
+  flex: 0 0 auto;
   justify-content: space-between;
   gap: 12px;
   padding: 16px 18px;
@@ -1777,48 +1777,50 @@ button:disabled {
   font-size: 11px;
 }
 
-.modal form {
+.modal-form {
   min-height: 0;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.modal-body {
+  min-height: 0;
+  display: grid;
+  flex: 1 1 auto;
+  gap: 13px;
+  padding: 18px;
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-color: #aebcd2 transparent;
   scrollbar-width: thin;
-  display: grid;
-  gap: 13px;
-  padding: 18px;
+  scroll-padding: 12px 0 18px;
 }
 
-.modal form::-webkit-scrollbar {
+.modal-body::-webkit-scrollbar {
   width: 6px;
 }
 
-.modal form::-webkit-scrollbar-thumb {
+.modal-body::-webkit-scrollbar-thumb {
   border: 1px solid transparent;
   border-radius: 999px;
   background: #aebcd2;
   background-clip: padding-box;
 }
 
-.modal form::-webkit-scrollbar-track {
+.modal-body::-webkit-scrollbar-track {
   background: transparent;
 }
 
-.credential-modal form {
+.credential-modal-body {
   gap: 12px;
-  scroll-padding: 12px 0 78px;
 }
 
 .credential-form-pair {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 12px;
-}
-
-.sharing-modal {
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  scrollbar-color: #b7c3d4 transparent;
-  scrollbar-width: thin;
 }
 
 .modal label,
@@ -2190,18 +2192,14 @@ button:disabled {
   text-underline-offset: 2px;
 }
 
-.modal form footer {
-  position: sticky;
-  bottom: 0;
-  z-index: 1;
+.modal-footer {
+  flex: 0 0 auto;
   display: flex;
   justify-content: flex-end;
   gap: 9px;
-  margin: 4px -18px -18px;
   padding: 12px 18px;
   border-top: 1px solid var(--line);
   background: rgb(250 251 252 / 0.96);
-  box-shadow: 0 -8px 18px rgb(16 24 40 / 0.035);
 }
 
 .danger-icon {
@@ -2340,21 +2338,16 @@ button:disabled {
   background: #88291f;
 }
 
-.sharing-modal form {
-  padding-bottom: 0;
-}
-
-.sharing-modal form footer {
-  margin: 4px 0 0;
-  padding: 14px 0 0;
-  background: rgb(250 251 252 / 0.96);
+.sharing-modal-body {
+  display: block;
+  padding: 16px 0 0;
 }
 
 .sharing-guide {
   display: grid;
   grid-template-columns: 22px 1fr;
   gap: 10px;
-  margin: 0 18px;
+  margin: 0 18px 16px;
   padding: 11px 12px;
   border: 1px solid #cadde8;
   border-radius: var(--radius-sm);
@@ -2405,6 +2398,10 @@ button:disabled {
 .sharing-section {
   padding: 18px;
   border-top: 1px solid var(--line);
+}
+
+.sharing-section:last-child {
+  padding-bottom: 18px;
 }
 
 .sharing-member-note {
@@ -3384,16 +3381,16 @@ button:disabled {
     padding: 14px 15px;
   }
 
-  .modal form {
+  .modal-body {
     padding: 15px;
   }
 
-  .modal form footer {
-    margin: 4px -15px -15px;
+  .modal-footer {
     padding: 11px 15px;
   }
 
   .sharing-guide {
+    margin-bottom: 15px;
     margin-right: 15px;
     margin-left: 15px;
   }
@@ -3402,9 +3399,8 @@ button:disabled {
     padding: 15px;
   }
 
-  .sharing-modal form footer {
-    margin: 4px 0 0;
-    padding: 12px 0 0;
+  .sharing-modal-body {
+    padding-top: 14px;
   }
 
   .lock-card {

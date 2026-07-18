@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { secureHeaders, secureJson } from "../app/lib/response-security.ts";
+import { crossOriginRequestResponse, secureHeaders, secureJson } from "../app/lib/response-security.ts";
+import { maxJsonRequestBytes, readLimitedJsonObject } from "../app/lib/request-validation.ts";
 import { reviewCredentialSecurity } from "../app/lib/security-review.ts";
 import { generateTotpCode, parseTotpInput } from "../app/lib/totp.ts";
 import { assertVaultMoveAllowed, boundedText } from "../app/lib/vault-policy.ts";
@@ -40,6 +41,29 @@ test("密码库响应禁止缓存并带有浏览器安全策略", async () => {
   const response = secureJson({ ok: true });
   assert.equal(response.headers.get("pragma"), "no-cache");
   assert.deepEqual(await response.json(), { ok: true });
+});
+
+test("跨站写入或导出请求会被拒绝", async () => {
+  const response = crossOriginRequestResponse(new Request("https://vault.example.test/api/vault/export", {
+    headers: { Origin: "https://attacker.example.test" },
+  }));
+  assert.equal(response?.status, 403);
+  assert.deepEqual(await response?.json(), { error: "已拒绝跨站请求。请从 djmima 页面重新操作。" });
+});
+
+test("写入接口拒绝无效或过大的 JSON 请求", async () => {
+  await assert.rejects(
+    readLimitedJsonObject(new Request("https://example.test/api", { method: "POST", body: "{" })),
+    /请求内容无效/,
+  );
+  await assert.rejects(
+    readLimitedJsonObject(new Request("https://example.test/api", { method: "POST", body: JSON.stringify(["not-an-object"]) })),
+    /请求内容无效/,
+  );
+  await assert.rejects(
+    readLimitedJsonObject(new Request("https://example.test/api", { method: "POST", body: JSON.stringify({ value: "x".repeat(maxJsonRequestBytes) }) })),
+    /请求内容过大/,
+  );
 });
 
 test("验证器配置会被规范化且可以生成六码动态验证码", async () => {

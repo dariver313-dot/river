@@ -530,16 +530,18 @@ export async function requestExportApproval(email: string) {
   const d1 = getD1();
   if (await countActiveApplicationUsers() < 2) throw new Error("请先创建并启用另一位系统用户，再发起导出确认。");
 
-  const existing = await d1.prepare(
-    "SELECT id FROM approval_requests WHERE vault_id = ? AND requested_by = ? AND status = 'pending' LIMIT 1",
-  ).bind(vault.id, email).first<{ id: string }>();
-  if (existing) throw new Error("你已有一条等待确认的导出请求。请等待另一位用户处理，或在 10 分钟后重试。");
-
   const id = crypto.randomUUID();
   const expiresAt = new Date(Date.now() + 10 * 60_000).toISOString();
-  await d1.prepare(
-    "INSERT INTO approval_requests (id, vault_id, requested_by, action, expires_at) VALUES (?, ?, ?, 'export_vault', ?)",
-  ).bind(id, vault.id, email, expiresAt).run();
+  const created = await d1.prepare(
+    `INSERT INTO approval_requests (id, vault_id, requested_by, action, expires_at)
+     SELECT ?, ?, ?, 'export_vault', ?
+     WHERE NOT EXISTS (
+       SELECT 1 FROM approval_requests WHERE vault_id = ? AND requested_by = ? AND status = 'pending'
+     )`,
+  ).bind(id, vault.id, email, expiresAt, vault.id, email).run();
+  if ((created.meta.changes ?? 0) !== 1) {
+    throw new Error("你已有一条等待确认的导出请求。请等待另一位用户处理，或在 10 分钟后重试。");
+  }
   await writeAudit(vault.id, email, "export_approval_requested");
 
   return { id, action: "export_vault" as const, requestedBy: email, status: "pending" as const, approverEmail: null, expiresAt: "10 分钟内", canDecide: false, isRequester: true };
@@ -557,23 +559,29 @@ export async function decideApproval(email: string, id: string, decision: "appro
   const publicVault = await ensureSharedPublicVault(email);
   if (publicVault.id !== approval.vault_id) throw new Error("该导出确认不属于当前公共项目。");
 
-  await d1.prepare(
-    "UPDATE approval_requests SET status = ?, approver_email = ?, resolved_at = CURRENT_TIMESTAMP WHERE id = ?",
-  ).bind(decision, email, id).run();
+  const decided = await d1.prepare(
+    `UPDATE approval_requests
+     SET status = ?, approver_email = ?, resolved_at = CURRENT_TIMESTAMP
+     WHERE id = ? AND status = 'pending' AND expires_at > ?`,
+  ).bind(decision, email, id, new Date().toISOString()).run();
+  if ((decided.meta.changes ?? 0) !== 1) throw new Error("该导出确认已不可处理。");
   await writeAudit(approval.vault_id, email, decision === "approved" ? "export_approved" : "export_rejected");
 }
 
 export async function exportVaultData(email: string, approvalId: string) {
   const d1 = getD1();
-  const approval = await d1.prepare(
-    "SELECT vault_id, requested_by, status, expires_at FROM approval_requests WHERE id = ? LIMIT 1",
-  ).bind(approvalId).first<{ vault_id: string; requested_by: string; status: string; expires_at: string }>();
-  if (!approval || approval.requested_by !== email || approval.status !== "approved" || Date.parse(approval.expires_at) <= Date.now()) {
+  const publicVault = await ensureSharedPublicVault(email);
+  const data = await listVaultData(email);
+  const consumed = await d1.prepare(
+    `UPDATE approval_requests
+     SET status = 'expired', resolved_at = CURRENT_TIMESTAMP
+     WHERE id = ? AND vault_id = ? AND requested_by = ? AND status = 'approved' AND expires_at > ?`,
+  ).bind(approvalId, publicVault.id, email, new Date().toISOString()).run();
+  if ((consumed.meta.changes ?? 0) !== 1) {
     throw new Error("该导出请求尚未获得另一位用户的有效批准。");
   }
 
-  const data = await listVaultData(email);
-  await writeAudit(approval.vault_id, email, "vault_exported");
+  await writeAudit(publicVault.id, email, "vault_exported");
   return { exportedAt: new Date().toISOString(), items: data.items };
 }
 

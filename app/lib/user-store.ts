@@ -32,6 +32,7 @@ type UserRuntimeEnv = {
 };
 
 const nonInteractiveServiceEmail = "sites-screenshot-service-noreply@chatgpt.com";
+let primaryAdminInitialization: Promise<void> | null = null;
 
 function normalizedEmail(value: string) {
   return value.trim().toLowerCase();
@@ -63,7 +64,7 @@ async function findUser(email: string) {
   ).bind(normalizedEmail(email)).first<AppUserRow>();
 }
 
-async function ensureConfiguredPrimaryAdmin() {
+async function configurePrimaryAdmin() {
   const email = configuredPrimaryAdminEmail();
   if (!email) return;
 
@@ -80,6 +81,16 @@ async function ensureConfiguredPrimaryAdmin() {
   await d1.prepare(
     "UPDATE app_users SET role = 'user', status = 'suspended', updated_at = CURRENT_TIMESTAMP WHERE email = ? AND email <> ?",
   ).bind(nonInteractiveServiceEmail, email).run();
+}
+
+function ensureConfiguredPrimaryAdmin() {
+  if (primaryAdminInitialization) return primaryAdminInitialization;
+  const initialization = configurePrimaryAdmin();
+  primaryAdminInitialization = initialization;
+  void initialization.catch(() => {
+    if (primaryAdminInitialization === initialization) primaryAdminInitialization = null;
+  });
+  return initialization;
 }
 
 export async function ensureApplicationUser(email: string): Promise<AppActor | null> {
@@ -201,13 +212,12 @@ export async function createManagedUser(actorEmail: string, input: Record<string
   const actor = await requireAdmin(actorEmail);
   const email = typeof input.email === "string" ? normalizedEmail(input.email) : "";
   if (!isValidEmail(email)) throw new Error("请输入有效的用户邮箱。");
-  if (await findUser(email)) throw new Error("该用户已存在，可直接调整其角色或状态。");
-
   const role = inputRole(input.role);
   const d1 = getD1();
-  await d1.prepare(
-    "INSERT INTO app_users (email, role, status, created_by) VALUES (?, ?, 'active', ?)",
+  const inserted = await d1.prepare(
+    "INSERT OR IGNORE INTO app_users (email, role, status, created_by) VALUES (?, ?, 'active', ?)",
   ).bind(email, role, actor.email).run();
+  if ((inserted.meta.changes ?? 0) !== 1) throw new Error("该用户已存在，可直接调整其角色或状态。");
 
   const created = await findUser(email);
   if (!created) throw new Error("用户创建失败，请重试。");
@@ -233,17 +243,20 @@ export async function updateManagedUser(actorEmail: string, input: Record<string
 
   const removesActiveAdmin = current.role === "admin" && current.status === "active"
     && (nextRole !== "admin" || nextStatus !== "active");
-  if (removesActiveAdmin) {
-    const admins = await getD1().prepare(
-      "SELECT COUNT(*) AS count FROM app_users WHERE role = 'admin' AND status = 'active'",
-    ).first<{ count: number }>();
-    if ((admins?.count ?? 0) <= 1) throw new Error("系统至少需要保留一位有效管理员。");
-  }
-
   const d1 = getD1();
-  await d1.prepare(
-    "UPDATE app_users SET role = ?, status = ?, updated_at = CURRENT_TIMESTAMP WHERE email = ?",
-  ).bind(nextRole, nextStatus, current.email).run();
+  const updatedResult = removesActiveAdmin
+    ? await d1.prepare(
+      `UPDATE app_users
+       SET role = ?, status = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE email = ?
+         AND (SELECT COUNT(*) FROM app_users WHERE role = 'admin' AND status = 'active') > 1`,
+    ).bind(nextRole, nextStatus, current.email).run()
+    : await d1.prepare(
+      "UPDATE app_users SET role = ?, status = ?, updated_at = CURRENT_TIMESTAMP WHERE email = ?",
+    ).bind(nextRole, nextStatus, current.email).run();
+  if ((updatedResult.meta.changes ?? 0) !== 1) {
+    throw new Error(removesActiveAdmin ? "系统至少需要保留一位有效管理员。" : "用户更新失败，请重试。");
+  }
   if (nextRole !== current.role) await writeSystemAudit(actor.email, "system_user_role_changed", current.email);
   if (nextStatus !== current.status) await writeSystemAudit(actor.email, "system_user_status_changed", current.email);
   const updated = await findUser(current.email);

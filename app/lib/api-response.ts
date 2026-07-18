@@ -1,5 +1,6 @@
 import { getChatGPTUser } from "../chatgpt-auth";
 import { ensureApplicationUser } from "./user-store";
+import { readLimitedJsonObject } from "./request-validation";
 import { secureJson } from "./response-security";
 
 export async function requireVaultActor() {
@@ -24,9 +25,5 @@ export function apiError(error: unknown, status = 500) {
 }
 
 export async function readJsonObject(request: Request) {
-  const payload = await request.json();
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    throw new Error("请求内容无效。");
-  }
-  return payload as Record<string, unknown>;
+  return readLimitedJsonObject(request);
 }

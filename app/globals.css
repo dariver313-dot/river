@@ -980,7 +980,7 @@ button:disabled {
 .toolbar-select {
   display: grid;
   grid-template-rows: 11px 34px;
-  gap: 4px;
+  gap: 10px;
   min-width: 0;
 }
 

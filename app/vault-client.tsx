@@ -93,7 +93,6 @@ type ApprovalRequest = {
   isRequester: boolean;
 };
 
-const filters = ["全部", "登录"] as const;
 const spaceFilters = ["全部", "个人", "公共"] as const;
 
 function emptyCredentialForm(): CredentialForm {
@@ -415,7 +414,6 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedDetail, setSelectedDetail] = useState<VaultItem | null>(null);
   const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState<(typeof filters)[number]>("全部");
   const [space, setSpace] = useState<Space>("全部");
   const [category, setCategory] = useState("全部");
   const [sortOrder, setSortOrder] = useState<SortOrder>("updated");
@@ -459,23 +457,22 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
   const visibleItems = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     const filtered = items.filter((item) => {
-      const matchesFilter = filter === "全部" || item.type === filter;
       const matchesSpace = space === "全部" || item.group === space;
       const matchesCategory = activeCategory === "全部" || item.category === activeCategory;
       const matchesCollection = collection === "all"
         || (collection === "security" && item.securityIssues.length > 0 && (securityFocus === "all" || item.securityIssues.includes(securityFocus)));
       const matchesQuery = !normalized || [item.name, item.domain, item.username, item.category, item.group].some((value) => value.toLowerCase().includes(normalized));
-      return matchesFilter && matchesSpace && matchesCategory && matchesCollection && matchesQuery;
+      return matchesSpace && matchesCategory && matchesCollection && matchesQuery;
     });
     return sortOrder === "name" ? filtered.sort((left, right) => left.name.localeCompare(right.name, "zh-CN")) : filtered;
-  }, [activeCategory, collection, filter, items, query, securityFocus, sortOrder, space]);
+  }, [activeCategory, collection, items, query, securityFocus, sortOrder, space]);
 
   const activeSelectedId = visibleItems.some((item) => item.id === selectedId) ? selectedId : visibleItems[0]?.id ?? selectedId;
   const selected = selectedDetail?.id === activeSelectedId ? selectedDetail : null;
   const selectedSummary = items.find((item) => item.id === activeSelectedId) ?? null;
   const listTitle = collection === "security"
       ? securityFocus === "all" ? "待处理账户" : securityIssueCopy[securityFocus].label
-      : space === "全部" ? (filter === "全部" ? "全部项目" : filter) : `${space} · ${filter === "全部" ? "全部项目" : filter}`;
+      : space === "全部" ? "全部项目" : `${space}项目`;
   const viewerInitial = viewer.displayName.trim().slice(0, 1).toLocaleUpperCase() || "你";
   const isAdmin = viewer.role === "admin";
   const spaceCounts: Record<Space, number> = {
@@ -756,7 +753,6 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
     setPage("vault");
     setCollection("all");
     setSpace("全部");
-    setFilter("全部");
     setCategory("全部");
     setSortOrder("updated");
     setSecurityFocus("all");
@@ -767,7 +763,6 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
     setPage("vault");
     setCollection("security");
     setSpace("全部");
-    setFilter("全部");
     setCategory("全部");
     setSortOrder("updated");
     setSecurityFocus(focus);
@@ -776,7 +771,6 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
 
   function clearVaultFilters() {
     setQuery("");
-    setFilter("全部");
     setSpace("全部");
     setCategory("全部");
     setSortOrder("updated");
@@ -970,7 +964,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
         <section className="security-strip" aria-labelledby="security-heading">
           <button type="button" className="score-block score-block-action" onClick={() => openSecurityReview()} aria-label="查看全部账户安全检查结果">
             <span className="score-copy"><span>基础安全评分</span><strong id="security-heading">{securityScore}<small>/100</small></strong></span>
-            <span className="score-meter" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={securityScore} aria-label={`安全评分 ${securityScore} 分`}><span style={{ width: `${securityScore}%` }} /></span>
+            <span className={`score-meter ${items.length === 0 ? "is-empty" : securityScore >= 80 ? "is-healthy" : securityScore >= 60 ? "is-caution" : "is-risk"}`} role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={securityScore} aria-valuetext={items.length === 0 ? "尚无账户，未生成评分" : `安全评分 ${securityScore} 分，共 ${securityIssueCount} 条基础风险`}><span style={{ width: `${securityScore}%` }} /></span>
             <span className="score-status">{items.length === 0 ? <ShieldCheck size={15} aria-hidden="true" /> : securityScore >= 80 ? <Check size={15} aria-hidden="true" /> : <AlertTriangle size={15} aria-hidden="true" />}{items.length === 0 ? "添加账户后显示安全评分" : securityScore >= 80 ? "未发现需要处理的基础风险" : `${securityIssueCount} 条风险需要处理`}<ChevronRight size={15} aria-hidden="true" /></span>
           </button>
           <button className="risk-item" onClick={() => openSecurityReview("weak_password")} disabled={weakPasswordCount === 0}><span className="risk-icon risk-danger"><AlertTriangle size={17} /></span><span><strong>{weakPasswordCount} 个密码长度不足</strong><small>建议使用至少 14 位随机密码</small></span><ChevronRight size={18} /></button>
@@ -992,8 +986,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
             <div className="panel-toolbar">
               <div className="toolbar-selects" aria-label="账户筛选与排序">
                 <div className="toolbar-select"><span>范围</span><SurfaceSelect id="vault-space-filter" ariaLabel="项目范围" value={space} onChange={setSpace} options={spaceFilters.map((value) => ({ value, label: `${value}${value === "全部" ? "项目" : ""} · ${spaceCounts[value]}` }))} compact /></div>
-                <div className="toolbar-select"><span>类型</span><SurfaceSelect id="vault-type-filter" ariaLabel="项目类型" value={filter} onChange={setFilter} options={filters.map((value) => ({ value, label: value === "全部" ? "全部类型" : value }))} compact /></div>
-                <div className="toolbar-select"><span>分类</span><SurfaceSelect id="vault-category-filter" ariaLabel="自定义分类" value={activeCategory} onChange={setCategory} options={categoryOptions} compact /></div>
+                <div className="toolbar-select toolbar-category"><span>自定义分类</span><SurfaceSelect id="vault-category-filter" ariaLabel="自定义分类" value={activeCategory} onChange={setCategory} options={categoryOptions} compact /></div>
                 <div className="toolbar-select"><span>排序</span><SurfaceSelect id="vault-sort-order" ariaLabel="项目排序" value={sortOrder} onChange={setSortOrder} options={[{ value: "updated", label: "最近更新" }, { value: "name", label: "名称 A–Z" }]} compact /></div>
               </div>
             </div>

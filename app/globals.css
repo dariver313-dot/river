@@ -525,6 +525,7 @@ button:disabled {
 }
 
 .score-meter {
+  display: block;
   height: 6px;
   margin: 10px 0 8px;
   overflow: hidden;
@@ -537,6 +538,18 @@ button:disabled {
   width: 86%;
   height: 100%;
   background: var(--accent);
+}
+
+.score-meter.is-caution span {
+  background: #b7791f;
+}
+
+.score-meter.is-risk span {
+  background: var(--danger);
+}
+
+.score-meter.is-empty span {
+  background: var(--line-strong);
 }
 
 .score-status {
@@ -931,77 +944,13 @@ button:disabled {
   width: 110px;
 }
 
-.toolbar-select:nth-child(3) .surface-select.is-compact {
+.toolbar-category .surface-select.is-compact {
   width: 128px;
 }
 
 .toolbar-select .surface-select.is-compact .surface-select-options {
   max-height: 240px;
   overflow-y: auto;
-}
-
-.toolbar-filters {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  min-width: 0;
-}
-
-.toolbar-divider {
-  width: 1px;
-  height: 22px;
-  flex: 0 0 1px;
-  background: var(--line);
-}
-
-.filter-tabs {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.filter-tabs button,
-.sort-button {
-  min-height: 34px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--ink-soft);
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.filter-tabs button {
-  padding: 0 11px;
-}
-
-.filter-tabs button:hover,
-.sort-button:hover {
-  background: var(--surface-subtle);
-  color: var(--ink);
-}
-
-.filter-tabs button.is-selected {
-  border-color: #c9d6f4;
-  background: var(--accent-soft);
-  color: var(--accent-strong);
-}
-
-.filter-tabs button span {
-  margin-left: 5px;
-  color: var(--ink-faint);
-  font-variant-numeric: tabular-nums;
-}
-
-.filter-tabs-secondary button {
-  color: var(--ink-faint);
-}
-
-.sort-button {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 0 9px;
 }
 
 .list-heading,
@@ -3165,17 +3114,8 @@ button:disabled {
   }
 
   .toolbar-select .surface-select.is-compact,
-  .toolbar-select:nth-child(3) .surface-select.is-compact {
+  .toolbar-category .surface-select.is-compact {
     width: 100%;
-  }
-
-  .filter-tabs {
-    width: 100%;
-    overflow-x: auto;
-  }
-
-  .sort-button {
-    display: none;
   }
 
   .list-heading {

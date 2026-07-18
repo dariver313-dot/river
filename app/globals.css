@@ -3009,6 +3009,14 @@ button:disabled {
     width: 100%;
   }
 
+  .security-review-head {
+    flex-direction: column;
+  }
+
+  .security-review-head .secondary-button {
+    width: 100%;
+  }
+
   .security-strip {
     grid-template-columns: 1fr;
   }

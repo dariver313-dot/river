@@ -464,7 +464,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
   const selected = selectedDetail?.id === activeSelectedId ? selectedDetail : null;
   const selectedSummary = items.find((item) => item.id === activeSelectedId) ?? null;
   const listTitle = collection === "security"
-      ? "需处理的安全项"
+      ? "需要处理的账户"
       : space === "全部" ? (filter === "全部" ? "全部项目" : filter) : `${space} · ${filter === "全部" ? "全部项目" : filter}`;
   const viewerInitial = viewer.displayName.trim().slice(0, 1).toLocaleUpperCase() || "你";
   const isAdmin = viewer.role === "admin";
@@ -742,6 +742,24 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
     }
   }
 
+  function openAccountManagement() {
+    setPage("vault");
+    setCollection("all");
+    setSpace("全部");
+    setFilter("全部");
+    setSecurityFocus("all");
+    setMobileNav(false);
+  }
+
+  function openSecurityReview(focus: SecurityFocus = "all") {
+    setPage("vault");
+    setCollection("security");
+    setSpace("全部");
+    setFilter("全部");
+    setSecurityFocus(focus);
+    setMobileNav(false);
+  }
+
   async function createSystemUser(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setIsSaving(true);
@@ -883,12 +901,11 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
 
         <nav className="main-nav">
           <p className="nav-label">密码库</p>
-          <button className={`nav-item ${page === "vault" && collection === "all" && space === "全部" ? "is-active" : ""}`} aria-pressed={page === "vault" && collection === "all" && space === "全部"} onClick={() => { setPage("vault"); setCollection("all"); setSpace("全部"); setMobileNav(false); }}><KeyRound size={18} /><span>所有项目</span><span className="nav-count">{items.length}</span></button>
-          <button className={`nav-item ${page === "vault" && collection === "security" ? "is-active" : ""}`} aria-pressed={page === "vault" && collection === "security"} onClick={() => { setPage("vault"); setCollection("security"); setSpace("全部"); setSecurityFocus("all"); setMobileNav(false); }}><ShieldEllipsis size={18} /><span>安全检查</span><span className="nav-alert">{securityIssueCount}</span></button>
+          <button className={`nav-item ${page === "vault" ? "is-active" : ""}`} aria-pressed={page === "vault"} onClick={openAccountManagement}><KeyRound size={18} /><span>账户管理</span><span className="nav-count">{items.length}</span></button>
 
           {isAdmin && <><p className="nav-label nav-label-spaced">系统</p><button className={`nav-item ${page === "users" ? "is-active" : ""}`} aria-pressed={page === "users"} onClick={() => { setMobileNav(false); void openUserManagement(); }}><UserCog size={18} /><span>用户管理</span></button></>}
 
-          <p className="nav-label nav-label-spaced">账户</p>
+          <p className="nav-label nav-label-spaced">个人</p>
           <button className={`nav-item ${page === "profile" ? "is-active" : ""}`} aria-pressed={page === "profile"} onClick={() => { setPage("profile"); setMobileNav(false); }}><UserRound size={18} /><span>个人信息</span></button>
         </nav>
 
@@ -907,7 +924,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
       <main id="main-content" className="main-shell">
         <header className={`topbar ${page === "profile" ? "is-compact" : ""}`}>
           <button className="icon-button mobile-menu" onClick={() => setMobileNav(true)} aria-label="打开导航"><Menu size={21} /></button>
-          <div className="page-title"><h1>{page === "profile" ? "个人信息" : page === "users" ? "用户管理" : "密码库"}</h1><p>{page === "profile" ? "查看账户资料、系统角色与项目权限" : page === "users" ? "创建、调整、停用或删除系统用户" : "集中管理账号、密码与验证器代码"}</p></div>
+          <div className="page-title"><h1>{page === "profile" ? "个人信息" : page === "users" ? "用户管理" : "账户管理"}</h1><p>{page === "profile" ? "查看账户资料、系统角色与项目权限" : page === "users" ? "创建、调整、停用或删除系统用户" : "集中管理账号、密码与验证器代码；按风险筛选需处理账户"}</p></div>
           {page === "vault" && <div className="topbar-search">
             <Search size={18} aria-hidden="true" />
             <label className="sr-only" htmlFor="vault-search">搜索密码库</label>
@@ -926,22 +943,22 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
 
         {page === "users" ? <section className="users-page" aria-labelledby="users-page-title">
           <section className="users-panel" aria-labelledby="users-page-title"><div className="users-toolbar"><div className="users-toolbar-copy"><h2 id="users-page-title">系统用户</h2><span>{isUsersLoading ? "正在读取用户" : `显示 ${visibleSystemUsers.length} / ${systemUsers.length} 位用户`}</span></div><span className="users-toolbar-note">角色与访问状态</span></div>{isUsersLoading ? <p className="users-empty">正在读取系统用户。</p> : visibleSystemUsers.length > 0 ? <div className="system-user-table-wrap"><table className="system-user-table"><thead><tr><th scope="col">用户</th><th scope="col">角色</th><th scope="col">状态</th><th scope="col">创建时间</th><th scope="col">管理</th></tr></thead><tbody>{visibleSystemUsers.map((user) => <tr key={user.email}><td data-label="用户"><div className="system-user-identity"><strong title={user.email}>{user.email}</strong>{user.isCurrent && <span className="current-user">当前账户</span>}</div></td><td data-label="角色"><b className={`role-badge role-${user.role}`}>{user.role === "admin" ? "管理员" : "普通用户"}</b></td><td data-label="状态"><b className={`status-badge status-${user.status}`}>{user.status === "active" ? "已启用" : "已停用"}</b></td><td data-label="创建时间"><span className="system-user-created">{user.createdAt}</span></td><td data-label="管理">{user.isCurrent ? <span className="current-user">当前账户不可调整</span> : <div className="system-user-actions"><SurfaceSelect id={`role-${user.email}`} ariaLabel={`调整${user.email}的系统角色`} value={user.role} onChange={(role) => void updateSystemUser(user, { role })} options={[{ value: "user", label: "普通用户" }, { value: "admin", label: "管理员" }]} disabled={isSaving} compact /><button type="button" className="secondary-button" onClick={() => { const nextStatus = user.status === "active" ? "suspended" : "active"; if (nextStatus === "suspended" && !window.confirm(`确定停用 ${user.email} 吗？`)) return; void updateSystemUser(user, { status: nextStatus }); }} disabled={isSaving}>{user.status === "active" ? "停用" : "启用"}</button><button type="button" className="secondary-button user-delete-button" onClick={() => void deleteSystemUser(user)} disabled={isSaving}>删除</button></div>}</td></tr>)}</tbody></table></div> : <p className="users-empty">没有找到匹配的系统用户。</p>}</section>
-        </section> : page === "profile" ? <ProfileOverview viewer={viewer} viewerInitial={viewerInitial} isLoading={isLoading} securityScore={securityScore} securityIssueCount={securityIssueCount} onOpenSecurity={() => { setPage("vault"); setCollection("security"); setSpace("全部"); setSecurityFocus("all"); }} /> : <>
+        </section> : page === "profile" ? <ProfileOverview viewer={viewer} viewerInitial={viewerInitial} isLoading={isLoading} securityScore={securityScore} securityIssueCount={securityIssueCount} onOpenSecurity={openSecurityReview} /> : <>
         <section className="security-strip" aria-labelledby="security-heading">
           <div className="score-block">
           <div className="score-copy"><span>基础安全评分</span><strong id="security-heading">{securityScore}<small>/100</small></strong></div>
             <div className="score-meter" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={securityScore} aria-label={`安全评分 ${securityScore} 分`}><span style={{ width: `${securityScore}%` }} /></div>
             <p>{securityScore >= 80 ? <Check size={15} aria-hidden="true" /> : <AlertTriangle size={15} aria-hidden="true" />}{securityScore >= 80 ? "未发现需要处理的基础风险" : `${securityIssueCount} 条风险需要处理`}</p>
           </div>
-          <button className="risk-item" onClick={() => { setCollection("security"); setSpace("全部"); setSecurityFocus("weak_password"); }}><span className="risk-icon risk-danger"><AlertTriangle size={17} /></span><span><strong>{weakPasswordCount} 个密码过短</strong><small>建议立即更换</small></span><ChevronRight size={18} /></button>
-          <button className="risk-item" onClick={() => { setCollection("security"); setSpace("全部"); setSecurityFocus("reused_password"); }}><span className="risk-icon risk-warning"><ShieldEllipsis size={17} /></span><span><strong>{reusedPasswordCount} 个重复密码</strong><small>避免一个泄露影响多个账号</small></span><ChevronRight size={18} /></button>
-          <button className="risk-item" onClick={() => { setCollection("security"); setSpace("全部"); setSecurityFocus("missing_two_factor"); }}><span className="risk-icon risk-info"><Smartphone size={17} /></span><span><strong>{missingTwoFactorCount} 个未启用双重验证</strong><small>查看需处理项目</small></span><ChevronRight size={18} /></button>
+          <button className="risk-item" onClick={() => openSecurityReview("weak_password")}><span className="risk-icon risk-danger"><AlertTriangle size={17} /></span><span><strong>{weakPasswordCount} 个密码过短</strong><small>建议立即更换</small></span><ChevronRight size={18} /></button>
+          <button className="risk-item" onClick={() => openSecurityReview("reused_password")}><span className="risk-icon risk-warning"><ShieldEllipsis size={17} /></span><span><strong>{reusedPasswordCount} 个重复密码</strong><small>避免一个泄露影响多个账号</small></span><ChevronRight size={18} /></button>
+          <button className="risk-item" onClick={() => openSecurityReview("missing_two_factor")}><span className="risk-icon risk-info"><Smartphone size={17} /></span><span><strong>{missingTwoFactorCount} 个未启用双重验证</strong><small>查看需处理账户</small></span><ChevronRight size={18} /></button>
         </section>
 
         <div className="content-grid">
           <section className="vault-panel" aria-labelledby="vault-list-title">
             {collection === "security" && <div className="security-review" role="region" aria-labelledby="security-review-title">
-              <div className="security-review-head"><div><span className="eyebrow">安全检查</span><h2 id="security-review-title">{securityIssueCount > 0 ? `${securityIssueCount} 条基础风险待处理` : "基础检查已通过"}</h2><p>检查密码长度、重复使用情况和双重验证状态。</p></div><ShieldCheck size={21} aria-hidden="true" /></div>
+              <div className="security-review-head"><div><span className="eyebrow">账户安全检查</span><h2 id="security-review-title">{securityIssueCount > 0 ? `${securityIssueCount} 条基础风险待处理` : "基础检查已通过"}</h2><p>检查密码长度、重复使用情况和双重验证状态。</p></div><button type="button" className="secondary-button" onClick={openAccountManagement}>查看全部账户</button></div>
               <div className="security-focuses" role="group" aria-label="安全风险筛选">
                 <button className={securityFocus === "all" ? "is-selected" : ""} onClick={() => setSecurityFocus("all")}>全部 {securityIssueCount}</button>
                 <button className={securityFocus === "weak_password" ? "is-selected" : ""} onClick={() => setSecurityFocus("weak_password")}>密码过短 {weakPasswordCount}</button>

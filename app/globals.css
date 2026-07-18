@@ -971,6 +971,7 @@ button:disabled {
 .toolbar-select .surface-select.is-compact .surface-select-options {
   max-height: 240px;
   overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .list-heading,
@@ -1997,10 +1998,13 @@ button:disabled {
   z-index: 20;
   top: calc(100% + 6px);
   right: 0;
-  left: 0;
+  left: auto;
+  width: max-content;
   display: grid;
   gap: 2px;
-  min-width: max-content;
+  min-width: 100%;
+  max-width: min(280px, calc(100vw - 24px));
+  overflow-x: hidden;
   padding: 4px;
   border: 1px solid var(--line-strong);
   border-radius: 9px;
@@ -2009,6 +2013,7 @@ button:disabled {
 }
 
 .surface-select-options button {
+  min-width: 0;
   min-height: 32px;
   display: flex;
   align-items: center;
@@ -2022,6 +2027,12 @@ button:disabled {
   font-size: 12px;
   text-align: left;
   white-space: nowrap;
+}
+
+.surface-select-options button > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .surface-select-options button:hover,

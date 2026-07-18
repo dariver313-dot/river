@@ -207,7 +207,7 @@ async function ensureOwnedVault(email: string, kind: VaultKind): Promise<Accessi
   return { id, ownerEmail: email, kind, role: "owner" };
 }
 
-async function ensureSharedPublicVault(seedEmail: string): Promise<AccessibleVault> {
+async function findSharedPublicVault(): Promise<AccessibleVault | null> {
   const d1 = getD1();
   const configured = await d1.prepare(
     "SELECT value FROM app_settings WHERE key = 'shared_public_vault' LIMIT 1",
@@ -222,20 +222,38 @@ async function ensureSharedPublicVault(seedEmail: string): Promise<AccessibleVau
   const existing = await d1.prepare(
     "SELECT id, owner_email, kind FROM vaults WHERE kind = 'public' ORDER BY created_at ASC LIMIT 1",
   ).first<{ id: string; owner_email: string; kind: VaultKind }>();
-  const candidate = existing ?? await ensureOwnedVault(seedEmail, "public");
+  if (!existing) return null;
   await d1.prepare(
     "INSERT OR IGNORE INTO app_settings (key, value) VALUES ('shared_public_vault', ?)",
-  ).bind(candidate.id).run();
+  ).bind(existing.id).run();
 
   const selected = await d1.prepare(
     "SELECT value FROM app_settings WHERE key = 'shared_public_vault' LIMIT 1",
   ).first<{ value: string }>();
-  const vaultId = selected?.value ?? candidate.id;
+  const vaultId = selected?.value ?? existing.id;
   const vault = await d1.prepare(
     "SELECT id, owner_email, kind FROM vaults WHERE id = ? AND kind = 'public' LIMIT 1",
   ).bind(vaultId).first<{ id: string; owner_email: string; kind: VaultKind }>();
-  if (!vault) throw new Error("无法初始化公共密码库。");
+  if (!vault) return null;
   return { id: vault.id, ownerEmail: vault.owner_email, kind: vault.kind, role: "owner" };
+}
+
+async function ensureSharedPublicVault(adminEmail: string): Promise<AccessibleVault> {
+  const actor = await getActiveApplicationActor(adminEmail);
+  if (!actor || actor.role !== "admin") throw new Error("公共密码库只能由管理员初始化。");
+
+  const existing = await findSharedPublicVault();
+  if (existing) return existing;
+
+  const candidate = await ensureOwnedVault(adminEmail, "public");
+  const d1 = getD1();
+  await d1.prepare(
+    "INSERT OR IGNORE INTO app_settings (key, value) VALUES ('shared_public_vault', ?)",
+  ).bind(candidate.id).run();
+
+  const shared = await findSharedPublicVault();
+  if (!shared) throw new Error("无法初始化公共密码库。");
+  return shared;
 }
 
 async function accessibleVaults(email: string): Promise<AccessibleVault[]> {
@@ -243,19 +261,16 @@ async function accessibleVaults(email: string): Promise<AccessibleVault[]> {
   if (!actor) throw new Error("当前系统账户未启用。");
 
   const personalVault = await ensureOwnedVault(email, "personal");
-  await ensureSharedPublicVault(email);
-  const publicVaults = await getD1().prepare(
-    "SELECT id, owner_email, kind FROM vaults WHERE kind = 'public' ORDER BY created_at ASC",
-  ).all<{ id: string; owner_email: string; kind: VaultKind }>();
+  const publicVault = await findSharedPublicVault();
 
   return [
     personalVault,
-    ...publicVaults.results.map((vault) => ({
-      id: vault.id,
-      ownerEmail: vault.owner_email,
-      kind: vault.kind,
+    ...(publicVault ? [{
+      id: publicVault.id,
+      ownerEmail: publicVault.ownerEmail,
+      kind: publicVault.kind,
       role: (actor.role === "admin" ? "owner" : "viewer") as VaultRole,
-    })),
+    }] : []),
   ];
 }
 
@@ -506,7 +521,8 @@ export async function deleteVaultItem(email: string, itemId: string) {
 
 export async function listApprovalRequests(email: string): Promise<ApprovalRequest[]> {
   const d1 = getD1();
-  const publicVault = await ensureSharedPublicVault(email);
+  const publicVault = await findSharedPublicVault();
+  if (!publicVault) return [];
   const approvals: ApprovalRequest[] = [];
 
   {
@@ -537,7 +553,8 @@ export async function listApprovalRequests(email: string): Promise<ApprovalReque
 }
 
 export async function requestExportApproval(email: string) {
-  const vault = await ensureSharedPublicVault(email);
+  const vault = await findSharedPublicVault();
+  if (!vault) throw new Error("请先由管理员创建一项公共项目，再发起导出确认。");
   const d1 = getD1();
   if (await countActiveApplicationUsers() < 2) throw new Error("请先创建并启用另一位系统用户，再发起导出确认。");
 
@@ -567,7 +584,8 @@ export async function decideApproval(email: string, id: string, decision: "appro
   if (approval.requested_by === email) throw new Error("不能批准自己的导出确认。");
   if (Date.parse(approval.expires_at) <= Date.now()) throw new Error("该导出确认已过期。");
 
-  const publicVault = await ensureSharedPublicVault(email);
+  const publicVault = await findSharedPublicVault();
+  if (!publicVault) throw new Error("公共密码库尚未初始化。");
   if (publicVault.id !== approval.vault_id) throw new Error("该导出确认不属于当前公共项目。");
 
   const decided = await d1.prepare(
@@ -581,7 +599,8 @@ export async function decideApproval(email: string, id: string, decision: "appro
 
 export async function exportVaultData(email: string, approvalId: string) {
   const d1 = getD1();
-  const publicVault = await ensureSharedPublicVault(email);
+  const publicVault = await findSharedPublicVault();
+  if (!publicVault) throw new Error("公共密码库尚未初始化。");
   const data = await listVaultData(email);
   const consumed = await d1.prepare(
     `UPDATE approval_requests

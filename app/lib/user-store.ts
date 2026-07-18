@@ -95,26 +95,12 @@ function ensureConfiguredPrimaryAdmin() {
 
 export async function ensureApplicationUser(email: string): Promise<AppActor | null> {
   const normalized = normalizedEmail(email);
+  // 管理员身份必须来自部署环境的明确配置，不能把首位访问者当作默认管理员。
+  if (!configuredPrimaryAdminEmail()) return null;
+
   await ensureConfiguredPrimaryAdmin();
   const existing = await findUser(normalized);
-  if (existing) {
-    return existing.status === "active" ? { email: existing.email, role: existing.role } : null;
-  }
-
-  const d1 = getD1();
-  await d1.prepare(
-    "INSERT OR IGNORE INTO app_settings (key, value) VALUES ('initial_admin', ?)",
-  ).bind(normalized).run();
-  const bootstrap = await d1.prepare(
-    "SELECT value FROM app_settings WHERE key = 'initial_admin' LIMIT 1",
-  ).first<{ value: string }>();
-
-  if (bootstrap?.value !== normalized) return null;
-
-  await d1.prepare(
-    "INSERT OR IGNORE INTO app_users (email, role, status, created_by) VALUES (?, 'admin', 'active', ?)",
-  ).bind(normalized, normalized).run();
-  return { email: normalized, role: "admin" };
+  return existing?.status === "active" ? { email: existing.email, role: existing.role } : null;
 }
 
 export async function isActiveApplicationUser(email: string) {

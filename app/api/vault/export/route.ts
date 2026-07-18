@@ -1,4 +1,5 @@
 import { actorRequiredResponse, apiError, requireVaultActor } from "../../../lib/api-response";
+import { secureJson } from "../../../lib/response-security";
 import { exportVaultData } from "../../../lib/vault-store";
 
 export const dynamic = "force-dynamic";
@@ -8,13 +9,12 @@ export async function GET(request: Request) {
   if (!actor) return actorRequiredResponse();
 
   const approvalId = new URL(request.url).searchParams.get("approvalId") ?? "";
-  if (!approvalId) return Response.json({ error: "缺少批准请求。" }, { status: 400 });
+  if (!approvalId) return secureJson({ error: "缺少批准请求。" }, { status: 400 });
 
   try {
-    return Response.json(await exportVaultData(actor.email, approvalId), {
+    return secureJson(await exportVaultData(actor.email, approvalId), {
       headers: {
         "Content-Disposition": "attachment; filename=shouyao-vault-export.json",
-        "Cache-Control": "no-store",
       },
     });
   } catch (error) {

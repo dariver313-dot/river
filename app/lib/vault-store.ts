@@ -2,8 +2,8 @@ import { getD1 } from "../../db";
 import { parseTotpInput, toTotpConfig, type TotpConfig } from "./totp";
 import { countActiveApplicationUsers, getActiveApplicationActor } from "./user-store";
 import { decryptVaultPayload, encryptVaultPayload } from "./vault-crypto";
+import { assertVaultMoveAllowed, boundedText, isVaultSpace, type VaultSpace } from "./vault-policy";
 
-export type VaultSpace = "个人" | "公共";
 export type VaultItemType = "登录" | "卡片" | "安全笔记";
 export type VaultStrength = "安全" | "一般" | "风险";
 
@@ -24,6 +24,11 @@ export type VaultCredential = {
   totp?: TotpConfig;
   canEdit: boolean;
   sharedBy?: string;
+};
+
+export type VaultItemSummary = Omit<VaultCredential, "password" | "note" | "totp"> & {
+  passwordLength: number;
+  hasTotp: boolean;
 };
 
 export type ApprovalRequest = {
@@ -57,10 +62,6 @@ type VaultItemRow = {
   updated_at: string;
 };
 
-function isSpace(value: unknown): value is VaultSpace {
-  return value === "个人" || value === "公共";
-}
-
 function isItemType(value: unknown): value is VaultItemType {
   return value === "登录" || value === "卡片" || value === "安全笔记";
 }
@@ -87,12 +88,13 @@ function timeLabel(value: string) {
 }
 
 function storedPayload(input: Record<string, unknown>): StoredCredential {
-  const name = typeof input.name === "string" ? input.name.trim() : "";
-  const domain = typeof input.domain === "string" ? normalizeDomain(input.domain) : "";
-  const username = typeof input.username === "string" ? input.username.trim() : "";
-  const password = typeof input.password === "string" ? input.password : "";
+  const name = boundedText(input.name, "name", { required: true });
+  const domain = normalizeDomain(boundedText(input.domain, "domain", { required: true }));
+  const username = boundedText(input.username, "username", { required: true });
+  const password = boundedText(input.password, "password", { trim: false, required: true });
   const type = isItemType(input.type) ? input.type : "登录";
   const totpInput = typeof input.totpInput === "string" ? input.totpInput.trim() : "";
+  if (totpInput.length > 4_096) throw new Error("验证器配置内容过长。请粘贴 Setup Key 或完整二维码内容。");
   const totp = input.removeTotp === true
     ? undefined
     : totpInput
@@ -112,8 +114,8 @@ function storedPayload(input: Record<string, unknown>): StoredCredential {
     strength: strengthFor(password),
     twoFactor: Boolean(input.twoFactor) || Boolean(totp),
     favorite: Boolean(input.favorite),
-    brand: typeof input.brand === "string" && input.brand ? input.brand : "new",
-    note: typeof input.note === "string" ? input.note.slice(0, 1_000) : "",
+    brand: boundedText(input.brand, "brand") || "new",
+    note: boundedText(input.note, "note"),
     ...(totp ? { totp } : {}),
   };
 }
@@ -223,6 +225,26 @@ function toCredential(row: VaultItemRow, payload: StoredCredential, vault: Acces
   };
 }
 
+function toSummary(credential: VaultCredential): VaultItemSummary {
+  return {
+    id: credential.id,
+    name: credential.name,
+    domain: credential.domain,
+    username: credential.username,
+    type: credential.type,
+    group: credential.group,
+    updated: credential.updated,
+    strength: credential.strength,
+    twoFactor: credential.twoFactor,
+    favorite: credential.favorite,
+    brand: credential.brand,
+    canEdit: credential.canEdit,
+    ...(credential.sharedBy ? { sharedBy: credential.sharedBy } : {}),
+    passwordLength: credential.password.length,
+    hasTotp: Boolean(credential.totp),
+  };
+}
+
 export async function listVaultData(email: string) {
   const d1 = getD1();
   const vaultAccess = await accessibleVaults(email);
@@ -260,8 +282,13 @@ export async function listVaultData(email: string) {
   };
 }
 
+export async function listVaultSummaryData(email: string) {
+  const data = await listVaultData(email);
+  return { ...data, items: data.items.map(toSummary) };
+}
+
 export async function createVaultItem(email: string, input: Record<string, unknown>) {
-  const space = isSpace(input.group) ? input.group : "个人";
+  const space = isVaultSpace(input.group) ? input.group : "个人";
   const actor = await getActiveApplicationActor(email);
   if (!actor) throw new Error("当前系统账户未启用。");
   if (space === "公共" && actor.role !== "admin") {
@@ -298,12 +325,12 @@ export async function updateVaultItem(email: string, itemId: string, input: Reco
   const { item, vault } = await findItemAccess(email, itemId);
   if (!canWrite(vault.role)) throw new Error("你只有查看权限，无法编辑该项目。");
 
-  const nextSpace = isSpace(input.group) ? input.group : (vault.kind === "personal" ? "个人" : "公共");
-  if (nextSpace !== (vault.kind === "personal" ? "个人" : "公共") && (await getActiveApplicationActor(email))?.role !== "admin") {
-    throw new Error("只有管理员可以移入或移出公共空间。");
-  }
+  const currentSpace: VaultSpace = vault.kind === "personal" ? "个人" : "公共";
+  const nextSpace = isVaultSpace(input.group) ? input.group : currentSpace;
+  const actor = await getActiveApplicationActor(email);
+  assertVaultMoveAllowed(currentSpace, nextSpace, actor?.role === "admin");
 
-  const destination = nextSpace === (vault.kind === "personal" ? "个人" : "公共") ? vault : await vaultForSpace(email, nextSpace);
+  const destination = nextSpace === currentSpace ? vault : await vaultForSpace(email, nextSpace);
   const payload = storedPayload(input);
   const encrypted = await encryptVaultPayload(payload);
   const d1 = getD1();
@@ -311,9 +338,19 @@ export async function updateVaultItem(email: string, itemId: string, input: Reco
   await d1.prepare(
     "UPDATE vault_items SET vault_id = ?, ciphertext = ?, iv = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
   ).bind(destination.id, encrypted.ciphertext, encrypted.iv, item.id).run();
-  await writeAudit(destination.id, email, "item_updated", item.id);
+  await writeAudit(destination.id, email, nextSpace !== currentSpace ? "item_published_to_public" : "item_updated", item.id);
 
-  return { id: item.id, ...payload, group: nextSpace, updated: "刚刚更新", canEdit: nextSpace === "个人" || (await getActiveApplicationActor(email))?.role === "admin" } satisfies VaultCredential;
+  return { id: item.id, ...payload, group: nextSpace, updated: "刚刚更新", canEdit: nextSpace === "个人" || actor?.role === "admin" } satisfies VaultCredential;
+}
+
+export async function getVaultItem(email: string, itemId: string) {
+  const { item, vault } = await findItemAccess(email, itemId);
+  try {
+    const payload = await decryptVaultPayload<StoredCredential>({ ciphertext: item.ciphertext, iv: item.iv });
+    return toCredential(item, payload, vault);
+  } catch {
+    throw new Error("无法读取已加密的项目数据。");
+  }
 }
 
 export async function deleteVaultItem(email: string, itemId: string) {
@@ -362,6 +399,11 @@ export async function requestExportApproval(email: string) {
   const d1 = getD1();
   if (await countActiveApplicationUsers() < 2) throw new Error("请先创建并启用至少一位其他系统用户，再请求导出批准。");
 
+  const existing = await d1.prepare(
+    "SELECT id FROM approval_requests WHERE vault_id = ? AND requested_by = ? AND status = 'pending' LIMIT 1",
+  ).bind(vault.id, email).first<{ id: string }>();
+  if (existing) throw new Error("你已有一条等待处理的导出批准请求。请等待协作人处理或在 10 分钟后重试。");
+
   const id = crypto.randomUUID();
   const expiresAt = new Date(Date.now() + 10 * 60_000).toISOString();
   await d1.prepare(
@@ -405,7 +447,7 @@ export async function exportVaultData(email: string, approvalId: string) {
 }
 
 export async function recordVaultAudit(email: string, input: Record<string, unknown>) {
-  const action = input.action === "password_revealed" || input.action === "credential_copied" || input.action === "totp_copied" ? input.action : null;
+  const action = input.action === "password_revealed" || input.action === "totp_revealed" || input.action === "credential_copied" || input.action === "totp_copied" ? input.action : null;
   const itemId = typeof input.itemId === "string" ? input.itemId : "";
   if (!action || !itemId) return;
 

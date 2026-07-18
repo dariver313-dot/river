@@ -19,7 +19,7 @@ export async function generateMetadata(): Promise<Metadata> {
   const protocol = host.startsWith("localhost") || host.startsWith("127.0.0.1") ? "http" : "https";
   const origin = `${protocol}://${host}`;
   const title = "守钥｜个人账号与密码安全中心";
-  const description = "集中管理登录信息、卡片和安全笔记，及时发现账号风险。";
+  const description = "集中管理账号、密码与验证器代码，并通过权限与审计记录保护敏感信息。";
 
   return {
     title,

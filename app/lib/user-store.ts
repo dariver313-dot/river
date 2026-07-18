@@ -141,6 +141,18 @@ async function requireAdmin(actorEmail: string) {
   return actor;
 }
 
+async function writeSystemAudit(actorEmail: string, action: string, subjectEmail: string) {
+  const d1 = getD1();
+  const sharedVault = await d1.prepare(
+    "SELECT value FROM app_settings WHERE key = 'shared_public_vault' LIMIT 1",
+  ).first<{ value: string }>();
+  if (!sharedVault?.value) return;
+
+  await d1.prepare(
+    "INSERT INTO audit_events (id, vault_id, actor_email, action, item_id) VALUES (?, ?, ?, ?, ?)",
+  ).bind(crypto.randomUUID(), sharedVault.value, actorEmail, action, subjectEmail).run();
+}
+
 function inputRole(value: unknown): AppRole {
   if (value === "admin" || value === "user") return value;
   throw new Error("系统角色无效。");
@@ -175,6 +187,7 @@ export async function createManagedUser(actorEmail: string, input: Record<string
 
   const created = await findUser(email);
   if (!created) throw new Error("用户创建失败，请重试。");
+  await writeSystemAudit(actor.email, "system_user_created", email);
   return toManagedUser(created, actor.email);
 }
 
@@ -207,6 +220,8 @@ export async function updateManagedUser(actorEmail: string, input: Record<string
   await d1.prepare(
     "UPDATE app_users SET role = ?, status = ?, updated_at = CURRENT_TIMESTAMP WHERE email = ?",
   ).bind(nextRole, nextStatus, current.email).run();
+  if (nextRole !== current.role) await writeSystemAudit(actor.email, "system_user_role_changed", current.email);
+  if (nextStatus !== current.status) await writeSystemAudit(actor.email, "system_user_status_changed", current.email);
   const updated = await findUser(current.email);
   if (!updated) throw new Error("用户更新失败，请重试。");
   return toManagedUser(updated, actor.email);

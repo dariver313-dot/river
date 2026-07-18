@@ -821,6 +821,10 @@ button:disabled {
   font-size: 13px;
 }
 
+.empty-state-error > svg {
+  color: var(--warning);
+}
+
 .detail-panel {
   position: sticky;
   top: 18px;
@@ -1157,6 +1161,10 @@ button:disabled {
   color: var(--accent-strong);
 }
 
+.detail-empty[aria-live] > svg {
+  color: var(--warning);
+}
+
 .detail-empty h2 {
   margin: 14px 0 5px;
   color: var(--ink);
@@ -1304,9 +1312,34 @@ button:disabled {
   line-height: 1.6;
 }
 
+.access-setup-note {
+  display: grid;
+  grid-template-columns: 20px 1fr;
+  gap: 9px;
+  margin: 0;
+  padding: 11px 12px;
+  border: 1px solid #cadde8;
+  border-radius: var(--radius-sm);
+  background: #f5faff;
+  color: var(--info);
+}
+
+.access-setup-note strong {
+  color: var(--ink);
+  font-size: 11px;
+}
+
+.access-setup-note p {
+  margin: 3px 0 0;
+  color: var(--ink-soft);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.55;
+}
+
 .form-password {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-sm);
   overflow: hidden;
@@ -1335,6 +1368,13 @@ button:disabled {
   color: var(--accent-strong);
   font-size: 12px;
   font-weight: 650;
+}
+
+.form-password .password-visibility {
+  min-width: 44px;
+  width: 44px;
+  padding: 0;
+  border-left: 1px solid var(--line);
 }
 
 .totp-entry {

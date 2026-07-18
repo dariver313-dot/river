@@ -94,6 +94,7 @@ type ApprovalRequest = {
 };
 
 const filters = ["全部", "登录"] as const;
+const spaceFilters = ["全部", "个人", "公共"] as const;
 
 function emptyCredentialForm(): CredentialForm {
   return { name: "", domain: "", username: "", password: "", group: "个人", totpInput: "", removeTotp: false };
@@ -461,6 +462,11 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
       : space === "全部" ? (filter === "全部" ? "全部项目" : filter) : `${space} · ${filter === "全部" ? "全部项目" : filter}`;
   const viewerInitial = viewer.displayName.trim().slice(0, 1).toLocaleUpperCase() || "你";
   const isAdmin = viewer.role === "admin";
+  const spaceCounts: Record<Space, number> = {
+    全部: items.length,
+    个人: items.filter((item) => item.group === "个人").length,
+    公共: items.filter((item) => item.group === "公共").length,
+  };
   const weakPasswordCount = items.filter((item) => item.securityIssues.includes("weak_password")).length;
   const reusedPasswordCount = items.filter((item) => item.securityIssues.includes("reused_password")).length;
   const missingTwoFactorCount = items.filter((item) => item.securityIssues.includes("missing_two_factor")).length;
@@ -876,10 +882,6 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
 
           {isAdmin && <><p className="nav-label nav-label-spaced">系统</p><button className={`nav-item ${page === "users" ? "is-active" : ""}`} aria-pressed={page === "users"} onClick={() => { setMobileNav(false); void openUserManagement(); }}><UserCog size={18} /><span>用户管理</span></button></>}
 
-          <p className="nav-label nav-label-spaced">空间</p>
-          <button className={`nav-item ${page === "vault" && collection === "all" && space === "个人" ? "is-active" : ""}`} aria-pressed={page === "vault" && collection === "all" && space === "个人"} onClick={() => { setPage("vault"); setCollection("all"); setSpace("个人"); setMobileNav(false); }}><UserRound size={18} /><span>个人</span></button>
-          <button className={`nav-item ${page === "vault" && collection === "all" && space === "公共" ? "is-active" : ""}`} aria-pressed={page === "vault" && collection === "all" && space === "公共"} onClick={() => { setPage("vault"); setCollection("all"); setSpace("公共"); setMobileNav(false); }}><UsersRound size={18} /><span>公共</span></button>
-
           <p className="nav-label nav-label-spaced">账户</p>
           <button className={`nav-item ${page === "profile" ? "is-active" : ""}`} aria-pressed={page === "profile"} onClick={() => { setPage("profile"); setMobileNav(false); }}><UserRound size={18} /><span>个人信息</span></button>
         </nav>
@@ -937,10 +939,18 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
               </div>
             </div>}
             <div className="panel-toolbar">
-              <div className="filter-tabs" role="group" aria-label="项目类型筛选">
-                {filters.map((item) => (
-                  <button key={item} className={filter === item ? "is-selected" : ""} onClick={() => { setCollection("all"); setFilter(item); }}>{item}{item === "全部" && <span>{items.length}</span>}</button>
-                ))}
+              <div className="toolbar-filters">
+                <div className="filter-tabs" role="group" aria-label="项目范围筛选">
+                  {spaceFilters.map((item) => (
+                    <button key={item} className={space === item ? "is-selected" : ""} onClick={() => { setCollection("all"); setSpace(item); }}>{item}<span>{spaceCounts[item]}</span></button>
+                  ))}
+                </div>
+                <span className="toolbar-divider" aria-hidden="true" />
+                <div className="filter-tabs filter-tabs-secondary" role="group" aria-label="项目类型筛选">
+                  {filters.map((item) => (
+                    <button key={item} className={filter === item ? "is-selected" : ""} onClick={() => { setCollection("all"); setFilter(item); }}>{item}</button>
+                  ))}
+                </div>
               </div>
               <span className="sort-button">最近更新</span>
             </div>
@@ -957,7 +967,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
                 <div className="empty-state empty-state-error" role="alert"><AlertTriangle size={24} /><h3>无法读取密码库</h3><p>{loadError}</p><button className="secondary-button" onClick={() => setLoadAttempt((current) => current + 1)}>重新加载</button></div>
               ) : visibleItems.length > 0 ? visibleItems.map((item) => (
                 <button key={item.id} className={`vault-row ${activeSelectedId === item.id ? "is-selected" : ""}`} onClick={() => { setSelectedId(item.id); setRevealed(false); }} aria-pressed={activeSelectedId === item.id}>
-                  <div className="item-identity"><BrandMark item={item} /><span><strong>{item.name}</strong><small>{item.username}</small></span></div>
+                  <div className="item-identity"><BrandMark item={item} /><span><span className="item-name-line"><strong>{item.name}</strong><b className={`space-badge ${item.group === "公共" ? "is-public" : "is-personal"}`}>{item.group}</b></span><small>{item.username}</small></span></div>
                   <div>{collection === "security" ? <SecurityIssueBadges issues={item.securityIssues} /> : <StrengthBadge strength={item.strength} />}</div>
                   <span className="updated-at">{item.updated}</span>
                   <span className="row-chevron"><ChevronRight size={18} /></span>
@@ -971,12 +981,13 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
           {selected ? (
           <aside className="detail-panel" aria-labelledby="detail-title">
             <div className="detail-head">
-              <div className="detail-brand"><BrandMark item={selected} /><div><span className="eyebrow">{selected.type} · {selected.group}</span><h2 id="detail-title">{selected.name}</h2><a href={selected.domain.includes(".") ? `https://${selected.domain}` : "#"} target="_blank" rel="noreferrer">{selected.domain}<ArrowUpRight size={14} /></a></div></div>
+              <div className="detail-brand"><BrandMark item={selected} /><div><span className="eyebrow">{selected.type}</span><div className="detail-title-line"><h2 id="detail-title">{selected.name}</h2><b className={`space-badge ${selected.group === "公共" ? "is-public" : "is-personal"}`}>{selected.group}</b></div><a href={selected.domain.includes(".") ? `https://${selected.domain}` : "#"} target="_blank" rel="noreferrer">{selected.domain}<ArrowUpRight size={14} /></a></div></div>
               <div className="detail-actions">
-                <button className="icon-button" onClick={() => openEdit(selected)} aria-label={`编辑${selected.name}`} disabled={!selected.canEdit || isSaving}><Edit3 size={18} /></button>
-                <button className="icon-button destructive-icon" onClick={() => setDeleteTarget(selected)} aria-label={`删除${selected.name}`} disabled={!selected.canEdit || isSaving}><Trash2 size={18} /></button>
+                {selected.canEdit ? <><button className="icon-button" onClick={() => openEdit(selected)} aria-label={`编辑${selected.name}`} disabled={isSaving}><Edit3 size={18} /></button><button className="icon-button destructive-icon" onClick={() => setDeleteTarget(selected)} aria-label={`删除${selected.name}`} disabled={isSaving}><Trash2 size={18} /></button></> : <span className="detail-read-only" title="公共项目仅管理员可编辑或删除"><Eye size={15} aria-hidden="true" />只读</span>}
               </div>
             </div>
+
+            {selected.group === "公共" && <div className="public-access-note"><UsersRound size={17} aria-hidden="true" /><div><strong>所有已启用用户可查看</strong><span>{selected.canEdit ? "你是管理员，可管理该公共项目。" : "仅管理员可编辑或删除该公共项目。"}</span></div></div>}
 
             <div className="detail-section">
               <div className="field-label"><span>用户名</span></div>
@@ -986,7 +997,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
             <div className="detail-section">
               <div className="field-label"><span>密码</span><span className="password-meta">{selected.password.length} 位</span></div>
               <div className="secret-field password-field"><span className={revealed ? "password-revealed" : "password-masked"}>{revealed ? selected.password : "••••••••••••••••"}</span><button className="icon-button" onClick={() => { const next = !revealed; setRevealed(next); if (next) recordAudit("password_revealed", selected.id); }} aria-label={revealed ? "隐藏密码" : "显示密码"}>{revealed ? <EyeOff size={17} /> : <Eye size={17} />}</button><button className="icon-button" onClick={() => copyValue(selected.password, "密码", selected.id)} aria-label="复制密码"><Copy size={17} /></button></div>
-              <div className={`password-health health-${selected.strength}`}><span /><p><strong>密码{selected.strength}</strong>{selected.strength === "风险" ? "密码长度偏短，建议立即更换" : selected.strength === "一般" ? "建议增加长度后再使用" : "长度符合基础建议"}</p></div>
+              <div className="credential-statuses" aria-label="账号安全状态"><span className={`credential-status credential-status-${selected.strength}`}>{selected.strength === "安全" ? <ShieldCheck size={14} aria-hidden="true" /> : <AlertTriangle size={14} aria-hidden="true" />}密码{selected.strength}</span><span className={`credential-status ${selected.twoFactor ? "is-protected" : "is-unprotected"}`}>{selected.twoFactor ? <ShieldCheck size={14} aria-hidden="true" /> : <AlertTriangle size={14} aria-hidden="true" />}{selected.totp ? "验证器已保存" : selected.twoFactor ? "双重验证已开启" : "未开双重验证"}</span></div>
             </div>
 
             {selectedSummary && selectedSummary.securityIssues.length > 0 && <div className="detail-section security-findings">
@@ -995,15 +1006,6 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
             </div>}
 
             {selected.totp && <div className="detail-section"><AuthenticatorCode config={selected.totp} itemId={selected.id} onCopy={copyValue} onReveal={() => recordAudit("totp_revealed", selected.id)} /></div>}
-
-            <div className="detail-section security-detail">
-              <div className="field-label"><span>账号保护</span></div>
-              <div className={`protection-row ${selected.twoFactor ? "is-safe" : "needs-action"}`}>
-                {selected.twoFactor ? <ShieldCheck size={20} /> : <AlertTriangle size={20} />}
-                <div><strong>{selected.totp ? "验证器代码已配置" : selected.twoFactor ? "已开启外部双重验证" : "尚未开启双重验证"}</strong><span>{selected.totp ? "需要时手动显示并复制当前动态验证码" : selected.twoFactor ? "即使密码泄露，账号仍有额外保护" : "建议前往服务网站启用验证器"}</span></div>
-                <ChevronRight size={18} />
-              </div>
-            </div>
 
             <div className="detail-section">
               <div className="field-label"><span>备注</span></div>

@@ -314,6 +314,8 @@ function toSummary(credential: VaultCredential, securityIssues: SecurityIssue[] 
 
 export async function listVaultData(email: string) {
   const d1 = getD1();
+  const actor = await getActiveApplicationActor(email);
+  if (!actor) throw new Error("当前系统账户未启用。");
   const vaultAccess = await accessibleVaults(email);
   const items: Array<{ value: VaultCredential; updatedAt: string }> = [];
 
@@ -333,9 +335,18 @@ export async function listVaultData(email: string) {
   }
 
   const publicVaults = vaultAccess.filter((vault) => vault.kind === "public");
-  const auditResults = await Promise.all(publicVaults.map((vault) => d1.prepare(
-    "SELECT action, actor_email, item_id, created_at FROM audit_events WHERE vault_id = ? ORDER BY created_at DESC LIMIT 20",
-  ).bind(vault.id).all<{ action: string; actor_email: string; item_id: string | null; created_at: string }>()));
+  const auditActions = [
+    "item_created", "item_updated", "item_published_to_public", "item_deleted",
+    "system_user_created", "system_user_role_changed", "system_user_status_changed", "system_user_deleted",
+    "export_approval_requested", "export_approved", "export_rejected", "vault_exported",
+  ];
+  const auditResults = actor.role === "admin"
+    ? await Promise.all(publicVaults.map((vault) => d1.prepare(
+      `SELECT action, actor_email, item_id, created_at FROM audit_events
+       WHERE vault_id = ? AND action IN (${auditActions.map(() => "?").join(", ")})
+       ORDER BY created_at DESC LIMIT 20`,
+    ).bind(vault.id, ...auditActions).all<{ action: string; actor_email: string; item_id: string | null; created_at: string }>()))
+    : [];
   const audit = auditResults
     .flatMap((result) => result.results)
     .sort((left, right) => right.created_at.localeCompare(left.created_at))

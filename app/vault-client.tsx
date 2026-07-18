@@ -44,6 +44,7 @@ type Collection = "all" | "security";
 type Page = "vault" | "profile" | "users";
 type SecurityFocus = "all" | SecurityIssue;
 type SortOrder = "updated" | "name";
+type UserManagementTab = "users" | "audit";
 type VaultTotp = { label: string; config: TotpConfig };
 type TotpFormEntry = { id: string; label: string; value: string; config?: TotpConfig };
 
@@ -104,7 +105,7 @@ type VaultSecuritySummary = {
   score: number;
 };
 type SystemUserAction = { user: SystemUser; kind: "suspend" | "delete" };
-type PendingPublicEdit = { item: VaultItem; form: CredentialForm };
+type PendingPublicPublish = { item?: VaultItem; form: CredentialForm };
 
 const emptyPagination: Pagination = { page: 1, pageSize: 20, total: 0, pageCount: 1 };
 const emptySecuritySummary: VaultSecuritySummary = {
@@ -301,16 +302,29 @@ function ProfileOverview({
   isLoading,
   securityScore,
   securityIssueCount,
+  publicUserCount,
+  approvals,
+  isSaving,
   onOpenSecurity,
+  onRequestExportApproval,
+  onDecideExportApproval,
+  onDownloadApprovedExport,
 }: {
   viewer: Viewer;
   viewerInitial: string;
   isLoading: boolean;
   securityScore: number;
   securityIssueCount: number;
+  publicUserCount: number;
+  approvals: ApprovalRequest[];
+  isSaving: boolean;
   onOpenSecurity: () => void;
+  onRequestExportApproval: () => void;
+  onDecideExportApproval: (id: string, decision: "approved" | "rejected") => void;
+  onDownloadApprovedExport: (id: string) => void;
 }) {
   const isAdmin = viewer.role === "admin";
+  const hasOwnPendingExport = approvals.some((approval) => approval.isRequester && approval.status === "pending");
   return (
     <section className="profile-page" aria-labelledby="profile-page-title">
       <div className="profile-hero">
@@ -342,6 +356,29 @@ function ProfileOverview({
           <div className="profile-card-heading"><span className="profile-card-icon"><ShieldCheck size={18} /></span><div><h3 id="profile-security-title">账户安全</h3><p>基础安全与会话保护状态</p></div></div>
           <div className="profile-security-summary"><div><strong>{isLoading ? "—" : securityScore}</strong><span>基础安全评分</span></div><p>{isLoading ? "正在读取密码库状态" : securityIssueCount === 0 ? "未发现需要处理的基础风险" : `${securityIssueCount} 条基础风险待处理`}</p></div>
           <div className="profile-security-footer"><span>空闲 15 分钟后自动结束会话</span><button type="button" className="secondary-button" onClick={onOpenSecurity}>查看安全检查</button></div>
+        </section>
+
+        <section className="profile-card profile-data-security-card" aria-labelledby="profile-data-security-title">
+          <div className="profile-card-heading"><span className="profile-card-icon"><Archive size={18} /></span><div><h3 id="profile-data-security-title">数据与安全</h3><p>导出敏感数据前需要另一位已启用用户确认</p></div></div>
+          <aside className="data-security-note" role="note"><ShieldCheck size={17} aria-hidden="true" /><div><strong>双人确认导出</strong><span>导出文件包含你的个人项目和全部公共项目的明文信息；确认有效期为 10 分钟。</span></div></aside>
+          <div className="data-security-actions">
+            {publicUserCount > 1 && !hasOwnPendingExport && <button type="button" className="secondary-button" onClick={onRequestExportApproval} disabled={isSaving}><Archive size={17} />发起导出确认</button>}
+            {publicUserCount <= 1 && <p className="data-security-empty">请先由管理员创建并启用另一位系统用户，才能使用双人确认导出。</p>}
+            {hasOwnPendingExport && <p className="data-security-empty">你的导出确认正在等待另一位已启用用户批准。</p>}
+          </div>
+          <div className="data-security-requests">
+            <div className="data-security-section-title"><h4>当前导出请求</h4><span>{approvals.length > 0 ? `${approvals.length} 条` : "暂无"}</span></div>
+            {approvals.length > 0 ? <div className="approval-list">{approvals.map((approval) => (
+              <div className="approval-row" key={approval.id}>
+                <div><strong>{approval.isRequester ? "你的导出确认" : `${approval.requestedBy} 请求导出确认`}</strong><span>{approvalStatusLabel(approval)}</span></div>
+                <div className="approval-actions">
+                  {approval.canDecide && <><button type="button" className="secondary-button" onClick={() => onDecideExportApproval(approval.id, "rejected")} disabled={isSaving}>拒绝</button><button type="button" className="primary-button" onClick={() => onDecideExportApproval(approval.id, "approved")} disabled={isSaving}>批准</button></>}
+                  {approval.isRequester && approval.status === "approved" && <button type="button" className="primary-button" onClick={() => onDownloadApprovedExport(approval.id)} disabled={isSaving}><Archive size={17} />下载副本</button>}
+                  {approval.isRequester && approval.status === "pending" && <span className="approval-pending">等待另一位用户批准</span>}
+                </div>
+              </div>
+            ))}</div> : <p className="data-security-empty">当前没有需要处理的导出请求。</p>}
+          </div>
         </section>
       </div>
     </section>
@@ -528,9 +565,8 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
   const [revealed, setRevealed] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const [editingItem, setEditingItem] = useState<VaultItem | null>(null);
-  const [pendingPublicEdit, setPendingPublicEdit] = useState<PendingPublicEdit | null>(null);
+  const [pendingPublicPublish, setPendingPublicPublish] = useState<PendingPublicPublish | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<VaultItemSummary | null>(null);
-  const [showSharing, setShowSharing] = useState(false);
   const [showUserCreateDialog, setShowUserCreateDialog] = useState(false);
   const [systemUserAction, setSystemUserAction] = useState<SystemUserAction | null>(null);
   const [mobileNav, setMobileNav] = useState(false);
@@ -553,6 +589,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
   const [systemUsers, setSystemUsers] = useState<SystemUser[]>([]);
   const [systemUserEmail, setSystemUserEmail] = useState("");
   const [systemUserRole, setSystemUserRole] = useState<"admin" | "user">("user");
+  const [userManagementTab, setUserManagementTab] = useState<UserManagementTab>("users");
   const [userQuery, setUserQuery] = useState("");
   const [isUsersLoading, setIsUsersLoading] = useState(false);
   const [userLoadError, setUserLoadError] = useState<string | null>(null);
@@ -580,7 +617,12 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
       : space === "全部" ? "全部项目" : `${space}项目`;
   const viewerInitial = viewer.displayName.trim().slice(0, 1).toLocaleUpperCase() || "你";
   const isAdmin = viewer.role === "admin";
-  const activeDialogKey = pendingPublicEdit ? "publish" : deleteTarget ? "delete" : systemUserAction ? "system-user-action" : showUserCreateDialog ? "user-create" : showSharing ? "sharing" : editingItem ? "edit" : showAdd ? "add" : null;
+  const adminAudit = useMemo(() => audit.filter((entry) => [
+    "item_created", "item_updated", "item_published_to_public", "item_deleted",
+    "system_user_created", "system_user_role_changed", "system_user_status_changed", "system_user_deleted",
+    "export_approval_requested", "export_approved", "export_rejected", "vault_exported",
+  ].includes(entry.action)), [audit]);
+  const activeDialogKey = pendingPublicPublish ? "publish" : deleteTarget ? "delete" : systemUserAction ? "system-user-action" : showUserCreateDialog ? "user-create" : editingItem ? "edit" : showAdd ? "add" : null;
   const isModalOpen = activeDialogKey !== null;
   const { totalItems, weakPasswordCount, reusedPasswordCount, missingTwoFactorCount, securityIssueCount, score: securityScore } = securitySummary;
 
@@ -605,9 +647,8 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
       if (event.key === "Escape") {
         setShowAdd(false);
         setEditingItem(null);
-        setPendingPublicEdit(null);
+        setPendingPublicPublish(null);
         setDeleteTarget(null);
-        setShowSharing(false);
         setShowUserCreateDialog(false);
         setSystemUserAction(null);
         setMobileNav(false);
@@ -880,11 +921,19 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
 
   async function submitCredential(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (form.group === "公共") {
+      setPendingPublicPublish({ form });
+      return;
+    }
+    await saveCredential(form);
+  }
+
+  async function saveCredential(credential: CredentialForm) {
     setIsSaving(true);
     try {
       const payload = await requestVault<{ item: VaultItem }>("/api/vault/items", {
         method: "POST",
-        body: JSON.stringify({ ...form, type: "登录", twoFactor: false, favorite: false, brand: "new", note: "" }),
+        body: JSON.stringify({ ...credential, type: "登录", twoFactor: false, favorite: false, brand: "new", note: "" }),
       });
       setVaultCurrentPage(1);
       setSelectedId(payload.item.id);
@@ -893,7 +942,8 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
       setForm(emptyCredentialForm());
       setShowNewPassword(false);
       setShowAdd(false);
-      setToast("项目已加密保存");
+      setPendingPublicPublish(null);
+      setToast(credential.group === "公共" ? "公共项目已加密保存" : "项目已加密保存");
     } catch (error) {
       setToast(error instanceof Error ? error.message : "项目未保存。");
     } finally {
@@ -923,7 +973,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
     if (!editingItem) return;
 
     if (editingItem.group === "个人" && editForm.group === "公共") {
-      setPendingPublicEdit({ item: editingItem, form: editForm });
+      setPendingPublicPublish({ item: editingItem, form: editForm });
       return;
     }
 
@@ -934,7 +984,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
     try {
       await updateRemoteItem(item, changes);
       setEditingItem(null);
-      setPendingPublicEdit(null);
+      setPendingPublicPublish(null);
       setShowEditPassword(false);
       setToast("项目已加密更新");
     } catch (error) {
@@ -963,6 +1013,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
   function openUserManagement() {
     if (!isAdmin) return;
     setPage("users");
+    setUserManagementTab("users");
     setShowUserCreateDialog(false);
     setUserQuery("");
     setUserCurrentPage(1);
@@ -1014,6 +1065,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
       setUserQuery("");
       setUserCurrentPage(1);
       setUserLoadAttempt((current) => current + 1);
+      setLoadAttempt((current) => current + 1);
       setToast("系统用户已创建");
     } catch (error) {
       setToast(error instanceof Error ? error.message : "无法创建系统用户。");
@@ -1033,6 +1085,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
         setPublicUserCount((current) => Math.max(0, current + (changes.status === "active" ? 1 : -1)));
       }
       setUserLoadAttempt((current) => current + 1);
+      setLoadAttempt((current) => current + 1);
       setToast(changes.status ? (changes.status === "suspended" ? "用户已停用" : "用户已重新启用") : "用户角色已更新");
       return true;
     } catch (error) {
@@ -1050,6 +1103,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
       await requestVault("/api/users", { method: "DELETE", body: JSON.stringify({ email: user.email }) });
       if (user.status === "active") setPublicUserCount((current) => Math.max(0, current - 1));
       setUserLoadAttempt((current) => current + 1);
+      setLoadAttempt((current) => current + 1);
       setToast("系统用户已删除");
       return true;
     } catch (error) {
@@ -1111,6 +1165,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
     try {
       const payload = await requestVault<{ approval: ApprovalRequest }>("/api/vault/approvals", { method: "POST" });
       setApprovals((current) => [payload.approval, ...current.filter((approval) => approval.id !== payload.approval.id)]);
+      setLoadAttempt((current) => current + 1);
       setToast("已发起导出确认，有效期 10 分钟");
     } catch (error) {
       setToast(error instanceof Error ? error.message : "无法发起导出确认。");
@@ -1124,6 +1179,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
     try {
       await requestVault("/api/vault/approvals", { method: "PATCH", body: JSON.stringify({ id, decision }) });
       setApprovals((current) => current.filter((approval) => approval.id !== id));
+      setLoadAttempt((current) => current + 1);
       setToast(decision === "approved" ? "已批准导出确认" : "已拒绝导出确认");
     } catch (error) {
       setToast(error instanceof Error ? error.message : "无法处理该请求。");
@@ -1155,6 +1211,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
       link.remove();
       window.setTimeout(() => URL.revokeObjectURL(url), 0);
       setApprovals((current) => current.filter((approval) => approval.id !== approvalId));
+      setLoadAttempt((current) => current + 1);
       setToast("已下载明文副本，请安全保管并及时删除");
     } catch (error) {
       setToast(error instanceof Error ? error.message : "密码库未导出。");
@@ -1193,37 +1250,41 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
         <div className="account-menu">
           <span className="avatar" aria-hidden="true">{viewerInitial}</span>
           <div><strong title={viewer.displayName}>{viewer.displayName}</strong><span title={viewer.email}>{viewer.role === "admin" ? "管理员 · " : "普通用户 · "}{viewer.email}</span></div>
-          <button className="icon-button dark-icon" onClick={() => setShowSharing(true)} aria-label="公共项目说明"><UsersRound size={18} /></button>
         </div>
       </aside>
 
       <main id="main-content" className="main-shell">
         <header className={`topbar ${page === "profile" ? "is-compact" : ""}`}>
           <button className="icon-button mobile-menu" onClick={() => setMobileNav(true)} aria-label="打开导航"><Menu size={21} /></button>
-          <div className="page-title"><h1>{page === "profile" ? "个人信息" : page === "users" ? "用户管理" : "账户管理"}</h1><p>{page === "profile" ? "查看账户资料、系统角色与项目权限" : page === "users" ? "创建、调整、停用或删除系统用户" : "集中管理账号、密码与验证器代码；按风险筛选需处理账户"}</p></div>
+          <div className="page-title"><h1>{page === "profile" ? "个人信息" : page === "users" ? userManagementTab === "audit" ? "操作审计" : "用户管理" : "账户管理"}</h1><p>{page === "profile" ? "查看账户资料、系统角色、项目权限与数据安全" : page === "users" ? userManagementTab === "audit" ? "查看公共项目、系统用户与数据导出的管理操作" : "创建、调整、停用或删除系统用户" : "集中管理账号、密码与验证器代码；按风险筛选需处理账户"}</p></div>
           {page === "vault" && <div className="topbar-search">
             <Search size={18} aria-hidden="true" />
             <label className="sr-only" htmlFor="vault-search">搜索密码库</label>
             <input ref={searchInputRef} id="vault-search" value={query} onChange={(event) => { setQuery(event.target.value); setVaultCurrentPage(1); }} placeholder="搜索账号、网址或分类" />
             <kbd>⌘ K</kbd>
           </div>}
-          {page === "users" && <div className="topbar-search topbar-search-simple">
+          {page === "users" && userManagementTab === "users" && <div className="topbar-search topbar-search-simple">
             <Search size={18} aria-hidden="true" />
             <label className="sr-only" htmlFor="user-search">搜索系统用户</label>
             <input id="user-search" value={userQuery} onChange={(event) => { setUserQuery(event.target.value); setUserCurrentPage(1); }} placeholder="搜索用户邮箱" />
           </div>}
           <button className="secondary-button lock-button" onClick={endSession}><LogOut size={17} />结束会话</button>
           {page === "vault" && <button className="primary-button" onClick={() => setShowAdd(true)} disabled={isLoading || isSaving}><Plus size={18} />新建项目</button>}
-          {page === "users" && <button className="primary-button user-add-button" onClick={() => setShowUserCreateDialog(true)} disabled={isSaving}><Plus size={18} />添加用户</button>}
+          {page === "users" && userManagementTab === "users" && <button className="primary-button user-add-button" onClick={() => setShowUserCreateDialog(true)} disabled={isSaving}><Plus size={18} />添加用户</button>}
         </header>
 
         {page === "users" ? <section className="users-page" aria-labelledby="users-page-title">
-          <section className="users-panel" aria-labelledby="users-page-title" aria-busy={isUsersLoading}>
-            <div className="users-toolbar"><div className="users-toolbar-copy"><h2 id="users-page-title">系统用户</h2><span>{isUsersLoading ? "正在读取用户" : `本页 ${systemUsers.length} 位，共 ${userPagination.total} 位用户`}</span></div><span className="users-toolbar-note">角色与访问状态</span></div>
-            {isUsersLoading ? <p className="users-empty">正在读取系统用户。</p> : userLoadError ? <div className="users-empty users-load-error" role="alert"><AlertTriangle size={18} aria-hidden="true" /><span>{userLoadError}</span><button type="button" className="secondary-button" onClick={() => setUserLoadAttempt((current) => current + 1)}>重新加载</button></div> : systemUsers.length > 0 ? <div className="system-user-table-wrap"><table className="system-user-table"><thead><tr><th scope="col">用户</th><th scope="col">角色</th><th scope="col">状态</th><th scope="col">创建时间</th><th scope="col">管理</th></tr></thead><tbody>{systemUsers.map((user) => <tr key={user.email}><td data-label="用户"><div className="system-user-identity"><strong title={user.email}>{user.email}</strong>{user.isCurrent && <span className="current-user">当前账户</span>}</div></td><td data-label="角色"><b className={`role-badge role-${user.role}`}>{user.role === "admin" ? "管理员" : "普通用户"}</b></td><td data-label="状态"><b className={`status-badge status-${user.status}`}>{user.status === "active" ? "已启用" : "已停用"}</b></td><td data-label="创建时间"><span className="system-user-created">{user.createdAt}</span></td><td data-label="管理">{user.isCurrent ? <span className="current-user">当前账户不可调整</span> : <div className="system-user-actions"><SurfaceSelect id={`role-${user.email}`} ariaLabel={`调整${user.email}的系统角色`} value={user.role} onChange={(role) => void updateSystemUser(user, { role })} options={[{ value: "user", label: "普通用户" }, { value: "admin", label: "管理员" }]} disabled={isSaving} compact /><button type="button" className="secondary-button" onClick={() => user.status === "active" ? setSystemUserAction({ user, kind: "suspend" }) : void updateSystemUser(user, { status: "active" })} disabled={isSaving}>{user.status === "active" ? "停用" : "启用"}</button><button type="button" className="secondary-button user-delete-button" onClick={() => setSystemUserAction({ user, kind: "delete" })} disabled={isSaving}>删除</button></div>}</td></tr>)}</tbody></table></div> : <p className="users-empty">没有找到匹配的系统用户。</p>}
-            {!isUsersLoading && <PaginationControls pagination={userPagination} onChange={setUserCurrentPage} label="系统用户" />}
+          <section className="users-panel" aria-labelledby="users-page-title" aria-busy={userManagementTab === "users" ? isUsersLoading : isLoading}>
+            <div className="users-toolbar">
+              <div className="users-toolbar-copy"><h2 id="users-page-title">{userManagementTab === "users" ? "系统用户" : "操作审计"}</h2><span>{userManagementTab === "users" ? isUsersLoading ? "正在读取用户" : `本页 ${systemUsers.length} 位，共 ${userPagination.total} 位用户` : `最近 ${adminAudit.length} 条管理记录`}</span></div>
+              <div className="users-toolbar-actions"><div className="users-tabs" role="tablist" aria-label="用户管理内容"><button type="button" role="tab" aria-selected={userManagementTab === "users"} className={userManagementTab === "users" ? "is-active" : ""} onClick={() => setUserManagementTab("users")}>系统用户</button><button type="button" role="tab" aria-selected={userManagementTab === "audit"} className={userManagementTab === "audit" ? "is-active" : ""} onClick={() => setUserManagementTab("audit")}>操作审计</button></div></div>
+            </div>
+            {userManagementTab === "users" ? <>
+              {isUsersLoading ? <p className="users-empty">正在读取系统用户。</p> : userLoadError ? <div className="users-empty users-load-error" role="alert"><AlertTriangle size={18} aria-hidden="true" /><span>{userLoadError}</span><button type="button" className="secondary-button" onClick={() => setUserLoadAttempt((current) => current + 1)}>重新加载</button></div> : systemUsers.length > 0 ? <div className="system-user-table-wrap"><table className="system-user-table"><thead><tr><th scope="col">用户</th><th scope="col">角色</th><th scope="col">状态</th><th scope="col">创建时间</th><th scope="col">管理</th></tr></thead><tbody>{systemUsers.map((user) => <tr key={user.email}><td data-label="用户"><div className="system-user-identity"><strong title={user.email}>{user.email}</strong>{user.isCurrent && <span className="current-user">当前账户</span>}</div></td><td data-label="角色"><b className={`role-badge role-${user.role}`}>{user.role === "admin" ? "管理员" : "普通用户"}</b></td><td data-label="状态"><b className={`status-badge status-${user.status}`}>{user.status === "active" ? "已启用" : "已停用"}</b></td><td data-label="创建时间"><span className="system-user-created">{user.createdAt}</span></td><td data-label="管理">{user.isCurrent ? <span className="current-user">当前账户不可调整</span> : <div className="system-user-actions"><SurfaceSelect id={`role-${user.email}`} ariaLabel={`调整${user.email}的系统角色`} value={user.role} onChange={(role) => void updateSystemUser(user, { role })} options={[{ value: "user", label: "普通用户" }, { value: "admin", label: "管理员" }]} disabled={isSaving} compact /><button type="button" className="secondary-button" onClick={() => user.status === "active" ? setSystemUserAction({ user, kind: "suspend" }) : void updateSystemUser(user, { status: "active" })} disabled={isSaving}>{user.status === "active" ? "停用" : "启用"}</button><button type="button" className="secondary-button user-delete-button" onClick={() => setSystemUserAction({ user, kind: "delete" })} disabled={isSaving}>删除</button></div>}</td></tr>)}</tbody></table></div> : <p className="users-empty">没有找到匹配的系统用户。</p>}
+              {!isUsersLoading && <PaginationControls pagination={userPagination} onChange={setUserCurrentPage} label="系统用户" />}
+            </> : <section className="audit-panel" aria-labelledby="audit-panel-title"><div className="audit-panel-header"><div><h3 id="audit-panel-title">管理操作记录</h3><p>仅显示公共项目变更、系统用户管理与数据导出审批；不会展示密码或验证码的查看、复制记录。</p></div><span>最近 20 条</span></div>{isLoading ? <p className="users-empty">正在读取操作审计。</p> : adminAudit.length > 0 ? <ul className="audit-list audit-list-panel">{adminAudit.map((entry, index) => <li key={`${entry.action}-${entry.createdAt}-${index}`}><span><strong>{entry.actorEmail}</strong>{auditLabel(entry.action)}</span><time>{entry.createdAt}</time></li>)}</ul> : <p className="users-empty">暂无公共项目、系统用户或导出相关的管理记录。</p>}</section>}
           </section>
-        </section> : page === "profile" ? <ProfileOverview viewer={viewer} viewerInitial={viewerInitial} isLoading={isLoading} securityScore={securityScore} securityIssueCount={securityIssueCount} onOpenSecurity={openSecurityReview} /> : <>
+        </section> : page === "profile" ? <ProfileOverview viewer={viewer} viewerInitial={viewerInitial} isLoading={isLoading} securityScore={securityScore} securityIssueCount={securityIssueCount} publicUserCount={publicUserCount} approvals={approvals} isSaving={isSaving} onOpenSecurity={openSecurityReview} onRequestExportApproval={() => void requestExportApproval()} onDecideExportApproval={(id, decision) => void decideExportApproval(id, decision)} onDownloadApprovedExport={(id) => void downloadApprovedExport(id)} /> : <>
         <section className="security-strip" aria-labelledby="security-heading">
           {securityIssueCount > 0 ? <button type="button" className="risk-item" onClick={() => openSecurityReview()} aria-label="查看全部账户安全检查结果">
             <span className="risk-icon risk-danger"><AlertTriangle size={17} /></span><span><strong id="security-heading">基础安全评分 {securityScore}/100</strong><small>{securityIssueCount} 条基础风险待处理</small></span><ChevronRight size={18} aria-hidden="true" />
@@ -1344,7 +1405,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
               <label>用户名<input required value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} placeholder="name@example.com" autoComplete="username" /></label>
               <label>密码<div className="form-password"><input required type={showNewPassword ? "text" : "password"} value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} placeholder="输入或生成强密码" autoComplete="new-password" /><button type="button" className="password-visibility" onClick={() => setShowNewPassword((current) => !current)} aria-label={showNewPassword ? "隐藏输入的密码" : "显示输入的密码"}>{showNewPassword ? <EyeOff size={16} /> : <Eye size={16} />}</button><button type="button" onClick={generatePassword}><WandSparkles size={16} />生成</button></div><small>建议至少 14 位，并混合字母、数字和符号。</small></label>
               <TotpEntryFields entries={form.totpEntries} formId="add" isReading={isReadingTotp} onChange={(id, changes) => updateTotpEntry("add", id, changes)} onAdd={() => addTotpEntry("add")} onRemove={(id) => removeTotpEntry("add", id)} onReadImage={(event, id) => void importTotpFromImage(event, "add", id)} />
-              <div className="field-control"><span>可见范围</span><SurfaceSelect id="add-space" ariaLabel="可见范围" value={form.group} onChange={(group) => setForm({ ...form, group })} options={[{ value: "个人", label: "个人项目" }, ...(isAdmin ? [{ value: "公共", label: "公共项目" }] : [])]} /></div>
+              <div className="field-control"><span>可见范围</span><SurfaceSelect id="add-space" ariaLabel="可见范围" value={form.group} onChange={(group) => setForm({ ...form, group })} options={[{ value: "个人", label: "个人项目" }, ...(isAdmin ? [{ value: "公共", label: "公共项目" }] : [])]} />{form.group === "公共" && <p className="inline-access-note"><UsersRound size={16} aria-hidden="true" /><span>所有已启用用户都可查看账号、密码和验证码；保存前会再次确认发布。</span></p>}</div>
               </div>
               <footer className="modal-footer"><button type="button" className="secondary-button" onClick={() => setShowAdd(false)} disabled={isSaving}>取消</button><button type="submit" className="primary-button" disabled={isSaving}><Plus size={17} />{isSaving ? "正在保存" : "添加项目"}</button></footer>
             </form>
@@ -1364,7 +1425,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
               <label>用户名<input required value={editForm.username} onChange={(event) => setEditForm({ ...editForm, username: event.target.value })} autoComplete="username" /></label>
               <label>密码<div className="form-password"><input required type={showEditPassword ? "text" : "password"} value={editForm.password} onChange={(event) => setEditForm({ ...editForm, password: event.target.value })} autoComplete="new-password" /><button type="button" className="password-visibility" onClick={() => setShowEditPassword((current) => !current)} aria-label={showEditPassword ? "隐藏输入的密码" : "显示输入的密码"}>{showEditPassword ? <EyeOff size={16} /> : <Eye size={16} />}</button><button type="button" onClick={generateEditPassword}><WandSparkles size={16} />生成</button></div><small>建议至少 14 位，并混合字母、数字和符号。</small></label>
               <TotpEntryFields entries={editForm.totpEntries} formId="edit" isReading={isReadingTotp} onChange={(id, changes) => updateTotpEntry("edit", id, changes)} onAdd={() => addTotpEntry("edit")} onRemove={(id) => removeTotpEntry("edit", id)} onReadImage={(event, id) => void importTotpFromImage(event, "edit", id)} />
-              <div className="field-control"><span>可见范围</span><SurfaceSelect id="edit-space" ariaLabel="可见范围" value={editForm.group} onChange={(group) => setEditForm({ ...editForm, group })} options={[{ value: "个人", label: "个人项目" }, ...(isAdmin ? [{ value: "公共", label: "公共项目" }] : [])]} disabled={editingItem.group === "公共"} />{editingItem.group === "公共" && <small>公共项目保持为公共范围，避免误移除所有用户的查看权限。</small>}</div>
+              <div className="field-control"><span>可见范围</span><SurfaceSelect id="edit-space" ariaLabel="可见范围" value={editForm.group} onChange={(group) => setEditForm({ ...editForm, group })} options={[{ value: "个人", label: "个人项目" }, ...(isAdmin ? [{ value: "公共", label: "公共项目" }] : [])]} disabled={editingItem.group === "公共"} />{editingItem.group === "公共" ? <p className="inline-access-note"><UsersRound size={16} aria-hidden="true" /><span>所有已启用用户都可查看该项目；公共范围由管理员维护。</span></p> : null}</div>
               </div>
               <footer className="modal-footer"><button type="button" className="secondary-button" onClick={() => setEditingItem(null)} disabled={isSaving}>取消</button><button type="submit" className="primary-button" disabled={isSaving}><Check size={17} />{isSaving ? "正在保存" : "保存变更"}</button></footer>
             </form>
@@ -1372,16 +1433,16 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
         </div>
       )}
 
-      {pendingPublicEdit && (
+      {pendingPublicPublish && (
         <div className="modal-layer" role="presentation">
           <section className="modal user-create-modal" role="dialog" aria-modal="true" aria-labelledby="publish-public-title">
-            <header><div><span className="modal-icon"><UsersRound size={20} /></span><div><h2 id="publish-public-title">发布为公共项目？</h2><p>发布后将由所有已启用用户查看</p></div></div><button className="icon-button" type="button" onClick={() => setPendingPublicEdit(null)} aria-label="关闭公共发布确认"><X size={20} /></button></header>
-            <form className="modal-form" onSubmit={(event) => { event.preventDefault(); void saveEditedCredential(pendingPublicEdit.item, pendingPublicEdit.form); }}>
+            <header><div><span className="modal-icon"><UsersRound size={20} /></span><div><h2 id="publish-public-title">{pendingPublicPublish.item ? "发布为公共项目？" : "新建公共项目？"}</h2><p>保存后将由所有已启用用户查看</p></div></div><button className="icon-button" type="button" onClick={() => setPendingPublicPublish(null)} aria-label="关闭公共发布确认"><X size={20} /></button></header>
+            <form className="modal-form" onSubmit={(event) => { event.preventDefault(); if (pendingPublicPublish.item) void saveEditedCredential(pendingPublicPublish.item, pendingPublicPublish.form); else void saveCredential(pendingPublicPublish.form); }}>
               <div className="modal-body">
-                <div className="delete-summary publish-summary"><strong>{pendingPublicEdit.form.name}</strong><span>{pendingPublicEdit.form.username} · 公共项目</span></div>
+                <div className="delete-summary publish-summary"><strong>{pendingPublicPublish.form.name}</strong><span>{pendingPublicPublish.form.username} · 公共项目</span></div>
                 <p className="delete-description">所有已启用的系统用户都能查看这条项目的账号、密码和验证器代码；只有管理员可以继续编辑或删除。</p>
               </div>
-              <footer className="modal-footer"><button type="button" className="secondary-button" onClick={() => setPendingPublicEdit(null)} disabled={isSaving}>返回编辑</button><button type="submit" className="primary-button" disabled={isSaving}><UsersRound size={17} />{isSaving ? "正在发布" : "确认发布"}</button></footer>
+              <footer className="modal-footer"><button type="button" className="secondary-button" onClick={() => setPendingPublicPublish(null)} disabled={isSaving}>返回编辑</button><button type="submit" className="primary-button" disabled={isSaving}><UsersRound size={17} />{isSaving ? "正在发布" : "确认发布"}</button></footer>
             </form>
           </section>
         </div>
@@ -1429,42 +1490,6 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
               </div>
               <footer className="modal-footer"><button type="button" className="secondary-button" onClick={() => setSystemUserAction(null)} disabled={isSaving}>取消</button><button type="submit" className="danger-button" disabled={isSaving}>{systemUserAction.kind === "delete" ? <Trash2 size={17} /> : <UserCog size={17} />}{isSaving ? "正在处理" : systemUserAction.kind === "delete" ? "删除用户" : "确认停用"}</button></footer>
             </form>
-          </section>
-        </div>
-      )}
-
-      {showSharing && (
-        <div className="modal-layer" role="presentation">
-          <section className="modal sharing-modal" role="dialog" aria-modal="true" aria-labelledby="sharing-title">
-            <header><div><span className="modal-icon"><UsersRound size={20} /></span><div><h2 id="sharing-title">公共项目权限</h2><p>已启用用户可查看，管理员可维护</p></div></div><button className="icon-button" onClick={() => setShowSharing(false)} aria-label="关闭公共项目说明"><X size={20} /></button></header>
-            <div className="modal-body sharing-modal-body">
-              <aside className="sharing-guide" role="note"><ShieldCheck size={18} aria-hidden="true" /><div><div className="sharing-guide-title"><strong>公共项目规则</strong><span>{publicUserCount} 位已启用成员</span></div><p>所有已启用用户均可查看账号、密码和验证码；仅管理员可新建、编辑与删除。</p></div></aside>
-              <div className="sharing-section">
-                <div className="sharing-section-title"><h3>系统用户</h3><span>{publicUserCount} 位已启用</span></div>
-                <p className="sharing-member-note"><UserCog size={16} aria-hidden="true" />添加用户后，还需在站点访问控制中授权该邮箱。</p>
-                {isAdmin ? <button type="button" className="secondary-button" onClick={() => { setShowSharing(false); openUserManagement(); }}><UserCog size={17} />管理系统用户</button> : <p className="sharing-empty">系统用户与公共项目权限由管理员维护。</p>}
-              </div>
-              <div className="sharing-section approval-section">
-                <div className="sharing-section-title"><h3>双人确认导出</h3><span>有效期 10 分钟</span></div>
-                <p className="form-note">导出的文件包含明文密码，其中包括你的个人项目和全部公共项目。另一位已启用用户批准后才能下载。</p>
-                {publicUserCount > 1 && !approvals.some((approval) => approval.isRequester && approval.status === "pending") && <button type="button" className="secondary-button" onClick={requestExportApproval} disabled={isSaving}><Archive size={17} />发起导出确认</button>}
-                {publicUserCount <= 1 && <p className="sharing-empty">请先创建并启用另一位系统用户，才能使用双人确认导出。</p>}
-                {approvals.length > 0 ? <div className="approval-list">{approvals.map((approval) => (
-                  <div className="approval-row" key={approval.id}>
-                    <div><strong>{approval.isRequester ? "你的导出确认" : `${approval.requestedBy} 请求导出确认`}</strong><span>{approvalStatusLabel(approval)}</span></div>
-                    <div className="approval-actions">
-                      {approval.canDecide && <><button type="button" className="secondary-button" onClick={() => decideExportApproval(approval.id, "rejected")} disabled={isSaving}>拒绝</button><button type="button" className="primary-button" onClick={() => decideExportApproval(approval.id, "approved")} disabled={isSaving}>批准</button></>}
-                      {approval.isRequester && approval.status === "approved" && <button type="button" className="primary-button" onClick={() => downloadApprovedExport(approval.id)} disabled={isSaving}><Archive size={17} />下载副本</button>}
-                      {approval.isRequester && approval.status === "pending" && <span className="approval-pending">等待另一位已启用用户批准</span>}
-                    </div>
-                  </div>
-                ))}</div> : <p className="sharing-empty">没有待处理的导出确认。</p>}
-              </div>
-              <div className="sharing-section audit-section">
-                <div className="sharing-section-title"><h3>最近操作记录</h3><span>最近 5 条</span></div>
-                {audit.length > 0 ? <ul className="audit-list">{audit.slice(0, 5).map((entry, index) => <li key={`${entry.action}-${entry.createdAt}-${index}`}><span><strong>{entry.actorEmail}</strong>{auditLabel(entry.action)}</span><time>{entry.createdAt}</time></li>)}</ul> : <p className="sharing-empty">公共项目的关键操作会显示在这里。</p>}
-              </div>
-            </div>
           </section>
         </div>
       )}

@@ -1498,6 +1498,13 @@ button:disabled {
   font-size: 12px;
 }
 
+.sharing-guide p {
+  margin: 6px 0 0;
+  color: var(--ink-soft);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
 .sharing-guide ol {
   display: grid;
   gap: 3px;

@@ -1,6 +1,6 @@
 import { getD1 } from "../../db";
 import { parseTotpInput, toTotpConfig, type TotpConfig } from "./totp";
-import { isActiveApplicationUser } from "./user-store";
+import { countActiveApplicationUsers, getActiveApplicationActor } from "./user-store";
 import { decryptVaultPayload, encryptVaultPayload } from "./vault-crypto";
 
 export type VaultSpace = "个人" | "公共";
@@ -145,31 +145,60 @@ async function ensureOwnedVault(email: string, kind: VaultKind): Promise<Accessi
   return { id, ownerEmail: email, kind, role: "owner" };
 }
 
-async function ensureUserVaults(email: string) {
-  await Promise.all([ensureOwnedVault(email, "personal"), ensureOwnedVault(email, "public")]);
+async function ensureSharedPublicVault(seedEmail: string): Promise<AccessibleVault> {
+  const d1 = getD1();
+  const configured = await d1.prepare(
+    "SELECT value FROM app_settings WHERE key = 'shared_public_vault' LIMIT 1",
+  ).first<{ value: string }>();
+  if (configured?.value) {
+    const vault = await d1.prepare(
+      "SELECT id, owner_email, kind FROM vaults WHERE id = ? AND kind = 'public' LIMIT 1",
+    ).bind(configured.value).first<{ id: string; owner_email: string; kind: VaultKind }>();
+    if (vault) return { id: vault.id, ownerEmail: vault.owner_email, kind: vault.kind, role: "owner" };
+  }
+
+  const existing = await d1.prepare(
+    "SELECT id, owner_email, kind FROM vaults WHERE kind = 'public' ORDER BY created_at ASC LIMIT 1",
+  ).first<{ id: string; owner_email: string; kind: VaultKind }>();
+  const candidate = existing ?? await ensureOwnedVault(seedEmail, "public");
+  await d1.prepare(
+    "INSERT OR IGNORE INTO app_settings (key, value) VALUES ('shared_public_vault', ?)",
+  ).bind(candidate.id).run();
+
+  const selected = await d1.prepare(
+    "SELECT value FROM app_settings WHERE key = 'shared_public_vault' LIMIT 1",
+  ).first<{ value: string }>();
+  const vaultId = selected?.value ?? candidate.id;
+  const vault = await d1.prepare(
+    "SELECT id, owner_email, kind FROM vaults WHERE id = ? AND kind = 'public' LIMIT 1",
+  ).bind(vaultId).first<{ id: string; owner_email: string; kind: VaultKind }>();
+  if (!vault) throw new Error("无法初始化公共密码库。");
+  return { id: vault.id, ownerEmail: vault.owner_email, kind: vault.kind, role: "owner" };
 }
 
 async function accessibleVaults(email: string): Promise<AccessibleVault[]> {
-  await ensureUserVaults(email);
-  const d1 = getD1();
-  const result = await d1.prepare(
-    `SELECT v.id, v.owner_email, v.kind,
-      CASE WHEN v.owner_email = ? THEN 'owner' ELSE m.role END AS role
-     FROM vaults v
-     LEFT JOIN vault_members m ON m.vault_id = v.id AND m.email = ?
-     WHERE v.owner_email = ? OR (v.kind = 'public' AND m.email = ?)`,
-  ).bind(email, email, email, email).all<{ id: string; owner_email: string; kind: VaultKind; role: VaultRole }>();
+  const actor = await getActiveApplicationActor(email);
+  if (!actor) throw new Error("当前系统账户未启用。");
 
-  return result.results.map((vault) => ({
-    id: vault.id,
-    ownerEmail: vault.owner_email,
-    kind: vault.kind,
-    role: vault.role,
-  }));
+  const personalVault = await ensureOwnedVault(email, "personal");
+  await ensureSharedPublicVault(email);
+  const publicVaults = await getD1().prepare(
+    "SELECT id, owner_email, kind FROM vaults WHERE kind = 'public' ORDER BY created_at ASC",
+  ).all<{ id: string; owner_email: string; kind: VaultKind }>();
+
+  return [
+    personalVault,
+    ...publicVaults.results.map((vault) => ({
+      id: vault.id,
+      ownerEmail: vault.owner_email,
+      kind: vault.kind,
+      role: (actor.role === "admin" ? "owner" : "viewer") as VaultRole,
+    })),
+  ];
 }
 
-async function ownVaultForSpace(email: string, space: VaultSpace) {
-  return ensureOwnedVault(email, space === "个人" ? "personal" : "public");
+async function vaultForSpace(email: string, space: VaultSpace) {
+  return space === "个人" ? ensureOwnedVault(email, "personal") : ensureSharedPublicVault(email);
 }
 
 function canWrite(role: VaultRole) {
@@ -194,10 +223,10 @@ function toCredential(row: VaultItemRow, payload: StoredCredential, vault: Acces
   };
 }
 
-export async function listVaultData(email: string, ownedOnly = false) {
+export async function listVaultData(email: string) {
   const d1 = getD1();
-  const vaultAccess = (await accessibleVaults(email)).filter((vault) => !ownedOnly || vault.ownerEmail === email);
-  const items: VaultCredential[] = [];
+  const vaultAccess = await accessibleVaults(email);
+  const items: Array<{ value: VaultCredential; updatedAt: string }> = [];
 
   for (const vault of vaultAccess) {
     const result = await d1.prepare(
@@ -207,33 +236,38 @@ export async function listVaultData(email: string, ownedOnly = false) {
     for (const row of result.results) {
       try {
         const payload = await decryptVaultPayload<StoredCredential>({ ciphertext: row.ciphertext, iv: row.iv });
-        items.push(toCredential(row, payload, vault));
+        items.push({ value: toCredential(row, payload, vault), updatedAt: row.updated_at });
       } catch {
         throw new Error("无法读取已加密的密码库数据。");
       }
     }
   }
 
-  const ownedPublicVault = await ownVaultForSpace(email, "公共");
-  const members = await d1.prepare(
-    "SELECT email, role, created_at FROM vault_members WHERE vault_id = ? ORDER BY created_at ASC",
-  ).bind(ownedPublicVault.id).all<{ email: string; role: "editor" | "viewer"; created_at: string }>();
-
-  const audit = await d1.prepare(
+  const publicVaults = vaultAccess.filter((vault) => vault.kind === "public");
+  const auditResults = await Promise.all(publicVaults.map((vault) => d1.prepare(
     "SELECT action, actor_email, item_id, created_at FROM audit_events WHERE vault_id = ? ORDER BY created_at DESC LIMIT 20",
-  ).bind(ownedPublicVault.id).all<{ action: string; actor_email: string; item_id: string | null; created_at: string }>();
+  ).bind(vault.id).all<{ action: string; actor_email: string; item_id: string | null; created_at: string }>()));
+  const audit = auditResults
+    .flatMap((result) => result.results)
+    .sort((left, right) => right.created_at.localeCompare(left.created_at))
+    .slice(0, 20);
 
   return {
-    items,
-    members: members.results.map((member) => ({ email: member.email, role: member.role, createdAt: timeLabel(member.created_at) })),
-    audit: audit.results.map((event) => ({ action: event.action, actorEmail: event.actor_email, itemId: event.item_id, createdAt: timeLabel(event.created_at) })),
+    items: items.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)).map((item) => item.value),
+    publicUserCount: await countActiveApplicationUsers(),
+    audit: audit.map((event) => ({ action: event.action, actorEmail: event.actor_email, itemId: event.item_id, createdAt: timeLabel(event.created_at) })),
     approvals: await listApprovalRequests(email),
   };
 }
 
 export async function createVaultItem(email: string, input: Record<string, unknown>) {
   const space = isSpace(input.group) ? input.group : "个人";
-  const vault = await ownVaultForSpace(email, space);
+  const actor = await getActiveApplicationActor(email);
+  if (!actor) throw new Error("当前系统账户未启用。");
+  if (space === "公共" && actor.role !== "admin") {
+    throw new Error("公共空间仅允许管理员新建项目。");
+  }
+  const vault = await vaultForSpace(email, space);
   const payload = storedPayload(input);
   const encrypted = await encryptVaultPayload(payload);
   const id = crypto.randomUUID();
@@ -244,7 +278,7 @@ export async function createVaultItem(email: string, input: Record<string, unkno
   ).bind(id, vault.id, encrypted.ciphertext, encrypted.iv).run();
   await writeAudit(vault.id, email, "item_created", id);
 
-  return { id, ...payload, group: space, updated: "刚刚更新", canEdit: true } satisfies VaultCredential;
+  return { id, ...payload, group: space, updated: "刚刚更新", canEdit: space === "个人" || actor.role === "admin" } satisfies VaultCredential;
 }
 
 async function findItemAccess(email: string, itemId: string) {
@@ -265,11 +299,11 @@ export async function updateVaultItem(email: string, itemId: string, input: Reco
   if (!canWrite(vault.role)) throw new Error("你只有查看权限，无法编辑该项目。");
 
   const nextSpace = isSpace(input.group) ? input.group : (vault.kind === "personal" ? "个人" : "公共");
-  if (nextSpace !== (vault.kind === "personal" ? "个人" : "公共") && vault.role !== "owner") {
-    throw new Error("只有公共空间的所有者可以移动项目。");
+  if (nextSpace !== (vault.kind === "personal" ? "个人" : "公共") && (await getActiveApplicationActor(email))?.role !== "admin") {
+    throw new Error("只有管理员可以移入或移出公共空间。");
   }
 
-  const destination = nextSpace === (vault.kind === "personal" ? "个人" : "公共") ? vault : await ownVaultForSpace(email, nextSpace);
+  const destination = nextSpace === (vault.kind === "personal" ? "个人" : "公共") ? vault : await vaultForSpace(email, nextSpace);
   const payload = storedPayload(input);
   const encrypted = await encryptVaultPayload(payload);
   const d1 = getD1();
@@ -279,7 +313,7 @@ export async function updateVaultItem(email: string, itemId: string, input: Reco
   ).bind(destination.id, encrypted.ciphertext, encrypted.iv, item.id).run();
   await writeAudit(destination.id, email, "item_updated", item.id);
 
-  return { id: item.id, ...payload, group: nextSpace, updated: "刚刚更新", canEdit: true } satisfies VaultCredential;
+  return { id: item.id, ...payload, group: nextSpace, updated: "刚刚更新", canEdit: nextSpace === "个人" || (await getActiveApplicationActor(email))?.role === "admin" } satisfies VaultCredential;
 }
 
 export async function deleteVaultItem(email: string, itemId: string) {
@@ -291,40 +325,15 @@ export async function deleteVaultItem(email: string, itemId: string) {
   await writeAudit(vault.id, email, "item_deleted", item.id);
 }
 
-export async function inviteVaultMember(email: string, input: Record<string, unknown>) {
-  const invitee = typeof input.email === "string" ? input.email.trim().toLowerCase() : "";
-  const role = input.role === "viewer" ? "viewer" : "editor";
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(invitee)) throw new Error("请输入有效的协作人邮箱。");
-  if (invitee === email.toLowerCase()) throw new Error("不能邀请自己加入公共空间。");
-  if (!await isActiveApplicationUser(invitee)) throw new Error("请先在用户管理中创建并启用该系统用户。");
-
-  const publicVault = await ownVaultForSpace(email, "公共");
-  const d1 = getD1();
-  await d1.prepare(
-    `INSERT INTO vault_members (vault_id, email, role) VALUES (?, ?, ?)
-     ON CONFLICT(vault_id, email) DO UPDATE SET role = excluded.role`,
-  ).bind(publicVault.id, invitee, role).run();
-  await writeAudit(publicVault.id, email, "member_invited");
-
-  return { email: invitee, role };
-}
-
-export async function removeVaultMember(email: string, memberEmail: string) {
-  const publicVault = await ownVaultForSpace(email, "公共");
-  const d1 = getD1();
-  await d1.prepare("DELETE FROM vault_members WHERE vault_id = ? AND email = ?").bind(publicVault.id, memberEmail).run();
-  await writeAudit(publicVault.id, email, "member_removed");
-}
-
 export async function listApprovalRequests(email: string): Promise<ApprovalRequest[]> {
   const d1 = getD1();
-  const access = await accessibleVaults(email);
+  const publicVault = await ensureSharedPublicVault(email);
   const approvals: ApprovalRequest[] = [];
 
-  for (const vault of access.filter((vault) => vault.kind === "public")) {
+  {
     const result = await d1.prepare(
       "SELECT id, requested_by, action, status, approver_email, expires_at FROM approval_requests WHERE vault_id = ? AND status IN ('pending', 'approved') ORDER BY created_at DESC LIMIT 20",
-    ).bind(vault.id).all<{ id: string; requested_by: string; action: "export_vault"; status: "pending" | "approved"; approver_email: string | null; expires_at: string }>();
+    ).bind(publicVault.id).all<{ id: string; requested_by: string; action: "export_vault"; status: "pending" | "approved"; approver_email: string | null; expires_at: string }>();
 
     for (const approval of result.results) {
       const expired = Date.parse(approval.expires_at) <= Date.now();
@@ -339,7 +348,7 @@ export async function listApprovalRequests(email: string): Promise<ApprovalReque
         status: approval.status,
         approverEmail: approval.approver_email,
         expiresAt: timeLabel(approval.expires_at),
-        canDecide: approval.status === "pending" && approval.requested_by !== email && vault.role !== "owner",
+        canDecide: approval.status === "pending" && approval.requested_by !== email,
         isRequester: approval.requested_by === email,
       });
     }
@@ -349,12 +358,9 @@ export async function listApprovalRequests(email: string): Promise<ApprovalReque
 }
 
 export async function requestExportApproval(email: string) {
-  const vault = await ownVaultForSpace(email, "公共");
+  const vault = await ensureSharedPublicVault(email);
   const d1 = getD1();
-  const collaborators = await d1.prepare(
-    "SELECT email FROM vault_members WHERE vault_id = ? LIMIT 1",
-  ).bind(vault.id).first<{ email: string }>();
-  if (!collaborators) throw new Error("请先添加至少一位协作人，再请求导出批准。");
+  if (await countActiveApplicationUsers() < 2) throw new Error("请先创建并启用至少一位其他系统用户，再请求导出批准。");
 
   const id = crypto.randomUUID();
   const expiresAt = new Date(Date.now() + 10 * 60_000).toISOString();
@@ -375,8 +381,8 @@ export async function decideApproval(email: string, id: string, decision: "appro
   if (approval.requested_by === email) throw new Error("不能批准自己的请求。");
   if (Date.parse(approval.expires_at) <= Date.now()) throw new Error("该批准请求已过期。");
 
-  const access = (await accessibleVaults(email)).find((vault) => vault.id === approval.vault_id);
-  if (!access || access.role === "owner") throw new Error("只有被邀请的协作人可以处理该请求。");
+  const publicVault = await ensureSharedPublicVault(email);
+  if (publicVault.id !== approval.vault_id) throw new Error("该批准请求不属于当前公共空间。");
 
   await d1.prepare(
     "UPDATE approval_requests SET status = ?, approver_email = ?, resolved_at = CURRENT_TIMESTAMP WHERE id = ?",
@@ -393,7 +399,7 @@ export async function exportVaultData(email: string, approvalId: string) {
     throw new Error("该导出请求尚未获得有效的协作人批准。");
   }
 
-  const data = await listVaultData(email, true);
+  const data = await listVaultData(email);
   await writeAudit(approval.vault_id, email, "vault_exported");
   return { exportedAt: new Date().toISOString(), items: data.items };
 }

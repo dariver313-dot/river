@@ -1,3 +1,4 @@
+import { env } from "cloudflare:workers";
 import { getD1 } from "../../db";
 
 export type AppRole = "admin" | "user";
@@ -21,12 +22,24 @@ type AppUserRow = {
   created_at: string;
 };
 
+type UserRuntimeEnv = {
+  PRIMARY_ADMIN_EMAIL?: string;
+};
+
+const nonInteractiveServiceEmail = "sites-screenshot-service-noreply@chatgpt.com";
+
 function normalizedEmail(value: string) {
   return value.trim().toLowerCase();
 }
 
 function isValidEmail(value: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+}
+
+function configuredPrimaryAdminEmail() {
+  const email = (env as unknown as UserRuntimeEnv).PRIMARY_ADMIN_EMAIL;
+  const normalized = email ? normalizedEmail(email) : "";
+  return isValidEmail(normalized) ? normalized : null;
 }
 
 function timeLabel(value: string) {
@@ -45,8 +58,28 @@ async function findUser(email: string) {
   ).bind(normalizedEmail(email)).first<AppUserRow>();
 }
 
+async function ensureConfiguredPrimaryAdmin() {
+  const email = configuredPrimaryAdminEmail();
+  if (!email) return;
+
+  const d1 = getD1();
+  await d1.prepare(
+    `INSERT INTO app_users (email, role, status, created_by)
+     VALUES (?, 'admin', 'active', ?)
+     ON CONFLICT(email) DO UPDATE SET role = 'admin', status = 'active', updated_at = CURRENT_TIMESTAMP`,
+  ).bind(email, email).run();
+  await d1.prepare(
+    `INSERT INTO app_settings (key, value) VALUES ('initial_admin', ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP`,
+  ).bind(email).run();
+  await d1.prepare(
+    "UPDATE app_users SET role = 'user', status = 'suspended', updated_at = CURRENT_TIMESTAMP WHERE email = ? AND email <> ?",
+  ).bind(nonInteractiveServiceEmail, email).run();
+}
+
 export async function ensureApplicationUser(email: string): Promise<AppActor | null> {
   const normalized = normalizedEmail(email);
+  await ensureConfiguredPrimaryAdmin();
   const existing = await findUser(normalized);
   if (existing) {
     return existing.status === "active" ? { email: existing.email, role: existing.role } : null;
@@ -71,6 +104,18 @@ export async function ensureApplicationUser(email: string): Promise<AppActor | n
 export async function isActiveApplicationUser(email: string) {
   const user = await findUser(email);
   return Boolean(user && user.status === "active");
+}
+
+export async function getActiveApplicationActor(email: string): Promise<AppActor | null> {
+  const user = await findUser(email);
+  return user?.status === "active" ? { email: user.email, role: user.role } : null;
+}
+
+export async function countActiveApplicationUsers() {
+  const result = await getD1().prepare(
+    "SELECT COUNT(*) AS count FROM app_users WHERE status = 'active'",
+  ).first<{ count: number }>();
+  return result?.count ?? 0;
 }
 
 export async function listManagedUsers(actorEmail: string): Promise<ManagedAppUser[]> {
@@ -143,9 +188,10 @@ export async function updateManagedUser(actorEmail: string, input: Record<string
   const nextRole = input.role === undefined ? current.role : inputRole(input.role);
   const nextStatus = input.status === undefined ? current.status : inputStatus(input.status);
   const isCurrentActor = current.email === actor.email;
+  const isConfiguredPrimaryAdmin = current.email === configuredPrimaryAdminEmail();
 
-  if (isCurrentActor && (nextRole !== "admin" || nextStatus !== "active")) {
-    throw new Error("不能降低或停用自己的管理员账户。");
+  if ((isCurrentActor || isConfiguredPrimaryAdmin) && (nextRole !== "admin" || nextStatus !== "active")) {
+    throw new Error("不能降低或停用当前的主管理员账户。");
   }
 
   const removesActiveAdmin = current.role === "admin" && current.status === "active"

@@ -5,7 +5,6 @@ import {
   Archive,
   ArrowUpRight,
   Check,
-  ChevronDown,
   ChevronRight,
   Clipboard,
   Clock3,
@@ -36,12 +35,13 @@ import {
   X,
 } from "lucide-react";
 import jsQR from "jsqr";
-import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { generateTotpCode, parseTotpInput, totpLabel, totpSecondsRemaining, type TotpConfig } from "./lib/totp";
 
 type Strength = "安全" | "一般" | "风险";
 type ItemType = "登录" | "卡片" | "安全笔记";
 type Space = "全部" | "个人" | "公共";
+type Collection = "all" | "favorites" | "security";
 
 type VaultItem = {
   id: string;
@@ -72,7 +72,6 @@ type CredentialForm = Pick<VaultItem, "name" | "domain" | "username" | "password
   totpInput: string;
   removeTotp: boolean;
 };
-type VaultMember = { email: string; role: "editor" | "viewer"; createdAt: string };
 type AuditEntry = { action: string; actorEmail: string; itemId: string | null; createdAt: string };
 type SystemUser = { email: string; role: "admin" | "user"; status: "active" | "suspended"; createdAt: string; isCurrent: boolean };
 type ApprovalRequest = {
@@ -90,6 +89,18 @@ const filters = ["全部", "登录", "卡片", "安全笔记"] as const;
 
 function emptyCredentialForm(): CredentialForm {
   return { name: "", domain: "", username: "", password: "", group: "个人", totpInput: "", removeTotp: false };
+}
+
+function generateStrongPassword() {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%^&*_-";
+  const required = ["A", "a", "2", "!"];
+  const values = crypto.getRandomValues(new Uint32Array(16));
+  const password = [...required, ...Array.from(values, (value) => alphabet[value % alphabet.length])];
+  for (let index = password.length - 1; index > 0; index -= 1) {
+    const swap = crypto.getRandomValues(new Uint32Array(1))[0] % (index + 1);
+    [password[index], password[swap]] = [password[swap], password[index]];
+  }
+  return password.join("");
 }
 
 function BrandMark({ item }: { item: VaultItem }) {
@@ -206,6 +217,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<(typeof filters)[number]>("全部");
   const [space, setSpace] = useState<Space>("全部");
+  const [collection, setCollection] = useState<Collection>("all");
   const [revealed, setRevealed] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const [editingItem, setEditingItem] = useState<VaultItem | null>(null);
@@ -216,11 +228,9 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
   const [toast, setToast] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
-  const [members, setMembers] = useState<VaultMember[]>([]);
+  const [publicUserCount, setPublicUserCount] = useState(0);
   const [audit, setAudit] = useState<AuditEntry[]>([]);
   const [approvals, setApprovals] = useState<ApprovalRequest[]>([]);
-  const [memberEmail, setMemberEmail] = useState("");
-  const [memberRole, setMemberRole] = useState<"editor" | "viewer">("editor");
   const [systemUsers, setSystemUsers] = useState<SystemUser[]>([]);
   const [systemUserEmail, setSystemUserEmail] = useState("");
   const [systemUserRole, setSystemUserRole] = useState<"admin" | "user">("user");
@@ -228,20 +238,28 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
   const [isReadingTotp, setIsReadingTotp] = useState(false);
   const [form, setForm] = useState<CredentialForm>(emptyCredentialForm);
   const [editForm, setEditForm] = useState<CredentialForm>(emptyCredentialForm);
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   const visibleItems = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     return items.filter((item) => {
       const matchesFilter = filter === "全部" || item.type === filter;
       const matchesSpace = space === "全部" || item.group === space;
+      const matchesCollection = collection === "all"
+        || (collection === "favorites" && item.favorite)
+        || (collection === "security" && (item.strength === "风险" || !item.twoFactor));
       const matchesQuery = !normalized || [item.name, item.domain, item.username, item.group].some((value) => value.toLowerCase().includes(normalized));
-      return matchesFilter && matchesSpace && matchesQuery;
+      return matchesFilter && matchesSpace && matchesCollection && matchesQuery;
     });
-  }, [filter, items, query, space]);
+  }, [collection, filter, items, query, space]);
 
   const activeSelectedId = visibleItems.some((item) => item.id === selectedId) ? selectedId : visibleItems[0]?.id ?? selectedId;
   const selected = items.find((item) => item.id === activeSelectedId) ?? items[0];
-  const listTitle = space === "全部" ? (filter === "全部" ? "全部项目" : filter) : `${space} · ${filter === "全部" ? "全部项目" : filter}`;
+  const listTitle = collection === "favorites"
+    ? "收藏"
+    : collection === "security"
+      ? "需处理的安全项"
+      : space === "全部" ? (filter === "全部" ? "全部项目" : filter) : `${space} · ${filter === "全部" ? "全部项目" : filter}`;
   const viewerInitial = viewer.displayName.trim().slice(0, 1).toLocaleUpperCase() || "你";
   const isAdmin = viewer.role === "admin";
   const weakPasswordCount = items.filter((item) => item.strength === "风险").length;
@@ -256,6 +274,11 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
 
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        searchInputRef.current?.focus();
+        return;
+      }
       if (event.key === "Escape") {
         setShowAdd(false);
         setEditingItem(null);
@@ -275,13 +298,13 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
     async function loadVault() {
       try {
         const response = await fetch("/api/vault", { cache: "no-store" });
-        const payload = await response.json() as { items?: VaultItem[]; members?: VaultMember[]; audit?: AuditEntry[]; approvals?: ApprovalRequest[]; error?: string };
+        const payload = await response.json() as { items?: VaultItem[]; publicUserCount?: number; audit?: AuditEntry[]; approvals?: ApprovalRequest[]; error?: string };
         if (!response.ok) throw new Error(payload.error ?? "无法读取密码库。");
         if (cancelled) return;
 
         const loadedItems = payload.items ?? [];
         setItems(loadedItems);
-        setMembers(payload.members ?? []);
+        setPublicUserCount(payload.publicUserCount ?? 0);
         setAudit(payload.audit ?? []);
         setApprovals(payload.approvals ?? []);
         setSelectedId((current) => current ?? loadedItems[0]?.id ?? null);
@@ -381,8 +404,8 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
   }
 
   function generatePassword() {
-    setForm((current) => ({ ...current, password: "V9@rK4!mT7#qL2xP" }));
-    setToast("已生成 16 位演示密码");
+    setForm((current) => ({ ...current, password: generateStrongPassword() }));
+    setToast("已生成 20 位强密码");
   }
 
   function openEdit(item: VaultItem) {
@@ -392,8 +415,8 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
   }
 
   function generateEditPassword() {
-    setEditForm((current) => ({ ...current, password: "R8!vL2#nQ5@zT7mK" }));
-    setToast("已生成 16 位演示密码");
+    setEditForm((current) => ({ ...current, password: generateStrongPassword() }));
+    setToast("已生成 20 位强密码");
   }
 
   async function submitEditCredential(event: FormEvent<HTMLFormElement>) {
@@ -424,37 +447,6 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
       setToast(`已删除“${deleteTarget.name}”`);
     } catch (error) {
       setToast(error instanceof Error ? error.message : "项目未删除。");
-    } finally {
-      setIsSaving(false);
-    }
-  }
-
-  async function inviteMember(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setIsSaving(true);
-    try {
-      const payload = await requestVault<{ member: VaultMember }>("/api/vault/members", {
-        method: "POST",
-        body: JSON.stringify({ email: memberEmail, role: memberRole }),
-      });
-      setMembers((current) => [...current.filter((member) => member.email !== payload.member.email), { ...payload.member, createdAt: "刚刚添加" }]);
-      setMemberEmail("");
-      setToast("协作人已加入公共空间");
-    } catch (error) {
-      setToast(error instanceof Error ? error.message : "协作人未添加。");
-    } finally {
-      setIsSaving(false);
-    }
-  }
-
-  async function removeMember(email: string) {
-    setIsSaving(true);
-    try {
-      await requestVault("/api/vault/members", { method: "DELETE", body: JSON.stringify({ email }) });
-      setMembers((current) => current.filter((member) => member.email !== email));
-      setToast("协作人已移出公共空间");
-    } catch (error) {
-      setToast(error instanceof Error ? error.message : "协作人未移除。");
     } finally {
       setIsSaving(false);
     }
@@ -535,7 +527,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
     try {
       const payload = await requestVault<{ approval: ApprovalRequest }>("/api/vault/approvals", { method: "POST" });
       setApprovals((current) => [payload.approval, ...current.filter((approval) => approval.id !== payload.approval.id)]);
-      setToast("已向协作人请求导出批准，有效期 10 分钟");
+      setToast("已向其他系统用户请求导出批准，有效期 10 分钟");
     } catch (error) {
       setToast(error instanceof Error ? error.message : "无法请求导出批准。");
     } finally {
@@ -594,16 +586,15 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
 
         <nav className="main-nav">
           <p className="nav-label">密码库</p>
-          <button className={`nav-item ${space === "全部" ? "is-active" : ""}`} onClick={() => setSpace("全部")}><KeyRound size={18} /><span>所有项目</span><span className="nav-count">{items.length}</span></button>
-          <button className="nav-item"><Star size={18} /><span>收藏</span><span className="nav-count">{items.filter((item) => item.favorite).length}</span></button>
-          <button className="nav-item"><ShieldEllipsis size={18} /><span>安全检查</span><span className="nav-alert">3</span></button>
-          <button className="nav-item"><Archive size={18} /><span>归档</span></button>
+          <button className={`nav-item ${collection === "all" && space === "全部" ? "is-active" : ""}`} onClick={() => { setCollection("all"); setSpace("全部"); }}><KeyRound size={18} /><span>所有项目</span><span className="nav-count">{items.length}</span></button>
+          <button className={`nav-item ${collection === "favorites" ? "is-active" : ""}`} onClick={() => { setCollection("favorites"); setSpace("全部"); }}><Star size={18} /><span>收藏</span><span className="nav-count">{items.filter((item) => item.favorite).length}</span></button>
+          <button className={`nav-item ${collection === "security" ? "is-active" : ""}`} onClick={() => { setCollection("security"); setSpace("全部"); }}><ShieldEllipsis size={18} /><span>安全检查</span><span className="nav-alert">{weakPasswordCount + missingTwoFactorCount}</span></button>
 
           {isAdmin && <><p className="nav-label nav-label-spaced">系统</p><button className="nav-item" onClick={openUserManagement}><UserCog size={18} /><span>用户管理</span></button></>}
 
           <p className="nav-label nav-label-spaced">空间</p>
-          <button className={`nav-item ${space === "个人" ? "is-active" : ""}`} onClick={() => setSpace("个人")}><UserRound size={18} /><span>个人</span></button>
-          <button className={`nav-item ${space === "公共" ? "is-active" : ""}`} onClick={() => setSpace("公共")}><UsersRound size={18} /><span>公共</span></button>
+          <button className={`nav-item ${collection === "all" && space === "个人" ? "is-active" : ""}`} onClick={() => { setCollection("all"); setSpace("个人"); }}><UserRound size={18} /><span>个人</span></button>
+          <button className={`nav-item ${collection === "all" && space === "公共" ? "is-active" : ""}`} onClick={() => { setCollection("all"); setSpace("公共"); }}><UsersRound size={18} /><span>公共</span></button>
         </nav>
 
         <div className="sidebar-tip">
@@ -614,18 +605,18 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
         <div className="account-menu">
           <span className="avatar" aria-hidden="true">{viewerInitial}</span>
           <div><strong>{viewer.displayName}</strong><span>{viewer.role === "admin" ? "管理员 · " : "普通用户 · "}{viewer.email}</span></div>
-          <button className="icon-button dark-icon" onClick={() => setShowSharing(true)} aria-label="公共空间设置"><MoreHorizontal size={19} /></button>
+          <button className="icon-button dark-icon" onClick={() => setShowSharing(true)} aria-label="公共空间说明"><MoreHorizontal size={19} /></button>
         </div>
       </aside>
 
       <main id="main-content" className="main-shell">
         <header className="topbar">
           <button className="icon-button mobile-menu" onClick={() => setMobileNav(true)} aria-label="打开导航"><Menu size={21} /></button>
-          <div className="page-title"><h1>密码库</h1><p>集中管理登录信息、卡片与安全笔记</p></div>
+          <div className="page-title"><h1>密码库</h1><p>集中管理账号、密码与验证器代码</p></div>
           <div className="topbar-search">
             <Search size={18} aria-hidden="true" />
             <label className="sr-only" htmlFor="vault-search">搜索密码库</label>
-            <input id="vault-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索账号、网址或分类" />
+            <input ref={searchInputRef} id="vault-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索账号、网址或分类" />
             <kbd>⌘ K</kbd>
           </div>
           <button className="secondary-button lock-button" onClick={endSession}><LogOut size={17} />结束会话</button>
@@ -638,9 +629,9 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
             <div className="score-meter" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={securityScore} aria-label={`安全评分 ${securityScore} 分`}><span style={{ width: `${securityScore}%` }} /></div>
             <p>{securityScore >= 80 ? <Check size={15} aria-hidden="true" /> : <AlertTriangle size={15} aria-hidden="true" />}{securityScore >= 80 ? "整体状况良好" : "建议处理安全项"}</p>
           </div>
-          <button className="risk-item"><span className="risk-icon risk-danger"><AlertTriangle size={17} /></span><span><strong>{weakPasswordCount} 个弱密码</strong><small>建议优先更换</small></span><ChevronRight size={18} /></button>
-          <button className="risk-item" onClick={() => setShowSharing(true)}><span className="risk-icon risk-warning"><UsersRound size={17} /></span><span><strong>{members.length} 位协作人</strong><small>公共空间访问权限</small></span><ChevronRight size={18} /></button>
-          <button className="risk-item"><span className="risk-icon risk-info"><Smartphone size={17} /></span><span><strong>{missingTwoFactorCount} 个未启用双重验证</strong><small>提升账号防护</small></span><ChevronRight size={18} /></button>
+          <button className="risk-item" onClick={() => { setCollection("security"); setSpace("全部"); }}><span className="risk-icon risk-danger"><AlertTriangle size={17} /></span><span><strong>{weakPasswordCount} 个弱密码</strong><small>查看需处理项目</small></span><ChevronRight size={18} /></button>
+          <button className="risk-item" onClick={() => setShowSharing(true)}><span className="risk-icon risk-warning"><UsersRound size={17} /></span><span><strong>{publicUserCount} 位已启用用户</strong><small>公共项目全员可查看</small></span><ChevronRight size={18} /></button>
+          <button className="risk-item" onClick={() => { setCollection("security"); setSpace("全部"); }}><span className="risk-icon risk-info"><Smartphone size={17} /></span><span><strong>{missingTwoFactorCount} 个未启用双重验证</strong><small>查看需处理项目</small></span><ChevronRight size={18} /></button>
         </section>
 
         <div className="content-grid">
@@ -648,10 +639,10 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
             <div className="panel-toolbar">
               <div className="filter-tabs" role="group" aria-label="项目类型筛选">
                 {filters.map((item) => (
-                  <button key={item} className={filter === item ? "is-selected" : ""} onClick={() => setFilter(item)}>{item}{item === "全部" && <span>{items.length}</span>}</button>
+                  <button key={item} className={filter === item ? "is-selected" : ""} onClick={() => { setCollection("all"); setFilter(item); }}>{item}{item === "全部" && <span>{items.length}</span>}</button>
                 ))}
               </div>
-              <button className="sort-button">最近更新<ChevronDown size={16} /></button>
+              <span className="sort-button">最近更新</span>
             </div>
 
             <div className="list-heading">
@@ -670,7 +661,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
                   <span className="row-chevron"><ChevronRight size={18} /></span>
                 </button>
               )) : (
-                <div className="empty-state"><Search size={24} /><h3>{items.length === 0 ? "密码库尚未添加项目" : "没有找到匹配项目"}</h3><p>{items.length === 0 ? "从第一个账号开始，建立加密保存的密码库。" : "尝试搜索其他账号、网址或分类。"}</p><button className="secondary-button" onClick={() => { if (items.length === 0) setShowAdd(true); else { setQuery(""); setFilter("全部"); setSpace("全部"); } }}>{items.length === 0 ? "新建项目" : "清除筛选"}</button></div>
+                <div className="empty-state"><Search size={24} /><h3>{items.length === 0 ? "密码库尚未添加项目" : "没有找到匹配项目"}</h3><p>{items.length === 0 ? "从第一个账号开始，建立加密保存的密码库。" : "尝试搜索其他账号、网址或分类。"}</p><button className="secondary-button" onClick={() => { if (items.length === 0) setShowAdd(true); else { setQuery(""); setFilter("全部"); setCollection("all"); setSpace("全部"); } }}>{items.length === 0 ? "新建项目" : "清除筛选"}</button></div>
               )}
             </div>
           </section>
@@ -738,14 +729,14 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
               <label>名称<input required value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="例如：公司邮箱" autoFocus /></label>
               <label>网站地址<input required value={form.domain} onChange={(event) => setForm({ ...form, domain: event.target.value })} placeholder="example.com" inputMode="url" /></label>
               <label>用户名<input required value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} placeholder="name@example.com" autoComplete="username" /></label>
-              <label>密码<div className="form-password"><input required type="text" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} placeholder="输入或生成强密码" autoComplete="new-password" /><button type="button" onClick={generatePassword}><WandSparkles size={16} />生成</button></div><small>建议至少 14 位，并混合字母、数字和符号。</small></label>
+              <label>密码<div className="form-password"><input required type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} placeholder="输入或生成强密码" autoComplete="new-password" /><button type="button" onClick={generatePassword}><WandSparkles size={16} />生成</button></div><small>建议至少 14 位，并混合字母、数字和符号。</small></label>
               <div className="totp-entry">
                 <label htmlFor="add-totp">二次验证码（可选）</label>
                 <input id="add-totp" type="text" value={form.totpInput} onChange={(event) => setForm({ ...form, totpInput: event.target.value, removeTotp: false })} placeholder="粘贴二维码内容或 Setup Key" autoComplete="off" spellCheck="false" />
                 <div className="totp-entry-actions"><label className="totp-image-button" htmlFor="add-totp-image"><ImageUp size={16} />{isReadingTotp ? "正在读取图片" : "从二维码图片读取"}</label><input id="add-totp-image" className="sr-only" type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => void importTotpFromImage(event, "add")} disabled={isReadingTotp} /></div>
                 <p>不使用摄像头。图片仅在当前浏览器解析，保存时仅加密存入验证器密钥。</p>
               </div>
-              <label>保存到空间<select value={form.group} onChange={(event) => setForm({ ...form, group: event.target.value })}><option>个人</option><option>公共</option></select></label>
+              <label>保存到空间<select value={form.group} onChange={(event) => setForm({ ...form, group: event.target.value })}><option>个人</option>{isAdmin && <option>公共</option>}</select></label>
               <footer><button type="button" className="secondary-button" onClick={() => setShowAdd(false)} disabled={isSaving}>取消</button><button type="submit" className="primary-button" disabled={isSaving}><Plus size={17} />{isSaving ? "正在保存" : "添加项目"}</button></footer>
             </form>
           </section>
@@ -760,14 +751,14 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
               <label>名称<input required value={editForm.name} onChange={(event) => setEditForm({ ...editForm, name: event.target.value })} autoFocus /></label>
               <label>网站地址<input required value={editForm.domain} onChange={(event) => setEditForm({ ...editForm, domain: event.target.value })} inputMode="url" /></label>
               <label>用户名<input required value={editForm.username} onChange={(event) => setEditForm({ ...editForm, username: event.target.value })} autoComplete="username" /></label>
-              <label>密码<div className="form-password"><input required type="text" value={editForm.password} onChange={(event) => setEditForm({ ...editForm, password: event.target.value })} autoComplete="new-password" /><button type="button" onClick={generateEditPassword}><WandSparkles size={16} />生成</button></div><small>建议至少 14 位，并混合字母、数字和符号。</small></label>
+              <label>密码<div className="form-password"><input required type="password" value={editForm.password} onChange={(event) => setEditForm({ ...editForm, password: event.target.value })} autoComplete="new-password" /><button type="button" onClick={generateEditPassword}><WandSparkles size={16} />生成</button></div><small>建议至少 14 位，并混合字母、数字和符号。</small></label>
               <div className="totp-entry">
                 <label htmlFor="edit-totp">二次验证码</label>
                 <input id="edit-totp" type="text" value={editForm.totpInput} onChange={(event) => setEditForm({ ...editForm, totpInput: event.target.value, removeTotp: false })} placeholder={editingItem.totp ? "留空保留；输入新密钥可替换" : "粘贴二维码内容或 Setup Key"} autoComplete="off" spellCheck="false" />
                 <div className="totp-entry-actions"><label className="totp-image-button" htmlFor="edit-totp-image"><ImageUp size={16} />{isReadingTotp ? "正在读取图片" : "从二维码图片读取"}</label><input id="edit-totp-image" className="sr-only" type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => void importTotpFromImage(event, "edit")} disabled={isReadingTotp} /></div>
                 {editingItem.totp ? <p>当前已配置验证器。{editForm.removeTotp ? "保存后会移除。" : "留空可保留现有密钥。"} <button type="button" className="text-button" onClick={() => setEditForm({ ...editForm, removeTotp: !editForm.removeTotp, totpInput: "" })}>{editForm.removeTotp ? "撤销移除" : "移除验证器"}</button></p> : <p>不使用摄像头。图片仅在当前浏览器解析，保存时仅加密存入验证器密钥。</p>}
               </div>
-              <label>保存到空间<select value={editForm.group} onChange={(event) => setEditForm({ ...editForm, group: event.target.value })}><option>个人</option><option>公共</option></select></label>
+              <label>保存到空间<select value={editForm.group} onChange={(event) => setEditForm({ ...editForm, group: event.target.value })}><option>个人</option>{isAdmin && <option>公共</option>}</select></label>
               <footer><button type="button" className="secondary-button" onClick={() => setEditingItem(null)} disabled={isSaving}>取消</button><button type="submit" className="primary-button" disabled={isSaving}><Check size={17} />{isSaving ? "正在保存" : "保存变更"}</button></footer>
             </form>
           </section>
@@ -794,7 +785,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
             <form onSubmit={createSystemUser}>
               <label>用户邮箱<input required type="email" value={systemUserEmail} onChange={(event) => setSystemUserEmail(event.target.value)} placeholder="name@example.com" autoComplete="email" /></label>
               <label>系统角色<select value={systemUserRole} onChange={(event) => setSystemUserRole(event.target.value as "admin" | "user")}><option value="user">普通用户</option><option value="admin">管理员</option></select></label>
-              <p className="form-note">普通用户仅管理自己的个人密码库；管理员可以创建、调整和停用系统用户。</p>
+              <p className="form-note">普通用户可管理自己的个人密码库，并查看公共项目；管理员还可配置公共项目、创建、调整和停用系统用户。</p>
               <footer><button type="submit" className="primary-button" disabled={isSaving}><UserCog size={17} />{isSaving ? "正在创建" : "创建系统用户"}</button></footer>
             </form>
             <div className="user-management-section">
@@ -811,29 +802,24 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
       {showSharing && (
         <div className="modal-layer" role="presentation">
           <section className="modal sharing-modal" role="dialog" aria-modal="true" aria-labelledby="sharing-title">
-            <header><div><span className="modal-icon"><UsersRound size={20} /></span><div><h2 id="sharing-title">公共空间权限</h2><p>被邀请的协作人需完成安全登录后才能访问</p></div></div><button className="icon-button" onClick={() => setShowSharing(false)} aria-label="关闭公共空间设置"><X size={20} /></button></header>
-            <form onSubmit={inviteMember}>
-              <label>协作人邮箱<input required type="email" value={memberEmail} onChange={(event) => setMemberEmail(event.target.value)} placeholder="name@example.com" autoComplete="email" /></label>
-              <label>权限<select value={memberRole} onChange={(event) => setMemberRole(event.target.value as "editor" | "viewer")}><option value="editor">可查看和编辑</option><option value="viewer">仅查看</option></select></label>
-              <p className="form-note">此操作只授予访问权限，不会向邮箱发送通知。协作人下次安全登录后即可访问公共项目。</p>
-              <footer><button type="submit" className="primary-button" disabled={isSaving}><UsersRound size={17} />{isSaving ? "正在更新" : "添加协作人"}</button></footer>
-            </form>
-            <aside className="sharing-guide" role="note"><ShieldCheck size={18} aria-hidden="true" /><div><strong>添加协作人分三步</strong><ol><li>管理员先在“用户管理”中创建并启用该系统用户。</li><li>站点保持私有时，还需将对方邮箱加入站点访问名单。</li><li>再在这里填入同一邮箱，选择公共空间的查看或编辑权限。</li></ol></div></aside>
+            <header><div><span className="modal-icon"><UsersRound size={20} /></span><div><h2 id="sharing-title">公共空间规则</h2><p>全体已启用用户可查看，配置权仅限管理员</p></div></div><button className="icon-button" onClick={() => setShowSharing(false)} aria-label="关闭公共空间说明"><X size={20} /></button></header>
+            <aside className="sharing-guide" role="note"><ShieldCheck size={18} aria-hidden="true" /><div><strong>统一公共权限</strong><p>当前有 {publicUserCount} 位已启用系统用户。它们都可以查看公共账号、密码和验证器代码；只有管理员能新建、编辑、移动或删除公共项目。</p><p>要让新成员获得查看权，管理员只需在“用户管理”中创建并启用该邮箱，并将其加入私有站点访问名单。</p></div></aside>
             <div className="sharing-section">
-              <div className="sharing-section-title"><h3>当前协作人</h3><span>{members.length} 位</span></div>
-              {members.length > 0 ? <div className="member-list">{members.map((member) => <div className="member-row" key={member.email}><div><strong>{member.email}</strong><span>{member.role === "editor" ? "可查看和编辑" : "仅查看"} · {member.createdAt}</span></div><button className="secondary-button" onClick={() => removeMember(member.email)} disabled={isSaving}>移除</button></div>)}</div> : <p className="sharing-empty">尚未添加协作人；公共空间目前只有你自己可以访问。</p>}
+              <div className="sharing-section-title"><h3>成员管理</h3><span>{publicUserCount} 位</span></div>
+              {isAdmin ? <button type="button" className="secondary-button" onClick={() => { setShowSharing(false); void openUserManagement(); }}><UserCog size={17} />管理系统用户</button> : <p className="sharing-empty">系统用户由管理员维护；你的公共项目权限会随账户状态自动更新。</p>}
             </div>
             <div className="sharing-section approval-section">
               <div className="sharing-section-title"><h3>导出双人确认</h3><span>10 分钟有效</span></div>
-              <p className="form-note">导出会生成包含明文密码的文件。仅可导出你自己拥有的个人和公共项目，且必须由被邀请的协作人批准。</p>
-              {members.length > 0 && !approvals.some((approval) => approval.isRequester && approval.status === "pending") && <button type="button" className="secondary-button" onClick={requestExportApproval} disabled={isSaving}><Archive size={17} />请求导出批准</button>}
+              <p className="form-note">导出会生成包含明文密码的文件，包含你的个人项目及全局公共项目；必须由另一位已启用系统用户批准。</p>
+              {publicUserCount > 1 && !approvals.some((approval) => approval.isRequester && approval.status === "pending") && <button type="button" className="secondary-button" onClick={requestExportApproval} disabled={isSaving}><Archive size={17} />请求导出批准</button>}
+              {publicUserCount <= 1 && <p className="sharing-empty">请先创建并启用至少一位其他系统用户，才能使用双人导出确认。</p>}
               {approvals.length > 0 ? <div className="approval-list">{approvals.map((approval) => (
                 <div className="approval-row" key={approval.id}>
                   <div><strong>{approval.isRequester ? "你的导出请求" : `${approval.requestedBy} 请求导出`}</strong><span>{approval.status === "approved" ? `已由 ${approval.approverEmail ?? "协作人"} 批准` : `将在 ${approval.expiresAt} 后过期`}</span></div>
                   <div className="approval-actions">
                     {approval.canDecide && <><button type="button" className="secondary-button" onClick={() => decideExportApproval(approval.id, "rejected")} disabled={isSaving}>拒绝</button><button type="button" className="primary-button" onClick={() => decideExportApproval(approval.id, "approved")} disabled={isSaving}>批准</button></>}
                     {approval.isRequester && approval.status === "approved" && <button type="button" className="primary-button" onClick={() => downloadApprovedExport(approval.id)} disabled={isSaving}><Archive size={17} />下载副本</button>}
-                    {approval.isRequester && approval.status === "pending" && <span className="approval-pending">等待协作人</span>}
+                    {approval.isRequester && approval.status === "pending" && <span className="approval-pending">等待其他用户</span>}
                   </div>
                 </div>
               ))}</div> : <p className="sharing-empty">没有待处理的导出请求。</p>}

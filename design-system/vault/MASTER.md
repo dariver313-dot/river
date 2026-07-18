@@ -6,7 +6,7 @@
 
 ---
 
-**Project:** 守钥 Vault
+**Project:** djmima Vault
 **Generated:** 2026-07-17 18:49:22
 **Category:** Password Manager
 **Design Dials:** Variance 4/10 (Balanced / Modern) | Motion 3/10 (Subtle) | Density 7/10 (Standard)

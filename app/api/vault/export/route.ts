@@ -14,7 +14,7 @@ export async function GET(request: Request) {
   try {
     return secureJson(await exportVaultData(actor.email, approvalId), {
       headers: {
-        "Content-Disposition": "attachment; filename=shouyao-vault-export.json",
+        "Content-Disposition": "attachment; filename=djmima-vault-export.json",
       },
     });
   } catch (error) {

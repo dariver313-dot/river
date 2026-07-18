@@ -296,7 +296,7 @@ export async function createVaultItem(email: string, input: Record<string, unkno
   const actor = await getActiveApplicationActor(email);
   if (!actor) throw new Error("当前系统账户未启用。");
   if (space === "公共" && actor.role !== "admin") {
-    throw new Error("公共空间仅允许管理员新建项目。");
+    throw new Error("公共项目仅允许管理员新建。");
   }
   const vault = await vaultForSpace(email, space);
   const payload = storedPayload(input);
@@ -401,12 +401,12 @@ export async function listApprovalRequests(email: string): Promise<ApprovalReque
 export async function requestExportApproval(email: string) {
   const vault = await ensureSharedPublicVault(email);
   const d1 = getD1();
-  if (await countActiveApplicationUsers() < 2) throw new Error("请先创建并启用至少一位其他系统用户，再请求导出批准。");
+  if (await countActiveApplicationUsers() < 2) throw new Error("请先创建并启用另一位系统用户，再发起导出确认。");
 
   const existing = await d1.prepare(
     "SELECT id FROM approval_requests WHERE vault_id = ? AND requested_by = ? AND status = 'pending' LIMIT 1",
   ).bind(vault.id, email).first<{ id: string }>();
-  if (existing) throw new Error("你已有一条等待处理的导出批准请求。请等待协作人处理或在 10 分钟后重试。");
+  if (existing) throw new Error("你已有一条等待确认的导出请求。请等待另一位用户处理，或在 10 分钟后重试。");
 
   const id = crypto.randomUUID();
   const expiresAt = new Date(Date.now() + 10 * 60_000).toISOString();
@@ -423,12 +423,12 @@ export async function decideApproval(email: string, id: string, decision: "appro
   const approval = await d1.prepare(
     "SELECT id, vault_id, requested_by, action, status, expires_at FROM approval_requests WHERE id = ? LIMIT 1",
   ).bind(id).first<{ id: string; vault_id: string; requested_by: string; action: string; status: string; expires_at: string }>();
-  if (!approval || approval.status !== "pending") throw new Error("该批准请求已不可处理。");
-  if (approval.requested_by === email) throw new Error("不能批准自己的请求。");
-  if (Date.parse(approval.expires_at) <= Date.now()) throw new Error("该批准请求已过期。");
+  if (!approval || approval.status !== "pending") throw new Error("该导出确认已不可处理。");
+  if (approval.requested_by === email) throw new Error("不能批准自己的导出确认。");
+  if (Date.parse(approval.expires_at) <= Date.now()) throw new Error("该导出确认已过期。");
 
   const publicVault = await ensureSharedPublicVault(email);
-  if (publicVault.id !== approval.vault_id) throw new Error("该批准请求不属于当前公共空间。");
+  if (publicVault.id !== approval.vault_id) throw new Error("该导出确认不属于当前公共项目。");
 
   await d1.prepare(
     "UPDATE approval_requests SET status = ?, approver_email = ?, resolved_at = CURRENT_TIMESTAMP WHERE id = ?",
@@ -442,7 +442,7 @@ export async function exportVaultData(email: string, approvalId: string) {
     "SELECT vault_id, requested_by, status, expires_at FROM approval_requests WHERE id = ? LIMIT 1",
   ).bind(approvalId).first<{ vault_id: string; requested_by: string; status: string; expires_at: string }>();
   if (!approval || approval.requested_by !== email || approval.status !== "approved" || Date.parse(approval.expires_at) <= Date.now()) {
-    throw new Error("该导出请求尚未获得有效的协作人批准。");
+    throw new Error("该导出请求尚未获得另一位用户的有效批准。");
   }
 
   const data = await listVaultData(email);

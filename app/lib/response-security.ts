@@ -50,5 +50,5 @@ export function secureApplicationResponse(response: Response, noStore = false) {
 export function crossOriginRequestResponse(request: Request) {
   const origin = request.headers.get("origin");
   if (!origin || origin === new URL(request.url).origin) return null;
-  return secureJson({ error: "已拒绝跨站请求。请从守钥页面重新操作。" }, { status: 403 });
+  return secureJson({ error: "已拒绝跨站请求。请从 djmima 页面重新操作。" }, { status: 403 });
 }

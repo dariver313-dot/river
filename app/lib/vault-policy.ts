@@ -22,10 +22,10 @@ export function boundedText(value: unknown, field: keyof typeof fieldLimits, opt
 
 export function assertVaultMoveAllowed(currentSpace: VaultSpace, nextSpace: VaultSpace, isAdmin: boolean) {
   if (currentSpace === "公共" && nextSpace !== "公共") {
-    throw new Error("公共项目不能移入个人空间。若不再需要公开，请删除或归档该公共项目。");
+    throw new Error("公共项目不能移入个人项目。若不再需要公开，请删除或归档。");
   }
   if (currentSpace === "个人" && nextSpace === "公共" && !isAdmin) {
-    throw new Error("只有管理员可以将个人项目发布到公共空间。");
+    throw new Error("只有管理员可以将个人项目设为公共项目。");
   }
 }
 

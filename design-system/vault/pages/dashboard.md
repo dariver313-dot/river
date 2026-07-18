@@ -1,4 +1,4 @@
-# Dashboard Override — 守钥 Vault
+# Dashboard Override — djmima Vault
 
 This file intentionally overrides the mobile/dark recommendation in `../MASTER.md` for the first desktop web password-vault screen.
 

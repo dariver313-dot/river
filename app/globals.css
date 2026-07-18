@@ -2132,7 +2132,7 @@ button:disabled {
   grid-template-columns: 22px 1fr;
   gap: 10px;
   margin: 0 18px;
-  padding: 13px;
+  padding: 11px 12px;
   border: 1px solid #cadde8;
   border-radius: var(--radius-sm);
   background: #f5faff;
@@ -2148,10 +2148,24 @@ button:disabled {
   font-size: 12px;
 }
 
+.sharing-guide-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.sharing-guide-title span {
+  flex: 0 0 auto;
+  color: var(--info);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
 .sharing-guide p {
-  margin: 6px 0 0;
+  margin: 4px 0 0;
   color: var(--ink-soft);
-  font-size: 12px;
+  font-size: 11px;
   line-height: 1.55;
 }
 
@@ -2168,6 +2182,22 @@ button:disabled {
 .sharing-section {
   padding: 18px;
   border-top: 1px solid var(--line);
+}
+
+.sharing-member-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: -2px 0 12px;
+  color: var(--ink-soft);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.sharing-member-note svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: var(--accent-strong);
 }
 
 .system-user-table-wrap {

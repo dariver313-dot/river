@@ -43,6 +43,8 @@ type Collection = "all" | "security";
 type Page = "vault" | "profile" | "users";
 type SecurityFocus = "all" | SecurityIssue;
 type SortOrder = "updated" | "name";
+type VaultTotp = { label: string; config: TotpConfig };
+type TotpFormEntry = { id: string; label: string; value: string; config?: TotpConfig };
 
 type VaultItem = {
   id: string;
@@ -59,12 +61,12 @@ type VaultItem = {
   favorite: boolean;
   brand: string;
   note: string;
-  totp?: TotpConfig;
+  totps: VaultTotp[];
   canEdit: boolean;
   sharedBy?: string;
 };
 
-type VaultItemSummary = Omit<VaultItem, "password" | "note" | "totp"> & {
+type VaultItemSummary = Omit<VaultItem, "password" | "note" | "totps"> & {
   passwordLength: number;
   hasTotp: boolean;
   securityIssues: SecurityIssue[];
@@ -77,8 +79,7 @@ type Viewer = {
 };
 
 type CredentialForm = Pick<VaultItem, "name" | "domain" | "username" | "password" | "category" | "group"> & {
-  totpInput: string;
-  removeTotp: boolean;
+  totpEntries: TotpFormEntry[];
 };
 type AuditEntry = { action: string; actorEmail: string; itemId: string | null; createdAt: string };
 type SystemUser = { email: string; role: "admin" | "user"; status: "active" | "suspended"; createdAt: string; isCurrent: boolean };
@@ -95,8 +96,12 @@ type ApprovalRequest = {
 
 const spaceFilters = ["全部", "个人", "公共"] as const;
 
+function newTotpFormEntry(index = 0, config?: TotpConfig, label?: string): TotpFormEntry {
+  return { id: crypto.randomUUID(), label: label ?? (index === 0 ? "登录验证器" : `验证器 ${index + 1}`), value: "", ...(config ? { config } : {}) };
+}
+
 function emptyCredentialForm(): CredentialForm {
-  return { name: "", domain: "", username: "", password: "", category: "", group: "个人", totpInput: "", removeTotp: false };
+  return { name: "", domain: "", username: "", password: "", category: "", group: "个人", totpEntries: [newTotpFormEntry()] };
 }
 
 function generateStrongPassword() {
@@ -128,7 +133,7 @@ function toItemSummary(item: VaultItem, securityIssues: SecurityIssue[] = []): V
     canEdit: item.canEdit,
     ...(item.sharedBy ? { sharedBy: item.sharedBy } : {}),
     passwordLength: item.password.length,
-    hasTotp: Boolean(item.totp),
+    hasTotp: item.totps.length > 0,
     securityIssues,
   };
 }
@@ -296,7 +301,8 @@ function ProfileOverview({
   );
 }
 
-function AuthenticatorCode({ config, itemId, onCopy, onReveal }: { config: TotpConfig; itemId: string; onCopy: (value: string, label: string, itemId: string) => void; onReveal: () => void }) {
+function AuthenticatorCode({ entry, itemId, onCopy, onReveal }: { entry: VaultTotp; itemId: string; onCopy: (value: string, label: string, itemId: string) => void; onReveal: () => void }) {
+  const { config } = entry;
   const [now, setNow] = useState(() => Date.now());
   const [code, setCode] = useState("");
   const [error, setError] = useState("");
@@ -336,14 +342,59 @@ function AuthenticatorCode({ config, itemId, onCopy, onReveal }: { config: TotpC
 
   return (
     <div className="totp-card">
-      <div className="totp-heading"><span>验证器代码</span><small>{totpLabel(config)}</small></div>
+      <div className="totp-heading"><span>{entry.label}</span><small>{totpLabel(config)}</small></div>
       <div className="totp-value">
         <strong>{visible ? (error || (code ? <>{code.slice(0, splitAt)} <span>{code.slice(splitAt)}</span></> : "··· ···")) : "••• •••"}</strong>
         <button className="icon-button" onClick={() => { const next = !visible; setVisible(next); if (next) onReveal(); }} aria-label={visible ? "隐藏验证器代码" : "显示验证器代码"}>{visible ? <EyeOff size={17} /> : <Eye size={17} />}</button>
-        <button className="icon-button" onClick={() => code && onCopy(code, "验证器代码", itemId)} aria-label="复制验证器代码" disabled={!visible || !code}><Copy size={17} /></button>
+        <button className="icon-button" onClick={() => code && onCopy(code, `${entry.label}验证码`, itemId)} aria-label={`复制${entry.label}验证码`} disabled={!visible || !code}><Copy size={17} /></button>
       </div>
       <div className="totp-timer"><span style={{ width: `${(remaining / config.period) * 100}%` }} /><small>{remaining} 秒后刷新</small></div>
     </div>
+  );
+}
+
+function TotpEntryFields({
+  entries,
+  formId,
+  isReading,
+  onChange,
+  onAdd,
+  onRemove,
+  onReadImage,
+}: {
+  entries: TotpFormEntry[];
+  formId: "add" | "edit";
+  isReading: boolean;
+  onChange: (id: string, changes: Pick<TotpFormEntry, "label"> | Pick<TotpFormEntry, "value">) => void;
+  onAdd: () => void;
+  onRemove: (id: string) => void;
+  onReadImage: (event: ChangeEvent<HTMLInputElement>, id: string) => void;
+}) {
+  return (
+    <fieldset className="totp-entry">
+      <legend>验证器密钥 <span>（可选，最多 3 个）</span></legend>
+      <p className="totp-entry-intro">默认保留一个登录验证器。只有不同用途需要独立验证码时，再添加新的验证器。</p>
+      <div className="totp-entry-list">
+        {entries.map((entry, index) => {
+          const entryInputId = `${formId}-totp-${entry.id}`;
+          const entryImageId = `${entryInputId}-image`;
+          const isStored = Boolean(entry.config && !entry.value);
+          return (
+            <div className="totp-entry-card" key={entry.id}>
+              <div className="totp-entry-card-head">
+                <label htmlFor={`${entryInputId}-label`}>用途名称<input id={`${entryInputId}-label`} value={entry.label} onChange={(event) => onChange(entry.id, { label: event.target.value })} maxLength={40} /></label>
+                {(entries.length > 1 || isStored || Boolean(entry.value)) && <button type="button" className="totp-remove-button" onClick={() => onRemove(entry.id)}><Trash2 size={14} />移除</button>}
+              </div>
+              <label className="sr-only" htmlFor={entryInputId}>{entry.label || `验证器 ${index + 1} 密钥`}</label>
+              <input id={entryInputId} type="text" value={entry.value} onChange={(event) => onChange(entry.id, { value: event.target.value })} placeholder={isStored ? "留空保留；粘贴新密钥可替换" : "粘贴二维码内容或 Setup Key"} autoComplete="off" spellCheck="false" />
+              <div className="totp-entry-actions"><label className="totp-image-button" htmlFor={entryImageId}><ImageUp size={16} />{isReading ? "正在读取图片" : "从二维码图片读取"}</label><input id={entryImageId} className="sr-only" type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => onReadImage(event, entry.id)} disabled={isReading} />{isStored && <span className="totp-saved-state"><ShieldCheck size={14} />已保存</span>}</div>
+            </div>
+          );
+        })}
+      </div>
+      {entries.length < 3 && <button type="button" className="secondary-button totp-add-button" onClick={onAdd}><Plus size={16} />添加验证器</button>}
+      <p>不使用摄像头。图片仅在当前浏览器解析，保存时只会加密写入验证器密钥。</p>
+    </fieldset>
   );
 }
 
@@ -522,6 +573,20 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
   }, [page]);
 
   useEffect(() => {
+    const modalIsOpen = showAdd || Boolean(editingItem) || Boolean(deleteTarget) || showSharing || showUserCreateDialog;
+    if (!modalIsOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    const previousPaddingRight = document.body.style.paddingRight;
+    const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
+    document.body.style.overflow = "hidden";
+    if (scrollbarWidth > 0) document.body.style.paddingRight = `${scrollbarWidth}px`;
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.body.style.paddingRight = previousPaddingRight;
+    };
+  }, [deleteTarget, editingItem, showAdd, showSharing, showUserCreateDialog]);
+
+  useEffect(() => {
     let cancelled = false;
 
     async function loadVault() {
@@ -632,7 +697,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
   async function copyValue(value: string, label: string, itemId?: string) {
     try {
       await navigator.clipboard.writeText(value);
-      if (itemId) recordAudit(label === "验证器代码" ? "totp_copied" : "credential_copied", itemId);
+      if (itemId) recordAudit(label.includes("验证码") ? "totp_copied" : "credential_copied", itemId);
       setToast(`${label}已复制，请在不需要时手动清理剪贴板`);
     } catch {
       setToast("复制失败，请手动选择内容");
@@ -685,7 +750,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
   }
 
   function openEdit(item: VaultItem) {
-    setEditForm({ name: item.name, domain: item.domain, username: item.username, password: item.password, category: item.category, group: item.group, totpInput: "", removeTotp: false });
+    setEditForm({ name: item.name, domain: item.domain, username: item.username, password: item.password, category: item.category, group: item.group, totpEntries: item.totps.length > 0 ? item.totps.map((entry, index) => newTotpFormEntry(index, entry.config, entry.label)) : [newTotpFormEntry()] });
     setEditingItem(item);
     setRevealed(false);
     setShowEditPassword(false);
@@ -703,7 +768,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
     if (editingItem.group === "个人" && editForm.group === "公共" && !window.confirm("发布后，所有已启用用户都能查看该项目的账号、密码和验证器代码。确定继续吗？")) return;
 
     try {
-      await updateRemoteItem(editingItem, { ...editForm, totp: editingItem.totp });
+      await updateRemoteItem(editingItem, editForm);
       setEditingItem(null);
       setShowEditPassword(false);
       setToast("项目已加密更新");
@@ -833,7 +898,28 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
     }
   }
 
-  async function importTotpFromImage(event: ChangeEvent<HTMLInputElement>, target: "add" | "edit") {
+  function updateTotpEntry(target: "add" | "edit", id: string, changes: Pick<TotpFormEntry, "label"> | Pick<TotpFormEntry, "value">) {
+    const update = (current: CredentialForm) => ({ ...current, totpEntries: current.totpEntries.map((entry) => entry.id === id ? { ...entry, ...changes } : entry) });
+    if (target === "add") setForm(update);
+    else setEditForm(update);
+  }
+
+  function addTotpEntry(target: "add" | "edit") {
+    const update = (current: CredentialForm) => ({ ...current, totpEntries: [...current.totpEntries, newTotpFormEntry(current.totpEntries.length)] });
+    if (target === "add") setForm(update);
+    else setEditForm(update);
+  }
+
+  function removeTotpEntry(target: "add" | "edit", id: string) {
+    const update = (current: CredentialForm) => {
+      const totpEntries = current.totpEntries.filter((entry) => entry.id !== id);
+      return { ...current, totpEntries: totpEntries.length > 0 ? totpEntries : [newTotpFormEntry()] };
+    };
+    if (target === "add") setForm(update);
+    else setEditForm(update);
+  }
+
+  async function importTotpFromImage(event: ChangeEvent<HTMLInputElement>, target: "add" | "edit", id: string) {
     const file = event.target.files?.[0];
     event.target.value = "";
     if (!file) return;
@@ -841,11 +927,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
     setIsReadingTotp(true);
     try {
       const totpInput = await decodeTotpImage(file);
-      if (target === "add") {
-        setForm((current) => ({ ...current, totpInput, removeTotp: false }));
-      } else {
-        setEditForm((current) => ({ ...current, totpInput, removeTotp: false }));
-      }
+      updateTotpEntry(target, id, { value: totpInput });
       setToast("已在本地读取二维码，验证器配置将在保存时加密写入");
     } catch (error) {
       setToast(error instanceof Error ? error.message : "二维码读取失败。");
@@ -962,14 +1044,14 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
           <section className="users-panel" aria-labelledby="users-page-title"><div className="users-toolbar"><div className="users-toolbar-copy"><h2 id="users-page-title">系统用户</h2><span>{isUsersLoading ? "正在读取用户" : `显示 ${visibleSystemUsers.length} / ${systemUsers.length} 位用户`}</span></div><span className="users-toolbar-note">角色与访问状态</span></div>{isUsersLoading ? <p className="users-empty">正在读取系统用户。</p> : visibleSystemUsers.length > 0 ? <div className="system-user-table-wrap"><table className="system-user-table"><thead><tr><th scope="col">用户</th><th scope="col">角色</th><th scope="col">状态</th><th scope="col">创建时间</th><th scope="col">管理</th></tr></thead><tbody>{visibleSystemUsers.map((user) => <tr key={user.email}><td data-label="用户"><div className="system-user-identity"><strong title={user.email}>{user.email}</strong>{user.isCurrent && <span className="current-user">当前账户</span>}</div></td><td data-label="角色"><b className={`role-badge role-${user.role}`}>{user.role === "admin" ? "管理员" : "普通用户"}</b></td><td data-label="状态"><b className={`status-badge status-${user.status}`}>{user.status === "active" ? "已启用" : "已停用"}</b></td><td data-label="创建时间"><span className="system-user-created">{user.createdAt}</span></td><td data-label="管理">{user.isCurrent ? <span className="current-user">当前账户不可调整</span> : <div className="system-user-actions"><SurfaceSelect id={`role-${user.email}`} ariaLabel={`调整${user.email}的系统角色`} value={user.role} onChange={(role) => void updateSystemUser(user, { role })} options={[{ value: "user", label: "普通用户" }, { value: "admin", label: "管理员" }]} disabled={isSaving} compact /><button type="button" className="secondary-button" onClick={() => { const nextStatus = user.status === "active" ? "suspended" : "active"; if (nextStatus === "suspended" && !window.confirm(`确定停用 ${user.email} 吗？`)) return; void updateSystemUser(user, { status: nextStatus }); }} disabled={isSaving}>{user.status === "active" ? "停用" : "启用"}</button><button type="button" className="secondary-button user-delete-button" onClick={() => void deleteSystemUser(user)} disabled={isSaving}>删除</button></div>}</td></tr>)}</tbody></table></div> : <p className="users-empty">没有找到匹配的系统用户。</p>}</section>
         </section> : page === "profile" ? <ProfileOverview viewer={viewer} viewerInitial={viewerInitial} isLoading={isLoading} securityScore={securityScore} securityIssueCount={securityIssueCount} onOpenSecurity={openSecurityReview} /> : <>
         <section className="security-strip" aria-labelledby="security-heading">
-          <button type="button" className="score-block score-block-action" onClick={() => openSecurityReview()} aria-label="查看全部账户安全检查结果">
+          {securityIssueCount > 0 ? <button type="button" className="score-block score-block-action" onClick={() => openSecurityReview()} aria-label="查看全部账户安全检查结果">
             <span className="score-copy"><span>基础安全评分</span><strong id="security-heading">{securityScore}<small>/100</small></strong></span>
             <span className={`score-meter ${items.length === 0 ? "is-empty" : securityScore >= 80 ? "is-healthy" : securityScore >= 60 ? "is-caution" : "is-risk"}`} role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={securityScore} aria-valuetext={items.length === 0 ? "尚无账户，未生成评分" : `安全评分 ${securityScore} 分，共 ${securityIssueCount} 条基础风险`}><span style={{ width: `${securityScore}%` }} /></span>
             <span className="score-status">{items.length === 0 ? <ShieldCheck size={15} aria-hidden="true" /> : securityScore >= 80 ? <Check size={15} aria-hidden="true" /> : <AlertTriangle size={15} aria-hidden="true" />}{items.length === 0 ? "添加账户后显示安全评分" : securityScore >= 80 ? "未发现需要处理的基础风险" : `${securityIssueCount} 条风险需要处理`}<ChevronRight size={15} aria-hidden="true" /></span>
-          </button>
-          <button className="risk-item" onClick={() => openSecurityReview("weak_password")} disabled={weakPasswordCount === 0}><span className="risk-icon risk-danger"><AlertTriangle size={17} /></span><span><strong>{weakPasswordCount} 个密码长度不足</strong><small>建议使用至少 14 位随机密码</small></span><ChevronRight size={18} /></button>
-          <button className="risk-item" onClick={() => openSecurityReview("reused_password")} disabled={reusedPasswordCount === 0}><span className="risk-icon risk-warning"><ShieldEllipsis size={17} /></span><span><strong>{reusedPasswordCount} 个重复密码</strong><small>避免一个泄露影响多个账号</small></span><ChevronRight size={18} /></button>
-          <button className="risk-item" onClick={() => openSecurityReview("missing_two_factor")} disabled={missingTwoFactorCount === 0}><span className="risk-icon risk-info"><Smartphone size={17} /></span><span><strong>{missingTwoFactorCount} 个未启用双重验证</strong><small>查看需处理账户</small></span><ChevronRight size={18} /></button>
+          </button> : <div className="score-block score-block-static"><span className="score-copy"><span>基础安全评分</span><strong id="security-heading">{securityScore}<small>/100</small></strong></span><span className={`score-meter ${items.length === 0 ? "is-empty" : "is-healthy"}`} role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={securityScore} aria-valuetext={items.length === 0 ? "尚无账户，未生成评分" : "安全评分 100 分，未发现基础风险"}><span style={{ width: `${securityScore}%` }} /></span><span className="score-status">{items.length === 0 ? <ShieldCheck size={15} aria-hidden="true" /> : <Check size={15} aria-hidden="true" />}{items.length === 0 ? "添加账户后显示安全评分" : "基础检查已通过"}</span></div>}
+          {weakPasswordCount > 0 ? <button className="risk-item" onClick={() => openSecurityReview("weak_password")}><span className="risk-icon risk-danger"><AlertTriangle size={17} /></span><span><strong>{weakPasswordCount} 个密码长度不足</strong><small>建议使用至少 14 位随机密码</small></span><ChevronRight size={18} /></button> : <div className="risk-item risk-item-static"><span className="risk-icon risk-safe"><Check size={17} /></span><span><strong>{items.length === 0 ? "尚无账户" : "密码长度符合建议"}</strong><small>{items.length === 0 ? "添加账户后自动检查" : "未发现少于 14 位的密码"}</small></span></div>}
+          {reusedPasswordCount > 0 ? <button className="risk-item" onClick={() => openSecurityReview("reused_password")}><span className="risk-icon risk-warning"><ShieldEllipsis size={17} /></span><span><strong>{reusedPasswordCount} 个重复密码</strong><small>避免一个泄露影响多个账号</small></span><ChevronRight size={18} /></button> : <div className="risk-item risk-item-static"><span className="risk-icon risk-safe"><Check size={17} /></span><span><strong>{items.length === 0 ? "尚无账户" : "未发现重复密码"}</strong><small>{items.length === 0 ? "添加账户后自动检查" : "每个已保存密码均不重复"}</small></span></div>}
+          {missingTwoFactorCount > 0 ? <button className="risk-item" onClick={() => openSecurityReview("missing_two_factor")}><span className="risk-icon risk-info"><Smartphone size={17} /></span><span><strong>{missingTwoFactorCount} 个未启用双重验证</strong><small>查看需处理账户</small></span><ChevronRight size={18} /></button> : <div className="risk-item risk-item-static"><span className="risk-icon risk-safe"><Check size={17} /></span><span><strong>{items.length === 0 ? "尚无账户" : "双重验证状态正常"}</strong><small>{items.length === 0 ? "添加账户后自动检查" : "全部账户均已开启保护"}</small></span></div>}
         </section>
 
         <div className="content-grid">
@@ -1033,7 +1115,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
             <div className="detail-section">
               <div className="field-label"><span>密码</span><span className="password-meta">{selected.password.length} 位</span></div>
               <div className="secret-field password-field"><span className={revealed ? "password-revealed" : "password-masked"}>{revealed ? selected.password : "••••••••••••••••"}</span><button className="icon-button" onClick={() => { const next = !revealed; setRevealed(next); if (next) recordAudit("password_revealed", selected.id); }} aria-label={revealed ? "隐藏密码" : "显示密码"}>{revealed ? <EyeOff size={17} /> : <Eye size={17} />}</button><button className="icon-button" onClick={() => copyValue(selected.password, "密码", selected.id)} aria-label="复制密码"><Copy size={17} /></button></div>
-              <div className="credential-statuses" aria-label="账号安全状态"><span className={`credential-status credential-status-${selected.strength}`}>{selected.strength === "安全" ? <ShieldCheck size={14} aria-hidden="true" /> : <AlertTriangle size={14} aria-hidden="true" />}密码{selected.strength}</span><span className={`credential-status ${selected.twoFactor ? "is-protected" : "is-unprotected"}`}>{selected.twoFactor ? <ShieldCheck size={14} aria-hidden="true" /> : <AlertTriangle size={14} aria-hidden="true" />}{selected.totp ? "验证器已保存" : selected.twoFactor ? "双重验证已开启" : "未开双重验证"}</span></div>
+              <div className="credential-statuses" aria-label="账号安全状态"><span className={`credential-status credential-status-${selected.strength}`}>{selected.strength === "安全" ? <ShieldCheck size={14} aria-hidden="true" /> : <AlertTriangle size={14} aria-hidden="true" />}密码{selected.strength}</span><span className={`credential-status ${selected.twoFactor ? "is-protected" : "is-unprotected"}`}>{selected.twoFactor ? <ShieldCheck size={14} aria-hidden="true" /> : <AlertTriangle size={14} aria-hidden="true" />}{selected.totps.length > 0 ? `已保存 ${selected.totps.length} 个验证器` : selected.twoFactor ? "双重验证已开启" : "未开双重验证"}</span></div>
             </div>
 
             {selectedSummary && selectedSummary.securityIssues.length > 0 && <div className="detail-section security-findings">
@@ -1041,7 +1123,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
               <div className="security-finding-list">{selectedSummary.securityIssues.map((issue) => <div className={`security-finding security-finding-${issue}`} key={issue}><AlertTriangle size={16} aria-hidden="true" /><div><strong>{securityIssueCopy[issue].label}</strong><span>{securityIssueCopy[issue].detail}</span></div></div>)}</div>
             </div>}
 
-            {selected.totp && <div className="detail-section"><AuthenticatorCode config={selected.totp} itemId={selected.id} onCopy={copyValue} onReveal={() => recordAudit("totp_revealed", selected.id)} /></div>}
+            {selected.totps.length > 0 && <div className="detail-section"><div className="field-label"><span>验证器代码</span><span className="password-meta">{selected.totps.length} 个</span></div><div className="totp-list">{selected.totps.map((entry, index) => <AuthenticatorCode entry={entry} itemId={selected.id} onCopy={copyValue} onReveal={() => recordAudit("totp_revealed", selected.id)} key={`${entry.label}-${index}`} />)}</div></div>}
 
             {selected.note && <div className="detail-section">
               <div className="field-label"><span>备注</span></div>
@@ -1072,21 +1154,15 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
 
       {showAdd && (
         <div className="modal-layer" role="presentation">
-          <section className="modal" role="dialog" aria-modal="true" aria-labelledby="add-title">
+          <section className="modal credential-modal" role="dialog" aria-modal="true" aria-labelledby="add-title">
             <header><div><span className="modal-icon"><KeyRound size={20} /></span><div><h2 id="add-title">添加登录信息</h2><p>保存后以加密形式写入你的密码库</p></div></div><button className="icon-button" onClick={() => setShowAdd(false)} aria-label="关闭"><X size={20} /></button></header>
             <form onSubmit={submitCredential}>
-              <label>名称<input required value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="例如：公司邮箱" autoFocus /></label>
-              <label>网站地址<input required value={form.domain} onChange={(event) => setForm({ ...form, domain: event.target.value })} placeholder="example.com" inputMode="url" /></label>
+              <div className="credential-form-pair"><label>名称<input required value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="例如：公司邮箱" autoFocus /></label><label>网站地址<input required value={form.domain} onChange={(event) => setForm({ ...form, domain: event.target.value })} placeholder="example.com" inputMode="url" /></label></div>
               <label>分类（可选）<input list="credential-category-options" value={form.category} onChange={(event) => setForm({ ...form, category: event.target.value })} placeholder="例如：部门一" maxLength={60} /><small>可输入新名称；分类会随加密项目保存，用于搜索和筛选。</small></label>
               <datalist id="credential-category-options">{categoryNames.map((name) => <option value={name} key={name} />)}</datalist>
               <label>用户名<input required value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} placeholder="name@example.com" autoComplete="username" /></label>
               <label>密码<div className="form-password"><input required type={showNewPassword ? "text" : "password"} value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} placeholder="输入或生成强密码" autoComplete="new-password" /><button type="button" className="password-visibility" onClick={() => setShowNewPassword((current) => !current)} aria-label={showNewPassword ? "隐藏输入的密码" : "显示输入的密码"}>{showNewPassword ? <EyeOff size={16} /> : <Eye size={16} />}</button><button type="button" onClick={generatePassword}><WandSparkles size={16} />生成</button></div><small>建议至少 14 位，并混合字母、数字和符号。</small></label>
-              <div className="totp-entry">
-                <label htmlFor="add-totp">验证器密钥（可选）</label>
-                <input id="add-totp" type="text" value={form.totpInput} onChange={(event) => setForm({ ...form, totpInput: event.target.value, removeTotp: false })} placeholder="粘贴二维码内容或 Setup Key" autoComplete="off" spellCheck="false" />
-                <div className="totp-entry-actions"><label className="totp-image-button" htmlFor="add-totp-image"><ImageUp size={16} />{isReadingTotp ? "正在读取图片" : "从二维码图片读取"}</label><input id="add-totp-image" className="sr-only" type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => void importTotpFromImage(event, "add")} disabled={isReadingTotp} /></div>
-                <p>不使用摄像头。图片仅在当前浏览器解析，保存时仅加密存入验证器密钥。</p>
-              </div>
+              <TotpEntryFields entries={form.totpEntries} formId="add" isReading={isReadingTotp} onChange={(id, changes) => updateTotpEntry("add", id, changes)} onAdd={() => addTotpEntry("add")} onRemove={(id) => removeTotpEntry("add", id)} onReadImage={(event, id) => void importTotpFromImage(event, "add", id)} />
               <div className="field-control"><span>可见范围</span><SurfaceSelect id="add-space" ariaLabel="可见范围" value={form.group} onChange={(group) => setForm({ ...form, group })} options={[{ value: "个人", label: "个人项目" }, ...(isAdmin ? [{ value: "公共", label: "公共项目" }] : [])]} /></div>
               <footer><button type="button" className="secondary-button" onClick={() => setShowAdd(false)} disabled={isSaving}>取消</button><button type="submit" className="primary-button" disabled={isSaving}><Plus size={17} />{isSaving ? "正在保存" : "添加项目"}</button></footer>
             </form>
@@ -1096,21 +1172,15 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
 
       {editingItem && (
         <div className="modal-layer" role="presentation">
-          <section className="modal" role="dialog" aria-modal="true" aria-labelledby="edit-title">
+          <section className="modal credential-modal" role="dialog" aria-modal="true" aria-labelledby="edit-title">
             <header><div><span className="modal-icon"><Edit3 size={20} /></span><div><h2 id="edit-title">编辑项目</h2><p>变更会重新加密后保存</p></div></div><button className="icon-button" onClick={() => setEditingItem(null)} aria-label="关闭编辑"><X size={20} /></button></header>
             <form onSubmit={submitEditCredential}>
-              <label>名称<input required value={editForm.name} onChange={(event) => setEditForm({ ...editForm, name: event.target.value })} autoFocus /></label>
-              <label>网站地址<input required value={editForm.domain} onChange={(event) => setEditForm({ ...editForm, domain: event.target.value })} inputMode="url" /></label>
+              <div className="credential-form-pair"><label>名称<input required value={editForm.name} onChange={(event) => setEditForm({ ...editForm, name: event.target.value })} autoFocus /></label><label>网站地址<input required value={editForm.domain} onChange={(event) => setEditForm({ ...editForm, domain: event.target.value })} inputMode="url" /></label></div>
               <label>分类（可选）<input list="credential-category-options" value={editForm.category} onChange={(event) => setEditForm({ ...editForm, category: event.target.value })} placeholder="例如：部门一" maxLength={60} /><small>可输入新名称；分类会随加密项目保存，用于搜索和筛选。</small></label>
               <datalist id="credential-category-options">{categoryNames.map((name) => <option value={name} key={name} />)}</datalist>
               <label>用户名<input required value={editForm.username} onChange={(event) => setEditForm({ ...editForm, username: event.target.value })} autoComplete="username" /></label>
               <label>密码<div className="form-password"><input required type={showEditPassword ? "text" : "password"} value={editForm.password} onChange={(event) => setEditForm({ ...editForm, password: event.target.value })} autoComplete="new-password" /><button type="button" className="password-visibility" onClick={() => setShowEditPassword((current) => !current)} aria-label={showEditPassword ? "隐藏输入的密码" : "显示输入的密码"}>{showEditPassword ? <EyeOff size={16} /> : <Eye size={16} />}</button><button type="button" onClick={generateEditPassword}><WandSparkles size={16} />生成</button></div><small>建议至少 14 位，并混合字母、数字和符号。</small></label>
-              <div className="totp-entry">
-                <label htmlFor="edit-totp">验证器密钥</label>
-                <input id="edit-totp" type="text" value={editForm.totpInput} onChange={(event) => setEditForm({ ...editForm, totpInput: event.target.value, removeTotp: false })} placeholder={editingItem.totp ? "留空保留；输入新密钥可替换" : "粘贴二维码内容或 Setup Key"} autoComplete="off" spellCheck="false" />
-                <div className="totp-entry-actions"><label className="totp-image-button" htmlFor="edit-totp-image"><ImageUp size={16} />{isReadingTotp ? "正在读取图片" : "从二维码图片读取"}</label><input id="edit-totp-image" className="sr-only" type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => void importTotpFromImage(event, "edit")} disabled={isReadingTotp} /></div>
-                {editingItem.totp ? <p>当前已配置验证器。{editForm.removeTotp ? "保存后会移除。" : "留空可保留现有密钥。"} <button type="button" className="text-button" onClick={() => setEditForm({ ...editForm, removeTotp: !editForm.removeTotp, totpInput: "" })}>{editForm.removeTotp ? "撤销移除" : "移除验证器"}</button></p> : <p>不使用摄像头。图片仅在当前浏览器解析，保存时仅加密存入验证器密钥。</p>}
-              </div>
+              <TotpEntryFields entries={editForm.totpEntries} formId="edit" isReading={isReadingTotp} onChange={(id, changes) => updateTotpEntry("edit", id, changes)} onAdd={() => addTotpEntry("edit")} onRemove={(id) => removeTotpEntry("edit", id)} onReadImage={(event, id) => void importTotpFromImage(event, "edit", id)} />
               <div className="field-control"><span>可见范围</span><SurfaceSelect id="edit-space" ariaLabel="可见范围" value={editForm.group} onChange={(group) => setEditForm({ ...editForm, group })} options={[{ value: "个人", label: "个人项目" }, ...(isAdmin ? [{ value: "公共", label: "公共项目" }] : [])]} disabled={editingItem.group === "公共"} />{editingItem.group === "公共" && <small>公共项目保持为公共范围，避免误移除所有用户的查看权限。</small>}</div>
               <footer><button type="button" className="secondary-button" onClick={() => setEditingItem(null)} disabled={isSaving}>取消</button><button type="submit" className="primary-button" disabled={isSaving}><Check size={17} />{isSaving ? "正在保存" : "保存变更"}</button></footer>
             </form>

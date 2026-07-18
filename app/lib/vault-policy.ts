@@ -6,6 +6,7 @@ const fieldLimits = {
   username: 255,
   password: 1024,
   category: 60,
+  totpLabel: 40,
   brand: 32,
   note: 1_000,
 } as const;
@@ -37,6 +38,7 @@ function fieldLabel(field: keyof typeof fieldLimits) {
     username: "用户名",
     password: "密码",
     category: "分类",
+    totpLabel: "验证器用途名称",
     brand: "标识",
     note: "备注",
   };

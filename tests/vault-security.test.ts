@@ -24,9 +24,11 @@ test("只有管理员能将个人项目设为公共项目", () => {
 test("敏感字段有明确的长度边界", () => {
   assert.equal(boundedText("  example.com  ", "domain", { required: true }), "example.com");
   assert.equal(boundedText(" 部门一 ", "category"), "部门一");
+  assert.equal(boundedText(" 登录验证器 ", "totpLabel"), "登录验证器");
   assert.throws(() => boundedText("x".repeat(121), "name"), /不能超过 120/);
   assert.throws(() => boundedText("x".repeat(1_025), "password", { trim: false }), /不能超过 1024/);
   assert.throws(() => boundedText("x".repeat(61), "category"), /不能超过 60/);
+  assert.throws(() => boundedText("x".repeat(41), "totpLabel"), /不能超过 40/);
 });
 
 test("密码库响应禁止缓存并带有浏览器安全策略", async () => {

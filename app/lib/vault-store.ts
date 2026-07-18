@@ -7,6 +7,7 @@ import { reviewCredentialSecurity, type SecurityIssue } from "./security-review"
 
 export type VaultItemType = "登录" | "卡片" | "安全笔记";
 export type VaultStrength = "安全" | "一般" | "风险";
+export type VaultTotp = { label: string; config: TotpConfig };
 
 export type VaultCredential = {
   id: string;
@@ -23,12 +24,12 @@ export type VaultCredential = {
   favorite: boolean;
   brand: string;
   note: string;
-  totp?: TotpConfig;
+  totps: VaultTotp[];
   canEdit: boolean;
   sharedBy?: string;
 };
 
-export type VaultItemSummary = Omit<VaultCredential, "password" | "note" | "totp"> & {
+export type VaultItemSummary = Omit<VaultCredential, "password" | "note" | "totps"> & {
   passwordLength: number;
   hasTotp: boolean;
   securityIssues: SecurityIssue[];
@@ -45,9 +46,12 @@ export type ApprovalRequest = {
   isRequester: boolean;
 };
 
-type StoredCredential = Omit<VaultCredential, "id" | "group" | "updated" | "canEdit" | "sharedBy" | "category"> & {
+type StoredCredential = Omit<VaultCredential, "id" | "group" | "updated" | "canEdit" | "sharedBy" | "category" | "totps"> & {
   // 分类随加密项目一起存储；旧项目解密时没有该字段，也应可继续读取。
   category?: string;
+  totps?: VaultTotp[];
+  // 兼容已经加密保存的单个验证器配置。
+  totp?: TotpConfig;
 };
 type VaultKind = "personal" | "public";
 type VaultRole = "owner" | "editor" | "viewer";
@@ -82,6 +86,49 @@ function strengthFor(password: string): VaultStrength {
   return "风险";
 }
 
+function totpEntryLabel(value: unknown, index: number) {
+  return boundedText(value, "totpLabel") || (index === 0 ? "登录验证器" : `验证器 ${index + 1}`);
+}
+
+function parseTotpEntries(input: Record<string, unknown>): VaultTotp[] {
+  if (Array.isArray(input.totpEntries)) {
+    if (input.totpEntries.length > 3) throw new Error("每个项目最多保存 3 个验证器。");
+    const entries: VaultTotp[] = [];
+    const secrets = new Set<string>();
+
+    input.totpEntries.forEach((value, index) => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        throw new Error("验证器配置无效。请重新输入 Setup Key 或二维码内容。");
+      }
+      const source = value as Record<string, unknown>;
+      const raw = typeof source.value === "string" ? source.value.trim() : typeof source.totpInput === "string" ? source.totpInput.trim() : "";
+      if (raw.length > 4_096) throw new Error("验证器配置内容过长。请粘贴 Setup Key 或完整二维码内容。");
+      const config = raw ? parseTotpInput(raw) : toTotpConfig(source.config);
+      if (!config) return;
+      if (secrets.has(config.secret)) throw new Error("同一个验证器密钥只能添加一次。");
+      secrets.add(config.secret);
+      entries.push({ label: totpEntryLabel(source.label, index), config });
+    });
+    return entries;
+  }
+
+  const legacyInput = typeof input.totpInput === "string" ? input.totpInput.trim() : "";
+  if (legacyInput.length > 4_096) throw new Error("验证器配置内容过长。请粘贴 Setup Key 或完整二维码内容。");
+  const legacy = input.removeTotp === true ? undefined : legacyInput ? parseTotpInput(legacyInput) : toTotpConfig(input.totp);
+  return legacy ? [{ label: "登录验证器", config: legacy }] : [];
+}
+
+function storedTotpEntries(payload: StoredCredential): VaultTotp[] {
+  const source = Array.isArray(payload.totps)
+    ? payload.totps
+    : payload.totp ? [{ label: "登录验证器", config: payload.totp }] : [];
+  return source.slice(0, 3).map((entry, index) => {
+    const config = toTotpConfig(entry?.config);
+    if (!config) throw new Error("验证器配置无效。");
+    return { label: totpEntryLabel(entry?.label, index), config };
+  });
+}
+
 function timeLabel(value: string) {
   const timestamp = Date.parse(value.endsWith("Z") ? value : `${value.replace(" ", "T")}Z`);
   if (Number.isNaN(timestamp)) return "已保存";
@@ -100,13 +147,7 @@ function storedPayload(input: Record<string, unknown>): StoredCredential {
   const password = boundedText(input.password, "password", { trim: false, required: true });
   const category = boundedText(input.category, "category");
   const type = isItemType(input.type) ? input.type : "登录";
-  const totpInput = typeof input.totpInput === "string" ? input.totpInput.trim() : "";
-  if (totpInput.length > 4_096) throw new Error("验证器配置内容过长。请粘贴 Setup Key 或完整二维码内容。");
-  const totp = input.removeTotp === true
-    ? undefined
-    : totpInput
-      ? parseTotpInput(totpInput)
-      : toTotpConfig(input.totp);
+  const totps = parseTotpEntries(input);
 
   if (!name || !domain || !username || !password) {
     throw new Error("名称、网址、用户名和密码不能为空。");
@@ -120,11 +161,11 @@ function storedPayload(input: Record<string, unknown>): StoredCredential {
     category,
     type,
     strength: strengthFor(password),
-    twoFactor: Boolean(input.twoFactor) || Boolean(totp),
+    twoFactor: Boolean(input.twoFactor) || totps.length > 0,
     favorite: Boolean(input.favorite),
     brand: boundedText(input.brand, "brand") || "new",
     note: boundedText(input.note, "note"),
-    ...(totp ? { totp } : {}),
+    ...(totps.length > 0 ? { totps } : {}),
   };
 }
 
@@ -223,10 +264,14 @@ async function writeAudit(vaultId: string, actorEmail: string, action: string, i
 }
 
 function toCredential(row: VaultItemRow, payload: StoredCredential, vault: AccessibleVault): VaultCredential {
+  const credential = { ...payload };
+  delete credential.totp;
+  delete credential.totps;
   return {
     id: row.id,
-    ...payload,
+    ...credential,
     category: payload.category ?? "",
+    totps: storedTotpEntries(payload),
     group: vault.kind === "personal" ? "个人" : "公共",
     updated: timeLabel(row.updated_at),
     canEdit: canWrite(vault.role),
@@ -251,7 +296,7 @@ function toSummary(credential: VaultCredential, securityIssues: SecurityIssue[] 
     canEdit: credential.canEdit,
     ...(credential.sharedBy ? { sharedBy: credential.sharedBy } : {}),
     passwordLength: credential.password.length,
-    hasTotp: Boolean(credential.totp),
+    hasTotp: credential.totps.length > 0,
     securityIssues,
   };
 }
@@ -317,7 +362,7 @@ export async function createVaultItem(email: string, input: Record<string, unkno
   ).bind(id, vault.id, encrypted.ciphertext, encrypted.iv).run();
   await writeAudit(vault.id, email, "item_created", id);
 
-  return { id, ...payload, category: payload.category ?? "", group: space, updated: "刚刚更新", canEdit: space === "个人" || actor.role === "admin" } satisfies VaultCredential;
+  return { id, ...payload, category: payload.category ?? "", totps: payload.totps ?? [], group: space, updated: "刚刚更新", canEdit: space === "个人" || actor.role === "admin" } satisfies VaultCredential;
 }
 
 async function findItemAccess(email: string, itemId: string) {
@@ -352,7 +397,7 @@ export async function updateVaultItem(email: string, itemId: string, input: Reco
   ).bind(destination.id, encrypted.ciphertext, encrypted.iv, item.id).run();
   await writeAudit(destination.id, email, nextSpace !== currentSpace ? "item_published_to_public" : "item_updated", item.id);
 
-  return { id: item.id, ...payload, category: payload.category ?? "", group: nextSpace, updated: "刚刚更新", canEdit: nextSpace === "个人" || actor?.role === "admin" } satisfies VaultCredential;
+  return { id: item.id, ...payload, category: payload.category ?? "", totps: payload.totps ?? [], group: nextSpace, updated: "刚刚更新", canEdit: nextSpace === "个人" || actor?.role === "admin" } satisfies VaultCredential;
 }
 
 export async function getVaultItem(email: string, itemId: string) {

@@ -359,7 +359,7 @@ button:disabled {
 .topbar {
   min-height: 72px;
   display: grid;
-  grid-template-columns: minmax(195px, 1fr) minmax(260px, 380px) auto auto;
+  grid-template-columns: minmax(195px, 1fr) minmax(220px, 300px) auto auto;
   align-items: center;
   gap: 12px;
 }
@@ -3106,7 +3106,7 @@ button:disabled {
 
 @media (max-width: 1180px) {
   .topbar {
-    grid-template-columns: minmax(180px, 1fr) minmax(220px, 310px) auto;
+    grid-template-columns: minmax(180px, 1fr) minmax(200px, 270px) auto;
   }
 
   .lock-button {

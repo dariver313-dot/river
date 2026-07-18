@@ -296,6 +296,50 @@ function SurfaceSelect<T extends string>({
   );
 }
 
+function Skeleton({ className = "" }: { className?: string }) {
+  return <span className={`skeleton ${className}`.trim()} aria-hidden="true" />;
+}
+
+function SecurityStripLoading() {
+  return <>
+    {Array.from({ length: 4 }, (_, index) => <div className="risk-item risk-item-loading" key={index} aria-hidden="true">
+      <span className="risk-icon"><Skeleton className="skeleton-icon" /></span>
+      <span><Skeleton className="skeleton-line skeleton-line-title" /><Skeleton className="skeleton-line skeleton-line-copy" /></span>
+      <Skeleton className="skeleton-chevron" />
+    </div>)}
+  </>;
+}
+
+function VaultListLoading() {
+  return <div className="vault-loading-rows" role="status" aria-label="正在读取密码库">
+    <span className="sr-only">正在读取密码库</span>
+    {Array.from({ length: 4 }, (_, index) => <div className="vault-row vault-row-loading" key={index} aria-hidden="true">
+      <div className="item-identity"><Skeleton className="skeleton-brand" /><span className="loading-item-copy"><Skeleton className="skeleton-line skeleton-line-title" /><Skeleton className="skeleton-line skeleton-line-copy" /></span></div>
+      <Skeleton className="skeleton-status" />
+      <Skeleton className="skeleton-time" />
+      <Skeleton className="skeleton-chevron" />
+    </div>)}
+  </div>;
+}
+
+function DetailPanelLoading() {
+  return <aside className="detail-panel detail-panel-loading" aria-busy="true" aria-label="正在读取项目详情">
+    <span className="sr-only">正在读取项目详情</span>
+    <div className="detail-loading-head"><Skeleton className="skeleton-brand" /><div><Skeleton className="skeleton-line skeleton-line-copy" /><Skeleton className="skeleton-line skeleton-line-title" /><Skeleton className="skeleton-line skeleton-line-copy skeleton-line-short" /></div></div>
+    <div className="detail-loading-section"><Skeleton className="skeleton-line skeleton-line-label" /><Skeleton className="skeleton-field" /></div>
+    <div className="detail-loading-section"><Skeleton className="skeleton-line skeleton-line-label" /><Skeleton className="skeleton-field" /><Skeleton className="skeleton-status" /></div>
+    <div className="detail-loading-section"><Skeleton className="skeleton-line skeleton-line-label" /><Skeleton className="skeleton-totp" /></div>
+  </aside>;
+}
+
+function UserTableLoading() {
+  return <div className="user-table-loading" role="status" aria-label="正在读取系统用户">
+    <span className="sr-only">正在读取系统用户</span>
+    <div className="user-table-loading-head" aria-hidden="true">{Array.from({ length: 5 }, (_, index) => <Skeleton className="skeleton-line skeleton-line-label" key={index} />)}</div>
+    {Array.from({ length: 3 }, (_, index) => <div className="user-table-loading-row" key={index} aria-hidden="true"><Skeleton className="skeleton-line skeleton-line-title" /><Skeleton className="skeleton-status" /><Skeleton className="skeleton-status" /><Skeleton className="skeleton-time" /><Skeleton className="skeleton-line skeleton-line-copy" /></div>)}
+  </div>;
+}
+
 function ProfileOverview({
   viewer,
   viewerInitial,
@@ -354,21 +398,19 @@ function ProfileOverview({
 
         <section className="profile-card profile-security-card" aria-labelledby="profile-security-title">
           <div className="profile-card-heading"><span className="profile-card-icon"><ShieldCheck size={18} /></span><div><h3 id="profile-security-title">账户安全</h3><p>基础安全与会话保护状态</p></div></div>
-          <div className="profile-security-summary"><div><strong>{isLoading ? "—" : securityScore}</strong><span>基础安全评分</span></div><p>{isLoading ? "正在读取密码库状态" : securityIssueCount === 0 ? "未发现需要处理的基础风险" : `${securityIssueCount} 条基础风险待处理`}</p></div>
-          <div className="profile-security-footer"><span>空闲 15 分钟后自动结束会话</span><button type="button" className="secondary-button" onClick={onOpenSecurity}>查看安全检查</button></div>
+          <div className="profile-security-summary"><div><strong>{isLoading ? <Skeleton className="skeleton-score" /> : securityScore}</strong><span>基础安全评分</span></div><p>{isLoading ? <Skeleton className="skeleton-line skeleton-line-profile" /> : securityIssueCount === 0 ? "未发现需要处理的基础风险" : `${securityIssueCount} 条基础风险待处理`}</p></div>
+          <div className="profile-security-footer"><span>空闲 15 分钟后自动结束会话</span><button type="button" className="secondary-button" onClick={onOpenSecurity} disabled={isLoading}>{isLoading ? "正在读取安全状态" : "查看安全检查"}</button></div>
         </section>
 
         <section className="profile-card profile-data-security-card" aria-labelledby="profile-data-security-title">
           <div className="profile-card-heading"><span className="profile-card-icon"><Archive size={18} /></span><div><h3 id="profile-data-security-title">数据与安全</h3><p>导出敏感数据前需要另一位已启用用户确认</p></div></div>
           <aside className="data-security-note" role="note"><ShieldCheck size={17} aria-hidden="true" /><div><strong>双人确认导出</strong><span>导出文件包含你的个人项目和全部公共项目的明文信息；确认有效期为 10 分钟。</span></div></aside>
           <div className="data-security-actions">
-            {publicUserCount > 1 && !hasOwnPendingExport && <button type="button" className="secondary-button" onClick={onRequestExportApproval} disabled={isSaving}><Archive size={17} />发起导出确认</button>}
-            {publicUserCount <= 1 && <p className="data-security-empty">请先由管理员创建并启用另一位系统用户，才能使用双人确认导出。</p>}
-            {hasOwnPendingExport && <p className="data-security-empty">你的导出确认正在等待另一位已启用用户批准。</p>}
+            {isLoading ? <Skeleton className="skeleton-button" /> : publicUserCount > 1 && !hasOwnPendingExport ? <button type="button" className="secondary-button" onClick={onRequestExportApproval} disabled={isSaving}><Archive size={17} />发起导出确认</button> : publicUserCount <= 1 ? <p className="data-security-empty">请先由管理员创建并启用另一位系统用户，才能使用双人确认导出。</p> : <p className="data-security-empty">你的导出确认正在等待另一位已启用用户批准。</p>}
           </div>
           <div className="data-security-requests">
-            <div className="data-security-section-title"><h4>当前导出请求</h4><span>{approvals.length > 0 ? `${approvals.length} 条` : "暂无"}</span></div>
-            {approvals.length > 0 ? <div className="approval-list">{approvals.map((approval) => (
+            <div className="data-security-section-title"><h4>当前导出请求</h4><span>{isLoading ? "正在读取" : approvals.length > 0 ? `${approvals.length} 条` : "暂无"}</span></div>
+            {isLoading ? <div className="approval-list" aria-label="正在读取导出请求"><div className="approval-row" aria-hidden="true"><div><Skeleton className="skeleton-line skeleton-line-title" /><Skeleton className="skeleton-line skeleton-line-copy" /></div><Skeleton className="skeleton-button" /></div></div> : approvals.length > 0 ? <div className="approval-list">{approvals.map((approval) => (
               <div className="approval-row" key={approval.id}>
                 <div><strong>{approval.isRequester ? "你的导出确认" : `${approval.requestedBy} 请求导出确认`}</strong><span>{approvalStatusLabel(approval)}</span></div>
                 <div className="approval-actions">
@@ -1044,6 +1086,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
   function openSecurityReview(focus: SecurityFocus = "all") {
     setPage("vault");
     setCollection("security");
+    setQuery("");
     setSpace("全部");
     setCategory("全部");
     setSortOrder("updated");
@@ -1292,13 +1335,13 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
               <div className="users-toolbar-actions"><div className="users-tabs" role="tablist" aria-label="用户管理内容"><button type="button" role="tab" aria-selected={userManagementTab === "users"} className={userManagementTab === "users" ? "is-active" : ""} onClick={() => setUserManagementTab("users")}>系统用户</button><button type="button" role="tab" aria-selected={userManagementTab === "audit"} className={userManagementTab === "audit" ? "is-active" : ""} onClick={() => setUserManagementTab("audit")}>操作审计</button></div></div>
             </div>
             {userManagementTab === "users" ? <>
-              {isUsersLoading ? <p className="users-empty">正在读取系统用户。</p> : userLoadError ? <div className="users-empty users-load-error" role="alert"><AlertTriangle size={18} aria-hidden="true" /><span>{userLoadError}</span><button type="button" className="secondary-button" onClick={() => setUserLoadAttempt((current) => current + 1)}>重新加载</button></div> : systemUsers.length > 0 ? <div className="system-user-table-wrap"><table className="system-user-table"><thead><tr><th scope="col">用户</th><th scope="col">角色</th><th scope="col">状态</th><th scope="col">创建时间</th><th scope="col">管理</th></tr></thead><tbody>{systemUsers.map((user) => <tr key={user.email}><td data-label="用户"><div className="system-user-identity"><strong title={user.email}>{user.email}</strong>{user.isCurrent && <span className="current-user">当前账户</span>}</div></td><td data-label="角色"><b className={`role-badge role-${user.role}`}>{user.role === "admin" ? "管理员" : "普通用户"}</b></td><td data-label="状态"><b className={`status-badge status-${user.status}`}>{user.status === "active" ? "已启用" : "已停用"}</b></td><td data-label="创建时间"><span className="system-user-created">{user.createdAt}</span></td><td data-label="管理">{user.isCurrent ? <span className="current-user">当前账户不可调整</span> : <div className="system-user-actions"><SurfaceSelect id={`role-${user.email}`} ariaLabel={`调整${user.email}的系统角色`} value={user.role} onChange={(role) => void updateSystemUser(user, { role })} options={[{ value: "user", label: "普通用户" }, { value: "admin", label: "管理员" }]} disabled={isSaving} compact /><button type="button" className="secondary-button" onClick={() => user.status === "active" ? setSystemUserAction({ user, kind: "suspend" }) : void updateSystemUser(user, { status: "active" })} disabled={isSaving}>{user.status === "active" ? "停用" : "启用"}</button><button type="button" className="secondary-button user-delete-button" onClick={() => setSystemUserAction({ user, kind: "delete" })} disabled={isSaving}>删除</button></div>}</td></tr>)}</tbody></table></div> : <p className="users-empty">没有找到匹配的系统用户。</p>}
+              {isUsersLoading ? <UserTableLoading /> : userLoadError ? <div className="users-empty users-load-error" role="alert"><AlertTriangle size={18} aria-hidden="true" /><span>{userLoadError}</span><button type="button" className="secondary-button" onClick={() => setUserLoadAttempt((current) => current + 1)}>重新加载</button></div> : systemUsers.length > 0 ? <div className="system-user-table-wrap"><table className="system-user-table"><thead><tr><th scope="col">用户</th><th scope="col">角色</th><th scope="col">状态</th><th scope="col">创建时间</th><th scope="col">管理</th></tr></thead><tbody>{systemUsers.map((user) => <tr key={user.email}><td data-label="用户"><div className="system-user-identity"><strong title={user.email}>{user.email}</strong>{user.isCurrent && <span className="current-user">当前账户</span>}</div></td><td data-label="角色"><b className={`role-badge role-${user.role}`}>{user.role === "admin" ? "管理员" : "普通用户"}</b></td><td data-label="状态"><b className={`status-badge status-${user.status}`}>{user.status === "active" ? "已启用" : "已停用"}</b></td><td data-label="创建时间"><span className="system-user-created">{user.createdAt}</span></td><td data-label="管理">{user.isCurrent ? <span className="current-user">当前账户不可调整</span> : <div className="system-user-actions"><SurfaceSelect id={`role-${user.email}`} ariaLabel={`调整${user.email}的系统角色`} value={user.role} onChange={(role) => void updateSystemUser(user, { role })} options={[{ value: "user", label: "普通用户" }, { value: "admin", label: "管理员" }]} disabled={isSaving} compact /><button type="button" className="secondary-button" onClick={() => user.status === "active" ? setSystemUserAction({ user, kind: "suspend" }) : void updateSystemUser(user, { status: "active" })} disabled={isSaving}>{user.status === "active" ? "停用" : "启用"}</button><button type="button" className="secondary-button user-delete-button" onClick={() => setSystemUserAction({ user, kind: "delete" })} disabled={isSaving}>删除</button></div>}</td></tr>)}</tbody></table></div> : <p className="users-empty">没有找到匹配的系统用户。</p>}
               {!isUsersLoading && <PaginationControls pagination={userPagination} onChange={setUserCurrentPage} label="系统用户" />}
             </> : <section className="audit-panel" aria-labelledby="audit-panel-title"><div className="audit-panel-header"><div><h3 id="audit-panel-title">管理操作记录</h3><p>仅显示公共项目变更、系统用户管理与数据导出审批；不会展示密码或验证码的查看、复制记录。</p></div><span>最近 20 条</span></div>{isLoading ? <p className="users-empty">正在读取操作审计。</p> : adminAudit.length > 0 ? <ul className="audit-list audit-list-panel">{adminAudit.map((entry, index) => <li key={`${entry.action}-${entry.createdAt}-${index}`}><span><strong>{entry.actorEmail}</strong>{auditLabel(entry.action)}</span><time>{entry.createdAt}</time></li>)}</ul> : <p className="users-empty">暂无公共项目、系统用户或导出相关的管理记录。</p>}</section>}
           </section>
         </section> : page === "profile" ? <ProfileOverview viewer={viewer} viewerInitial={viewerInitial} isLoading={isLoading} securityScore={securityScore} securityIssueCount={securityIssueCount} publicUserCount={publicUserCount} approvals={approvals} isSaving={isSaving} onOpenSecurity={openSecurityReview} onRequestExportApproval={() => void requestExportApproval()} onDecideExportApproval={(id, decision) => void decideExportApproval(id, decision)} onDownloadApprovedExport={(id) => void downloadApprovedExport(id)} /> : <>
-        <section className="security-strip" aria-labelledby="security-heading">
-          {securityIssueCount > 0 ? <button type="button" className="risk-item" onClick={() => openSecurityReview()} aria-label="查看全部账户安全检查结果">
+        <section className="security-strip" aria-label="账户安全概览" aria-busy={isLoading}>
+          {isLoading ? <SecurityStripLoading /> : securityIssueCount > 0 ? <button type="button" className="risk-item" onClick={() => openSecurityReview()} aria-label="查看全部账户安全检查结果">
             <span className="risk-icon risk-danger"><AlertTriangle size={17} /></span><span><strong id="security-heading">基础安全评分 {securityScore}/100</strong><small>{securityIssueCount} 条基础风险待处理</small></span><ChevronRight size={18} aria-hidden="true" />
           </button> : <div className="risk-item risk-item-static"><span className="risk-icon risk-safe">{totalItems === 0 ? <ShieldCheck size={17} aria-hidden="true" /> : <Check size={17} aria-hidden="true" />}</span><span><strong id="security-heading">基础安全评分 {totalItems === 0 ? "—/100" : `${securityScore}/100`}</strong><small>{totalItems === 0 ? "添加账户后自动检查" : "基础检查已通过"}</small></span></div>}
           {weakPasswordCount > 0 ? <button className="risk-item" onClick={() => openSecurityReview("weak_password")}><span className="risk-icon risk-danger"><AlertTriangle size={17} /></span><span><strong>{weakPasswordCount} 个密码长度不足</strong><small>建议使用至少 14 位随机密码</small></span><ChevronRight size={18} /></button> : <div className="risk-item risk-item-static"><span className="risk-icon risk-safe"><Check size={17} /></span><span><strong>{totalItems === 0 ? "尚无账户" : "密码长度符合建议"}</strong><small>{totalItems === 0 ? "添加账户后自动检查" : "未发现少于 14 位的密码"}</small></span></div>}
@@ -1332,7 +1375,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
 
             <div className="vault-list">
               {isLoading ? (
-                <div className="empty-state"><Clock3 size={24} /><h3>正在读取密码库</h3><p>正在加载已加密的项目。</p></div>
+                <VaultListLoading />
               ) : loadError ? (
                 <div className="empty-state empty-state-error" role="alert"><AlertTriangle size={24} /><h3>无法读取密码库</h3><p>{loadError}</p><button className="secondary-button" onClick={() => setLoadAttempt((current) => current + 1)}>重新加载</button></div>
               ) : items.length > 0 ? items.map((item) => (
@@ -1349,7 +1392,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
             {!isLoading && !loadError && <PaginationControls pagination={vaultPagination} onChange={setVaultCurrentPage} label="账户" />}
           </section>
 
-          {selected ? (
+          {isLoading || isDetailLoading ? <DetailPanelLoading /> : selected ? (
           <aside className="detail-panel" aria-labelledby="detail-title">
             <div className="detail-head">
               <div className="detail-brand"><BrandMark item={selected} /><div><span className="eyebrow">{selected.type}</span><div className="detail-title-line"><h2 id="detail-title">{selected.name}</h2><b className={`space-badge ${selected.group === "公共" ? "is-public" : "is-personal"}`}>{selected.group}</b></div>{selected.domain.includes(".") ? <a href={`https://${selected.domain}`} target="_blank" rel="noreferrer">{selected.domain}<ArrowUpRight size={14} /></a> : <span className="detail-domain">{selected.domain}</span>}{selected.category && <span className="detail-category">分类：{selected.category}</span>}</div></div>
@@ -1390,7 +1433,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
           </aside>
           ) : totalItems > 0 ? (
             <aside className="detail-panel detail-empty" aria-live="polite">
-              {items.length === 0 ? <><Search size={25} aria-hidden="true" /><h2>没有符合条件的项目</h2><p>调整搜索、范围、分类或风险条件后继续查看。</p><button className="secondary-button" onClick={clearVaultFilters}>清除筛选</button></> : isDetailLoading ? <><Clock3 size={25} aria-hidden="true" /><h2>正在读取项目</h2><p>敏感字段仅在选中项目后按需读取。</p></> : <><AlertTriangle size={25} aria-hidden="true" /><h2>无法读取项目详情</h2><p>{detailError ?? "请重新选择该项目。"}</p><button className="secondary-button" onClick={() => setDetailAttempt((current) => current + 1)}>重新读取</button></>}
+              {items.length === 0 ? <><Search size={25} aria-hidden="true" /><h2>没有符合条件的项目</h2><p>调整搜索、范围、分类或风险条件后继续查看。</p><button className="secondary-button" onClick={clearVaultFilters}>清除筛选</button></> : <><AlertTriangle size={25} aria-hidden="true" /><h2>无法读取项目详情</h2><p>{detailError ?? "请重新选择该项目。"}</p><button className="secondary-button" onClick={() => setDetailAttempt((current) => current + 1)}>重新读取</button></>}
             </aside>
           ) : (
             <aside className="detail-panel detail-empty" aria-label="空密码库">

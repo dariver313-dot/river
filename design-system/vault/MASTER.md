@@ -19,18 +19,18 @@
 
 | Role | Hex | CSS Variable |
 |------|-----|--------------|
-| Primary | `#30483A` | `--color-primary` |
+| Primary | `#293D43` | `--color-primary` |
 | On Primary | `#FFFFFF` | `--color-on-primary` |
-| Secondary | `#3B5747` | `--color-secondary` |
-| Accent/CTA | `#3F7A5B` | `--color-accent` |
-| Background | `#F8FCF8` | `--color-background` |
-| Foreground | `#2E4134` | `--color-foreground` |
-| Muted | `#EDF7F0` | `--color-muted` |
-| Border | `#D1E0D4` | `--color-border` |
+| Secondary | `#3A5158` | `--color-secondary` |
+| Accent/CTA | `#467C79` | `--color-accent` |
+| Background | `#F7F9FA` | `--color-background` |
+| Foreground | `#27383D` | `--color-foreground` |
+| Muted | `#EDF6F5` | `--color-muted` |
+| Border | `#D0DDE0` | `--color-border` |
 | Destructive | `#DC2626` | `--color-destructive` |
-| Ring | `#79AD8C` | `--color-ring` |
+| Ring | `#7DAAA6` | `--color-ring` |
 
-**Color Notes:** Very pale sage canvas, white surfaces, deep leaf-green navigation and restrained shadows. Keep red and amber only for explicit destructive or risk states.
+**Color Notes:** Use a soft neutral-mist canvas, white surfaces, and deep blue-gray navigation to reduce visual fatigue. Reserve restrained teal for confirmed security and primary actions; keep red and amber only for explicit destructive or risk states.
 
 ### Typography
 
@@ -62,10 +62,10 @@
 
 | Level | Value | Usage |
 |-------|-------|-------|
-| `--shadow-sm` | `0 1px 2px rgba(30,52,39,0.04)` | Subtle lift |
-| `--shadow-md` | `0 3px 10px rgba(30,52,39,0.06)` | Cards, buttons |
-| `--shadow-lg` | `0 10px 24px rgba(30,52,39,0.12)` | Modals, dropdowns |
-| `--shadow-xl` | `0 18px 54px rgba(30,52,39,0.18)` | Modals and critical confirmation sheets |
+| `--shadow-sm` | `0 1px 2px rgba(29,48,54,0.04)` | Subtle lift |
+| `--shadow-md` | `0 3px 10px rgba(29,48,54,0.06)` | Cards, buttons |
+| `--shadow-lg` | `0 10px 24px rgba(29,48,54,0.12)` | Modals, dropdowns |
+| `--shadow-xl` | `0 18px 54px rgba(29,48,54,0.18)` | Modals and critical confirmation sheets |
 
 ---
 
@@ -76,7 +76,7 @@
 ```css
 /* Primary Button */
 .btn-primary {
-  background: #3F7A5B;
+  background: #467C79;
   color: white;
   padding: 8px 14px;
   border-radius: 8px;
@@ -93,8 +93,8 @@
 /* Secondary Button */
 .btn-secondary {
   background: transparent;
-  color: #2E6548;
-  border: 1px solid #D1E0D4;
+  color: #356864;
+  border: 1px solid #D0DDE0;
   padding: 8px 14px;
   border-radius: 8px;
   font-weight: 600;

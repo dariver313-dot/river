@@ -1,4 +1,4 @@
-import { apiError, readJsonObject, requireVaultActor } from "../../../../lib/api-response";
+import { actorRequiredResponse, apiError, readJsonObject, requireVaultActor } from "../../../../lib/api-response";
 import { deleteVaultItem, updateVaultItem } from "../../../../lib/vault-store";
 
 export const dynamic = "force-dynamic";
@@ -7,7 +7,7 @@ type RouteContext = { params: Promise<{ id: string }> };
 
 export async function PATCH(request: Request, context: RouteContext) {
   const actor = await requireVaultActor();
-  if (!actor) return Response.json({ error: "请先完成安全登录。" }, { status: 401 });
+  if (!actor) return actorRequiredResponse();
 
   try {
     const { id } = await context.params;
@@ -20,7 +20,7 @@ export async function PATCH(request: Request, context: RouteContext) {
 
 export async function DELETE(_: Request, context: RouteContext) {
   const actor = await requireVaultActor();
-  if (!actor) return Response.json({ error: "请先完成安全登录。" }, { status: 401 });
+  if (!actor) return actorRequiredResponse();
 
   try {
     const { id } = await context.params;

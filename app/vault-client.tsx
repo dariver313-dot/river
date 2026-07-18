@@ -29,6 +29,7 @@ import {
   Smartphone,
   Star,
   Trash2,
+  UserCog,
   UserRound,
   UsersRound,
   WandSparkles,
@@ -64,6 +65,7 @@ type VaultItem = {
 type Viewer = {
   displayName: string;
   email: string;
+  role: "admin" | "user";
 };
 
 type CredentialForm = Pick<VaultItem, "name" | "domain" | "username" | "password" | "group"> & {
@@ -72,6 +74,7 @@ type CredentialForm = Pick<VaultItem, "name" | "domain" | "username" | "password
 };
 type VaultMember = { email: string; role: "editor" | "viewer"; createdAt: string };
 type AuditEntry = { action: string; actorEmail: string; itemId: string | null; createdAt: string };
+type SystemUser = { email: string; role: "admin" | "user"; status: "active" | "suspended"; createdAt: string; isCurrent: boolean };
 type ApprovalRequest = {
   id: string;
   action: "export_vault";
@@ -208,6 +211,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
   const [editingItem, setEditingItem] = useState<VaultItem | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<VaultItem | null>(null);
   const [showSharing, setShowSharing] = useState(false);
+  const [showUserManagement, setShowUserManagement] = useState(false);
   const [mobileNav, setMobileNav] = useState(false);
   const [toast, setToast] = useState("");
   const [isLoading, setIsLoading] = useState(true);
@@ -217,6 +221,10 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
   const [approvals, setApprovals] = useState<ApprovalRequest[]>([]);
   const [memberEmail, setMemberEmail] = useState("");
   const [memberRole, setMemberRole] = useState<"editor" | "viewer">("editor");
+  const [systemUsers, setSystemUsers] = useState<SystemUser[]>([]);
+  const [systemUserEmail, setSystemUserEmail] = useState("");
+  const [systemUserRole, setSystemUserRole] = useState<"admin" | "user">("user");
+  const [isUsersLoading, setIsUsersLoading] = useState(false);
   const [isReadingTotp, setIsReadingTotp] = useState(false);
   const [form, setForm] = useState<CredentialForm>(emptyCredentialForm);
   const [editForm, setEditForm] = useState<CredentialForm>(emptyCredentialForm);
@@ -235,6 +243,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
   const selected = items.find((item) => item.id === activeSelectedId) ?? items[0];
   const listTitle = space === "全部" ? (filter === "全部" ? "全部项目" : filter) : `${space} · ${filter === "全部" ? "全部项目" : filter}`;
   const viewerInitial = viewer.displayName.trim().slice(0, 1).toLocaleUpperCase() || "你";
+  const isAdmin = viewer.role === "admin";
   const weakPasswordCount = items.filter((item) => item.strength === "风险").length;
   const missingTwoFactorCount = items.filter((item) => !item.twoFactor).length;
   const securityScore = items.length === 0 ? 0 : Math.max(0, 100 - weakPasswordCount * 18 - missingTwoFactorCount * 5);
@@ -252,6 +261,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
         setEditingItem(null);
         setDeleteTarget(null);
         setShowSharing(false);
+        setShowUserManagement(false);
         setMobileNav(false);
       }
     };
@@ -450,6 +460,55 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
     }
   }
 
+  async function openUserManagement() {
+    if (!isAdmin) return;
+    setShowUserManagement(true);
+    setIsUsersLoading(true);
+    try {
+      const payload = await requestVault<{ users: SystemUser[] }>("/api/users", { method: "GET" });
+      setSystemUsers(payload.users);
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "无法读取系统用户。");
+    } finally {
+      setIsUsersLoading(false);
+    }
+  }
+
+  async function createSystemUser(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setIsSaving(true);
+    try {
+      const payload = await requestVault<{ user: SystemUser }>("/api/users", {
+        method: "POST",
+        body: JSON.stringify({ email: systemUserEmail, role: systemUserRole }),
+      });
+      setSystemUsers((current) => [...current, payload.user].sort((left, right) => left.role === right.role ? left.email.localeCompare(right.email) : left.role === "admin" ? -1 : 1));
+      setSystemUserEmail("");
+      setSystemUserRole("user");
+      setToast("系统用户已创建");
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "无法创建系统用户。");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function updateSystemUser(user: SystemUser, changes: Partial<Pick<SystemUser, "role" | "status">>) {
+    setIsSaving(true);
+    try {
+      const payload = await requestVault<{ user: SystemUser }>("/api/users", {
+        method: "PATCH",
+        body: JSON.stringify({ email: user.email, ...changes }),
+      });
+      setSystemUsers((current) => current.map((candidate) => candidate.email === user.email ? payload.user : candidate));
+      setToast(changes.status ? (changes.status === "suspended" ? "用户已停用" : "用户已重新启用") : "用户角色已更新");
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "无法更新该用户。");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
   async function importTotpFromImage(event: ChangeEvent<HTMLInputElement>, target: "add" | "edit") {
     const file = event.target.files?.[0];
     event.target.value = "";
@@ -540,6 +599,8 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
           <button className="nav-item"><ShieldEllipsis size={18} /><span>安全检查</span><span className="nav-alert">3</span></button>
           <button className="nav-item"><Archive size={18} /><span>归档</span></button>
 
+          {isAdmin && <><p className="nav-label nav-label-spaced">系统</p><button className="nav-item" onClick={openUserManagement}><UserCog size={18} /><span>用户管理</span></button></>}
+
           <p className="nav-label nav-label-spaced">空间</p>
           <button className={`nav-item ${space === "个人" ? "is-active" : ""}`} onClick={() => setSpace("个人")}><UserRound size={18} /><span>个人</span></button>
           <button className={`nav-item ${space === "公共" ? "is-active" : ""}`} onClick={() => setSpace("公共")}><UsersRound size={18} /><span>公共</span></button>
@@ -552,7 +613,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
 
         <div className="account-menu">
           <span className="avatar" aria-hidden="true">{viewerInitial}</span>
-          <div><strong>{viewer.displayName}</strong><span>{viewer.email}</span></div>
+          <div><strong>{viewer.displayName}</strong><span>{viewer.role === "admin" ? "管理员 · " : "普通用户 · "}{viewer.email}</span></div>
           <button className="icon-button dark-icon" onClick={() => setShowSharing(true)} aria-label="公共空间设置"><MoreHorizontal size={19} /></button>
         </div>
       </aside>
@@ -726,6 +787,27 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
         </div>
       )}
 
+      {showUserManagement && isAdmin && (
+        <div className="modal-layer" role="presentation">
+          <section className="modal user-management-modal" role="dialog" aria-modal="true" aria-labelledby="user-management-title">
+            <header><div><span className="modal-icon"><UserCog size={20} /></span><div><h2 id="user-management-title">用户管理</h2><p>管理员可维护系统账户；个人密码库仍保持私有</p></div></div><button className="icon-button" onClick={() => setShowUserManagement(false)} aria-label="关闭用户管理"><X size={20} /></button></header>
+            <form onSubmit={createSystemUser}>
+              <label>用户邮箱<input required type="email" value={systemUserEmail} onChange={(event) => setSystemUserEmail(event.target.value)} placeholder="name@example.com" autoComplete="email" /></label>
+              <label>系统角色<select value={systemUserRole} onChange={(event) => setSystemUserRole(event.target.value as "admin" | "user")}><option value="user">普通用户</option><option value="admin">管理员</option></select></label>
+              <p className="form-note">普通用户仅管理自己的个人密码库；管理员可以创建、调整和停用系统用户。</p>
+              <footer><button type="submit" className="primary-button" disabled={isSaving}><UserCog size={17} />{isSaving ? "正在创建" : "创建系统用户"}</button></footer>
+            </form>
+            <div className="user-management-section">
+              <div className="sharing-section-title"><h3>系统用户</h3><span>{systemUsers.length} 位</span></div>
+              {isUsersLoading ? <p className="sharing-empty">正在读取系统用户。</p> : systemUsers.length > 0 ? <div className="system-user-list">{systemUsers.map((user) => <div className="system-user-row" key={user.email}>
+                <div><strong>{user.email}</strong><span><b className={`role-badge role-${user.role}`}>{user.role === "admin" ? "管理员" : "普通用户"}</b><b className={`status-badge status-${user.status}`}>{user.status === "active" ? "已启用" : "已停用"}</b> · {user.createdAt}</span></div>
+                {user.isCurrent ? <span className="current-user">当前账户</span> : <div className="system-user-actions"><label className="sr-only" htmlFor={`role-${user.email}`}>调整{user.email}的系统角色</label><select id={`role-${user.email}`} value={user.role} onChange={(event) => void updateSystemUser(user, { role: event.target.value as "admin" | "user" })} disabled={isSaving}><option value="user">普通用户</option><option value="admin">管理员</option></select><button type="button" className="secondary-button" onClick={() => { const nextStatus = user.status === "active" ? "suspended" : "active"; if (nextStatus === "suspended" && !window.confirm(`确定停用 ${user.email} 吗？`)) return; void updateSystemUser(user, { status: nextStatus }); }} disabled={isSaving}>{user.status === "active" ? "停用" : "启用"}</button></div>}
+              </div>)}</div> : <p className="sharing-empty">尚未创建其他系统用户。</p>}
+            </div>
+          </section>
+        </div>
+      )}
+
       {showSharing && (
         <div className="modal-layer" role="presentation">
           <section className="modal sharing-modal" role="dialog" aria-modal="true" aria-labelledby="sharing-title">
@@ -736,7 +818,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
               <p className="form-note">此操作只授予访问权限，不会向邮箱发送通知。协作人下次安全登录后即可访问公共项目。</p>
               <footer><button type="submit" className="primary-button" disabled={isSaving}><UsersRound size={17} />{isSaving ? "正在更新" : "添加协作人"}</button></footer>
             </form>
-            <aside className="sharing-guide" role="note"><ShieldCheck size={18} aria-hidden="true" /><div><strong>添加协作人分两步</strong><ol><li>站点管理员先将对方的安全登录邮箱加入站点访问名单。</li><li>再在这里填入同一邮箱，并选择“可编辑”或“仅查看”。</li><li>对方首次安全登录后，即可看到公共空间。</li></ol></div></aside>
+            <aside className="sharing-guide" role="note"><ShieldCheck size={18} aria-hidden="true" /><div><strong>添加协作人分三步</strong><ol><li>管理员先在“用户管理”中创建并启用该系统用户。</li><li>站点保持私有时，还需将对方邮箱加入站点访问名单。</li><li>再在这里填入同一邮箱，选择公共空间的查看或编辑权限。</li></ol></div></aside>
             <div className="sharing-section">
               <div className="sharing-section-title"><h3>当前协作人</h3><span>{members.length} 位</span></div>
               {members.length > 0 ? <div className="member-list">{members.map((member) => <div className="member-row" key={member.email}><div><strong>{member.email}</strong><span>{member.role === "editor" ? "可查看和编辑" : "仅查看"} · {member.createdAt}</span></div><button className="secondary-button" onClick={() => removeMember(member.email)} disabled={isSaving}>移除</button></div>)}</div> : <p className="sharing-empty">尚未添加协作人；公共空间目前只有你自己可以访问。</p>}

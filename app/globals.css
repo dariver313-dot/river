@@ -1467,6 +1467,16 @@ button:disabled {
   background: transparent;
 }
 
+.user-management-modal form {
+  padding-bottom: 0;
+}
+
+.user-management-modal form footer {
+  margin: 4px 0 0;
+  padding: 14px 0 0;
+  background: transparent;
+}
+
 .sharing-guide {
   display: grid;
   grid-template-columns: 22px 1fr;
@@ -1501,6 +1511,113 @@ button:disabled {
 .sharing-section {
   padding: 20px;
   border-top: 1px solid var(--line);
+}
+
+.user-management-section {
+  padding: 20px;
+  border-top: 1px solid var(--line);
+  background: var(--surface-subtle);
+}
+
+.system-user-list {
+  display: grid;
+  gap: 8px;
+}
+
+.system-user-row {
+  min-height: 68px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.system-user-row:last-child {
+  border-bottom: 0;
+}
+
+.system-user-row > div:first-child {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.system-user-row strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.system-user-row span {
+  color: var(--ink-soft);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.role-badge,
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  margin-right: 3px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.role-admin {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.role-user {
+  background: var(--info-soft);
+  color: var(--info);
+}
+
+.status-active {
+  background: #edf6f2;
+  color: #166452;
+}
+
+.status-suspended {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.system-user-actions {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
+.system-user-actions select {
+  min-height: 44px;
+  max-width: 98px;
+  padding: 0 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 11px;
+}
+
+.system-user-actions .secondary-button {
+  min-height: 44px;
+  padding: 0 10px;
+  color: var(--danger);
+}
+
+.current-user {
+  flex: 0 0 auto;
+  color: var(--ink-faint) !important;
 }
 
 .sharing-section-title {
@@ -1740,6 +1857,65 @@ button:disabled {
   display: grid;
   grid-template-columns: minmax(0, 1.04fr) minmax(440px, 0.96fr);
   background: var(--nav);
+}
+
+.access-pending {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--canvas);
+}
+
+.access-pending section {
+  width: min(100%, 430px);
+  padding: 34px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+}
+
+.access-pending section > span {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 15px;
+  border-radius: 50%;
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: 18px;
+  font-weight: 750;
+}
+
+.access-pending h1 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 24px;
+  letter-spacing: -0.03em;
+}
+
+.access-pending p:not(.eyebrow) {
+  margin: 10px 0 22px;
+  color: var(--ink-soft);
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.access-pending a {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-subtle);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 650;
+  text-decoration: none;
 }
 
 .login-intro {
@@ -2121,6 +2297,21 @@ button:disabled {
 
   .detail-footer .open-site-button {
     width: 100%;
+  }
+
+  .system-user-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .system-user-actions {
+    width: 100%;
+  }
+
+  .system-user-actions select,
+  .system-user-actions .secondary-button {
+    flex: 1;
+    max-width: none;
   }
 
   .modal-layer,

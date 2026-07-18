@@ -1,11 +1,11 @@
-import { apiError, requireVaultActor } from "../../../lib/api-response";
+import { actorRequiredResponse, apiError, requireVaultActor } from "../../../lib/api-response";
 import { exportVaultData } from "../../../lib/vault-store";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
   const actor = await requireVaultActor();
-  if (!actor) return Response.json({ error: "请先完成安全登录。" }, { status: 401 });
+  if (!actor) return actorRequiredResponse();
 
   const approvalId = new URL(request.url).searchParams.get("approvalId") ?? "";
   if (!approvalId) return Response.json({ error: "缺少批准请求。" }, { status: 400 });

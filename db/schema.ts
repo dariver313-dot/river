@@ -1,6 +1,25 @@
 import { sql } from "drizzle-orm";
 import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
+export const appUsers = sqliteTable(
+  "app_users",
+  {
+    email: text("email").primaryKey(),
+    role: text("role", { enum: ["admin", "user"] }).notNull().default("user"),
+    status: text("status", { enum: ["active", "suspended"] }).notNull().default("active"),
+    createdBy: text("created_by"),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [index("app_users_role_status_idx").on(table.role, table.status)],
+);
+
+export const appSettings = sqliteTable("app_settings", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
 export const vaults = sqliteTable(
   "vaults",
   {

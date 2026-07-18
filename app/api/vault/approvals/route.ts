@@ -1,11 +1,11 @@
-import { apiError, readJsonObject, requireVaultActor } from "../../../lib/api-response";
+import { actorRequiredResponse, apiError, readJsonObject, requireVaultActor } from "../../../lib/api-response";
 import { decideApproval, listApprovalRequests, requestExportApproval } from "../../../lib/vault-store";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
   const actor = await requireVaultActor();
-  if (!actor) return Response.json({ error: "请先完成安全登录。" }, { status: 401 });
+  if (!actor) return actorRequiredResponse();
 
   try {
     return Response.json({ approvals: await listApprovalRequests(actor.email) });
@@ -16,7 +16,7 @@ export async function GET() {
 
 export async function POST() {
   const actor = await requireVaultActor();
-  if (!actor) return Response.json({ error: "请先完成安全登录。" }, { status: 401 });
+  if (!actor) return actorRequiredResponse();
 
   try {
     const approval = await requestExportApproval(actor.email);
@@ -28,7 +28,7 @@ export async function POST() {
 
 export async function PATCH(request: Request) {
   const actor = await requireVaultActor();
-  if (!actor) return Response.json({ error: "请先完成安全登录。" }, { status: 401 });
+  if (!actor) return actorRequiredResponse();
 
   try {
     const body = await readJsonObject(request);

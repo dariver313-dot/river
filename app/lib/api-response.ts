@@ -1,9 +1,20 @@
 import { getChatGPTUser } from "../chatgpt-auth";
+import { ensureApplicationUser } from "./user-store";
 
 export async function requireVaultActor() {
   const user = await getChatGPTUser();
   if (!user) return null;
-  return { email: user.email.toLowerCase(), displayName: user.displayName };
+  const account = await ensureApplicationUser(user.email);
+  if (!account) return null;
+  return { ...account, displayName: user.displayName };
+}
+
+export function actorRequiredResponse() {
+  return Response.json({ error: "你的系统账户尚未开通、已停用，或尚未完成安全登录。" }, { status: 403 });
+}
+
+export function adminRequiredResponse() {
+  return Response.json({ error: "只有管理员可以执行此操作。" }, { status: 403 });
 }
 
 export function apiError(error: unknown, status = 500) {

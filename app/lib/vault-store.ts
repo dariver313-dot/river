@@ -1,5 +1,6 @@
 import { getD1 } from "../../db";
 import { parseTotpInput, toTotpConfig, type TotpConfig } from "./totp";
+import { isActiveApplicationUser } from "./user-store";
 import { decryptVaultPayload, encryptVaultPayload } from "./vault-crypto";
 
 export type VaultSpace = "个人" | "公共";
@@ -295,6 +296,7 @@ export async function inviteVaultMember(email: string, input: Record<string, unk
   const role = input.role === "viewer" ? "viewer" : "editor";
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(invitee)) throw new Error("请输入有效的协作人邮箱。");
   if (invitee === email.toLowerCase()) throw new Error("不能邀请自己加入公共空间。");
+  if (!await isActiveApplicationUser(invitee)) throw new Error("请先在用户管理中创建并启用该系统用户。");
 
   const publicVault = await ownVaultForSpace(email, "公共");
   const d1 = getD1();

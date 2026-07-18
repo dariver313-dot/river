@@ -83,6 +83,15 @@ function safeParseInt(val, fallback) {
   try { const n = parseInt(val, 10); return isNaN(n) ? fallback : n; } catch { return fallback; }
 }
 
+function parseRemarkAliases(raw) {
+  const aliases = {};
+  for (const pair of String(raw || "").split(",")) {
+    const [from, to] = pair.split(":").map(s => String(s || "").trim());
+    if (from && to) aliases[from] = to;
+  }
+  return aliases;
+}
+
 const CFG = {
   ADMIN_ID: (() => { try { const v = process.env.ADMIN_ID; if (!v) return null; const n = parseInt(v, 10); return isNaN(n) ? null : n; } catch { return null; } })(),
   GROUP_A_ID: (() => { try { const v = process.env.GROUP_A_ID; return v ? parseInt(v, 10) : null; } catch { return null; } })(),
@@ -94,9 +103,9 @@ const CFG = {
   AMOUNT_CONFIRM: safeParseInt(process.env.AMOUNT_CONFIRM, 800),
   AMOUNT_MAX: safeParseInt(process.env.AMOUNT_MAX, 2000),
   SAFE_REMARKS: (process.env.SAFE_REMARKS || "").split(",").map(s => s.trim()).filter(Boolean),
-  CONCURRENCY: safeParseInt(process.env.CONCURRENCY, 15),
+  CONCURRENCY: safeParseInt(process.env.CONCURRENCY, 5),
   API_RETRY: safeParseInt(process.env.API_RETRY, 2),
-  CONFIRM_EXPIRE_MS: 5 * 60 * 1000,
+  CONFIRM_EXPIRE_MS: safeParseInt(process.env.CONFIRM_EXPIRE_MS, 5 * 60 * 1000),
 
   // 风控阈值（可配置化）
   GIFT_RATIO_THRESHOLD: parseFloat(process.env.GIFT_RATIO_THRESHOLD || "0.15"),
@@ -106,17 +115,25 @@ const CFG = {
   WEEK_RECHARGE_LIMIT: safeParseInt(process.env.WEEK_RECHARGE_LIMIT, 3),
   SCHEDULE_START_HOUR: safeParseInt(process.env.SCHEDULE_START_HOUR, 12),
 
-  MAX_PENDING: 500,
-  MAX_MSG_LENGTH: 4096,
-  MAX_ENTRIES: 200,
-  DB_BUSY_MS: 5000,
-  SHUTDOWN_MS: 10000,
-  BOT_LAUNCH_RETRIES: 3,
+  MAX_PENDING: safeParseInt(process.env.MAX_PENDING, 500),
+  MAX_MSG_LENGTH: safeParseInt(process.env.MAX_MSG_LENGTH, 4096),
+  MAX_ENTRIES: safeParseInt(process.env.MAX_ENTRIES, 20),
+  DB_BUSY_MS: safeParseInt(process.env.DB_BUSY_MS, 5000),
+  SHUTDOWN_MS: safeParseInt(process.env.SHUTDOWN_MS, 10000),
+  BOT_LAUNCH_RETRIES: safeParseInt(process.env.BOT_LAUNCH_RETRIES, 3),
+  AUTH_RECHECK_MS: safeParseInt(process.env.AUTH_RECHECK_MS, 30000),
 
+  // 大客绿通 / 新会员保护
+  BIG_LOSS_GREEN_THRESHOLD: safeParseInt(process.env.BIG_LOSS_GREEN_THRESHOLD, 50000),
+  PERIOD_PROFIT_BLOCK: safeParseInt(process.env.PERIOD_PROFIT_BLOCK, 0),
+  NEW_MEMBER_DAYS: safeParseInt(process.env.NEW_MEMBER_DAYS, 7),
+  NEW_MEMBER_MIN_RECHARGE_TIMES: safeParseInt(process.env.NEW_MEMBER_MIN_RECHARGE_TIMES, 3),
+  NEW_MEMBER_MIN_RECHARGE: safeParseInt(process.env.NEW_MEMBER_MIN_RECHARGE, 1000),
+  NEW_MEMBER_AUTO_MAX: safeParseInt(process.env.NEW_MEMBER_AUTO_MAX, 68),
   // 频率限制（每用户每分钟最大消息数）
   RATE_LIMIT_PER_MIN: safeParseInt(process.env.RATE_LIMIT_PER_MIN, 10),
-  // 风控API并发数（每批最大并行请求数）
-  RISK_API_CONCURRENCY: safeParseInt(process.env.RISK_API_CONCURRENCY, 10),
+  // 风控只读 API 的全局最大并发数（所有批次和规则共享）
+  RISK_API_CONCURRENCY: safeParseInt(process.env.RISK_API_CONCURRENCY, 8),
   // 启动时是否丢弃积压更新
   DROP_PENDING_UPDATES: process.env.DROP_PENDING_UPDATES !== "false",
 
@@ -141,6 +158,7 @@ const CFG = {
     "包赔": "包赔",
     "赔": "包赔",
     "包": "包赔",
+    ...parseRemarkAliases(process.env.REMARK_ALIASES),
   },
 };
 
@@ -149,7 +167,13 @@ if (!process.env.AUTH_SERVICE_URL) { log.fatal("AUTH_SERVICE_URL 未设置"); pr
 if (!process.env.TELEGRAM_BOT_TOKEN) { log.fatal("TELEGRAM_BOT_TOKEN 未设置"); process.exit(1); }
 if (!AUTH_API_KEY) { log.fatal("AUTH_API_KEY 未设置, 无法连接 auth-service"); process.exit(1); }
 
-log.info("配置加载完成", { admin: CFG.ADMIN_ID, gA: CFG.GROUP_A_ID, gB: CFG.GROUP_B_ID, port: CFG.PORT });
+log.info("配置加载完成", {
+  admin: CFG.ADMIN_ID,
+  gA: CFG.GROUP_A_ID,
+  gB: CFG.GROUP_B_ID,
+  port: CFG.PORT,
+  riskQueryConcurrency: CFG.RISK_API_CONCURRENCY,
+});
 
 // ================================================================
 //  3. HTTP AGENTS
@@ -262,19 +286,15 @@ async function checkUserExists(members) {
 // ================================================================
 //  7b. API — 加款接口（auth-service）
 // ================================================================
-async function apiAddBalance(member, remark, amount) {
+async function apiAddBalance(member, remark, amount, requestId) {
   if (!member || typeof member !== "string") return { ok: false, err: "用户名为空" };
   if (!remark || typeof remark !== "string") return { ok: false, err: "备注为空" };
   if (typeof amount !== "number" || !isFinite(amount) || amount <= 0) return { ok: false, err: "金额无效" };
   if (!GLOBAL_TOKEN) return { ok: false, err: "auth-service 未连接" };
   try {
-    // 幂等键：member+remark+amount+日期+小时，同小时内重试用相同 key 防止网络超时重复加款
-    // 加入小时粒度：允许同天不同小时的合法重复加款（如上午/下午各一次活动奖励）
-    const now = new Date();
-    const bjNow = new Date(now.getTime() + 8 * 3600000);
-    const pad = (n) => String(n).padStart(2, "0");
-    const bjHourKey = `${bjNow.getUTCFullYear()}-${pad(bjNow.getUTCMonth() + 1)}-${pad(bjNow.getUTCDate())}-${bjNow.getUTCHours()}`;
-    const idemKey = crypto.createHash('sha256').update(`${member.trim()}|${remark.trim()}|${amount}|${bjHourKey}`).digest('hex');
+    // 幂等键使用单次操作 ID，避免同一小时内同会员/备注/金额的第二笔合法加款被误判为旧请求。
+    const idemSource = requestId ? String(requestId) : crypto.randomBytes(12).toString("hex");
+    const idemKey = crypto.createHash('sha256').update(idemSource).digest('hex');
     const res = await axios.post(`${AUTH_SERVICE_URL}/recharge`, { member: member.trim(), remark: remark.trim(), amount }, {
       headers: { ...authHeaders(), 'X-Idempotency-Key': idemKey }, httpAgent: authApiAgent, httpsAgent: authApiAgentS, timeout: CFG.API_TIMEOUT + 5000,
     });
@@ -351,12 +371,55 @@ async function pLimit(items, limit, fn) {
       try { results[i] = await fn(items[i], i); } catch (e) { results[i] = undefined; }
     }
   }
-  const workers = Array.from({ length: Math.min(limit, items.length) }, () => worker());
+  const workerCount = Math.max(1, Math.min(safeParseInt(limit, 1), items.length));
+  const workers = Array.from({ length: workerCount }, () => worker());
   await Promise.all(workers);
   return results;
 }
 
+// 共享异步队列：多个风控检查同时发起时，仍将总请求数限制在一个可控范围内。
+function createAsyncLimiter(limit) {
+  const maxConcurrency = Math.max(1, safeParseInt(limit, 1));
+  const queue = [];
+  let active = 0;
+
+  function drain() {
+    while (active < maxConcurrency && queue.length) {
+      const task = queue.shift();
+      active += 1;
+      Promise.resolve()
+        .then(task.fn)
+        .then(task.resolve, task.reject)
+        .finally(() => {
+          active -= 1;
+          drain();
+        });
+    }
+  }
+
+  return (fn) => new Promise((resolve, reject) => {
+    queue.push({ fn, resolve, reject });
+    drain();
+  });
+}
+
 // 带重试的 apiQuery（CFG.API_RETRY 次重试，仅对网络错误和 429 重试）
+function queryBusinessError(payload) {
+  if (!payload || typeof payload !== "object") return null;
+  if (payload.success === false) return payload.msg || payload.error || payload.message || "后台返回失败";
+  if (payload.code !== undefined && payload.code !== null && String(payload.code) !== "200") {
+    return payload.msg || payload.error || payload.message || `后台返回异常(${payload.code})`;
+  }
+  const inner = payload.data;
+  if (inner && typeof inner === "object") {
+    if (inner.success === false) return inner.msg || inner.error || inner.message || "后台返回失败";
+    if (inner.code !== undefined && inner.code !== null && String(inner.code) !== "200") {
+      return inner.msg || inner.error || inner.message || `后台返回异常(${inner.code})`;
+    }
+  }
+  return null;
+}
+
 async function apiQuery(endpoint, body = {}) {
   if (!GLOBAL_TOKEN) return { ok: false, err: "auth-service 未连接" };
   let lastErr = null;
@@ -366,6 +429,8 @@ async function apiQuery(endpoint, body = {}) {
         headers: authHeaders(), httpAgent: authApiAgent, httpsAgent: authApiAgentS, timeout: CFG.API_TIMEOUT,
       });
       if (!res.data?.success) return { ok: false, err: res.data?.error || "查询失败" };
+      const businessErr = queryBusinessError(res.data.data);
+      if (businessErr) return { ok: false, err: businessErr };
       return { ok: true, data: res.data.data };
     } catch (e) {
       const status = e.response?.status;
@@ -384,15 +449,65 @@ async function apiQuery(endpoint, body = {}) {
   return { ok: false, err: lastErr || "查询失败" };
 }
 
+// 所有风控只读查询共用此队列；不同检查可以并发，但不会叠加冲击 auth-service。
+const limitRiskQuery = createAsyncLimiter(CFG.RISK_API_CONCURRENCY);
+function riskApiQuery(endpoint, body = {}) {
+  return limitRiskQuery(() => apiQuery(endpoint, body)).catch((e) => {
+    log.warn("风控查询执行异常", { endpoint, err: e?.message || String(e) });
+    return { ok: false, err: "查询异常" };
+  });
+}
+
 // ================================================================
 //  7f. 风控预检函数
 // ================================================================
+
+function money(v, fallback = 0) {
+  const n = parseFloat(String(v ?? ""));
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function normalizeOverallLoss(d) {
+  const backendPnl = money(d?.profitAndLoss, NaN);
+  if (Number.isFinite(backendPnl)) {
+    // 平台B: profitAndLoss 正数=盈利，负数=亏损；机器人内部统一为正数=输钱。
+    return -backendPnl;
+  }
+  const sumRecharge = money(d?.sumRecharge, 0);
+  const sumWithdraw = Math.abs(money(d?.sumWithdraw, 0));
+  const balance = money(d?.balance, 0);
+  return sumRecharge - sumWithdraw - balance;
+}
+
+function isNewMemberByDetail(d, now = Date.now()) {
+  const createTime = Number(d?.createTime || 0);
+  const ageDays = createTime > 0 ? (now - createTime) / 86400000 : Infinity;
+  const sumRecharge = money(d?.sumRecharge, 0);
+  const sumRechargeTimes = Number(d?.sumRechargeTimes || 0);
+  const reasons = [];
+  if (Number.isFinite(ageDays) && ageDays < CFG.NEW_MEMBER_DAYS) reasons.push(`注册${Math.max(0, Math.floor(ageDays))}天`);
+  if (sumRechargeTimes < CFG.NEW_MEMBER_MIN_RECHARGE_TIMES) reasons.push(`充值${sumRechargeTimes}次`);
+  if (sumRecharge < CFG.NEW_MEMBER_MIN_RECHARGE) reasons.push(`总充${Math.round(sumRecharge)}`);
+  return { isNewMember: reasons.length > 0, reasons, ageDays, sumRecharge, sumRechargeTimes };
+}
+
+function isGreenPassMember(member, memberInfoMap, periodProfitMap, associationMap) {
+  const info = memberInfoMap?.get(member);
+  if (!info || info.riskCheckFailed || info.isNewMember) return false;
+  if (!Number.isFinite(info.profitAndLoss) || info.profitAndLoss < CFG.BIG_LOSS_GREEN_THRESHOLD) return false;
+  const period = periodProfitMap?.get(member);
+  if (!period || period.riskCheckFailed) return false;
+  if (Number.isFinite(period.periodProfit) && period.periodProfit > CFG.PERIOD_PROFIT_BLOCK) return false;
+  const assoc = associationMap?.get(member);
+  if (assoc && (assoc.riskCheckFailed || assoc.triggered)) return false;
+  return true;
+}
 
 // 需求 1：总赠送金额 / 总充值金额 占比 > 15%
 //   分子 = sumPromotion + sumRecvTips + sumRecvRedPackage + sumRedPackage + sumRecommendBouns + sumRebate + 本次加款金额
 //   分母 = sumRecharge
 //   sumRecharge < 300 跳过（避免新会员噪音）
-async function riskCheckGiftRatio(entries) {
+async function riskCheckGiftRatio(entries, query = riskApiQuery) {
   const result = new Map();
   if (!Array.isArray(entries) || entries.length === 0) return result;
   // 与 classifyEntries 保持一致的去重逻辑,避免重复行导致 currentAmount 偏大误触发人工审核
@@ -406,19 +521,30 @@ async function riskCheckGiftRatio(entries) {
   });
   const members = [...new Set(dedupedEntries.map(e => String(e.member || "").trim()).filter(Boolean))];
   await pLimit(members, CFG.RISK_API_CONCURRENCY, async (m) => {
-    const info = await apiQuery("/memberInfo", { memberName: m });
+    const info = await query("/memberInfo", { memberName: m });
     if (!info.ok) {
-      if (info.rateLimited) result.set(m, { riskCheckFailed: true });
+      result.set(m, { riskCheckFailed: true, riskCheckName: "会员资料" });
       return;
     }
     const items = Array.isArray(info.data?.items) ? info.data.items : [];
     const d = items.find(it => String(it?.memberName || "").trim() === m);
-    if (!d) return;
+    if (!d) {
+      result.set(m, { riskCheckFailed: true, riskCheckName: "会员资料" });
+      return;
+    }
     const sumRecharge = parseFloat(d.sumRecharge || 0);
-    const sumWithdraw = parseFloat(d.sumWithdraw || 0);
-    const profitAndLoss = Math.round(sumRecharge - Math.abs(sumWithdraw));
+    const profitAndLoss = Math.round(normalizeOverallLoss(d));
+    const newMember = isNewMemberByDetail(d);
+    const base = {
+      profitAndLoss,
+      isNewMember: newMember.isNewMember,
+      newMemberReasons: newMember.reasons,
+      latestLoginIp: d.latestLoginIp || d.lastLoginIp || d.loginIp || "",
+      latestLoginDevice: d.latestLoginDevice || d.lastLoginDevice || d.device || "",
+      freezeStatus: d.freezeStatus,
+    };
     if (!Number.isFinite(sumRecharge) || sumRecharge < CFG.MIN_RECHARGE_FOR_RATIO) {
-      if (Number.isFinite(profitAndLoss)) result.set(m, { profitAndLoss });
+      result.set(m, base);
       return;
     }
     const gift = parseFloat(d.sumPromotion || 0) + parseFloat(d.sumRecvTips || 0)
@@ -428,9 +554,9 @@ async function riskCheckGiftRatio(entries) {
     const currentAmount = entryForMember.reduce((s, e) => s + (parseFloat(e.amount) || 0), 0);
     const ratio = (gift + currentAmount) / sumRecharge;
     if (ratio > CFG.GIFT_RATIO_THRESHOLD) {
-      result.set(m, { ratio, gift, sumRecharge, currentAmount, profitAndLoss });
+      result.set(m, { ...base, ratio, gift, sumRecharge, currentAmount });
     } else {
-      if (Number.isFinite(profitAndLoss)) result.set(m, { profitAndLoss });
+      result.set(m, base);
     }
   });
   return result;
@@ -450,19 +576,18 @@ function get7DayDateRange() {
   return { startTime: fmt(start), endTime: fmt(end) };
 }
 
-async function riskCheckBetConcentration(entries) {
+async function riskCheckBetConcentration(entries, query = riskApiQuery) {
   const result = new Map();
   if (!Array.isArray(entries) || entries.length === 0) return result;
   const { startTime, endTime } = get7DayDateRange();
   const members = [...new Set(entries.map(e => String(e.member || "").trim()).filter(Boolean))];
   await pLimit(members, CFG.RISK_API_CONCURRENCY, async (m) => {
     const [cpRes, thirdRes] = await Promise.all([
-      apiQuery("/cpReport", { memberName: m, startTime, endTime }),
-      apiQuery("/thirdReport", { memberName: m, startTime, endTime }),
+      query("/cpReport", { memberName: m, startTime, endTime }),
+      query("/thirdReport", { memberName: m, startTime, endTime }),
     ]);
-    // 429 限流：标记 riskCheckFailed 强制人工审核
-    if (cpRes.rateLimited || thirdRes.rateLimited) {
-      result.set(m, { riskCheckFailed: true });
+    if (!cpRes.ok || !thirdRes.ok || cpRes.rateLimited || thirdRes.rateLimited) {
+      result.set(m, { riskCheckFailed: true, riskCheckName: "投注占比" });
       return;
     }
     const cpItems = (cpRes.ok && cpRes.data?.items) ? cpRes.data.items : [];
@@ -512,7 +637,7 @@ function getTodayTimestampRange() {
 
 // 一次查询近七日加款记录，客户端过滤出今天的（避免 accountChangeList 重复查询）
 // 返回 { weekRechargeMap: Map<member, {count}>, todayRechargeMap: Map<member, items[]> }
-async function fetchRechargeRecords(entries) {
+async function fetchRechargeRecords(entries, query = riskApiQuery) {
   const weekRechargeMap = new Map();
   const todayRechargeMap = new Map();
   if (!Array.isArray(entries) || entries.length === 0) return { weekRechargeMap, todayRechargeMap };
@@ -522,13 +647,11 @@ async function fetchRechargeRecords(entries) {
   const members = [...new Set(entries.map(e => String(e.member || "").trim()).filter(Boolean))];
 
   await pLimit(members, CFG.RISK_API_CONCURRENCY, async (m) => {
-    const res = await apiQuery("/accountChangeList", { memberName: m, startTime, endTime, transTypeList: [174] });
+    const res = await query("/accountChangeList", { memberName: m, startTime, endTime, transTypeList: [174] });
     if (!res.ok) {
       log.warn("加款记录查询失败，查重和频率检查将失效", { member: m, err: res.err });
-      if (res.rateLimited) {
-        todayRechargeMap.set(m, []);
-        weekRechargeMap.set(m, { count: 0, riskCheckFailed: true });
-      }
+      todayRechargeMap.set(m, []);
+      weekRechargeMap.set(m, { count: 0, riskCheckFailed: true, riskCheckName: "加款记录" });
       return;
     }
     const items = res.data?.items || [];
@@ -561,25 +684,106 @@ async function fetchRechargeRecords(entries) {
   return { weekRechargeMap, todayRechargeMap };
 }
 
-// 并行执行 3 项风控预检（加款记录合并为一次查询）
+async function riskCheckPeriodProfit(entries, query = riskApiQuery) {
+  const result = new Map();
+  if (!Array.isArray(entries) || entries.length === 0) return result;
+  const { startTime, endTime } = get7DayDateRange();
+  const members = [...new Set(entries.map(e => String(e.member || "").trim()).filter(Boolean))];
+
+  await pLimit(members, CFG.RISK_API_CONCURRENCY, async (m) => {
+    try {
+      const res = await query("/memberInOutReport", { memberName: m, startTime, endTime });
+      if (!res.ok) {
+        result.set(m, { riskCheckFailed: true, riskCheckName: "周期输赢" });
+        return;
+      }
+      const d = res.data?.data || res.data || {};
+      if (d.profit === undefined || d.profit === null || !Number.isFinite(money(d.profit, NaN))) {
+        result.set(m, { riskCheckFailed: true, riskCheckName: "周期输赢" });
+        return;
+      }
+      const periodProfit = money(d.profit, 0); // 平台B：正数=盈利，负数=亏损
+      result.set(m, { periodProfit, startTime, endTime });
+    } catch {
+      result.set(m, { riskCheckFailed: true, riskCheckName: "周期输赢" });
+    }
+  });
+  return result;
+}
+
+// 同一会员的只读风控数据一次性并发查询，缩短单笔加款的等待时间。
+// 绿通仅影响结果采用，不影响查询发起，避免因分阶段等待而拖慢整笔处理。
 async function runRiskPreChecks(entries) {
-  const [giftRatioMap, betConcentrationMap, rechargeRecords] = await Promise.all([
+  const [giftRatioMap, rechargeRecords, allPeriodProfitMap, allBetConcentrationMap] = await Promise.all([
     riskCheckGiftRatio(entries),
-    riskCheckBetConcentration(entries),
     fetchRechargeRecords(entries),
+    riskCheckPeriodProfit(entries),
+    riskCheckBetConcentration(entries),
   ]);
+  const greenProbeMembers = new Set();
+  for (const e of entries || []) {
+    const m = String(e?.member || "").trim();
+    const info = giftRatioMap.get(m);
+    if (info && !info.riskCheckFailed && !info.isNewMember
+      && Number.isFinite(info.profitAndLoss)
+      && info.profitAndLoss >= CFG.BIG_LOSS_GREEN_THRESHOLD) {
+      greenProbeMembers.add(m);
+    }
+  }
+
+  // 与原有规则保持一致：周期输赢仅用于绿通候选，非候选的预取结果不参与分类。
+  const periodProfitMap = new Map();
+  for (const member of greenProbeMembers) {
+    if (allPeriodProfitMap.has(member)) periodProfitMap.set(member, allPeriodProfitMap.get(member));
+  }
+
+  const associationMap = new Map();
+  // 绿通会员虽已完成预取，也不采用投注结果或失败状态，保持原先的豁免语义。
+  const betConcentrationMap = new Map();
+  for (const [member, result] of allBetConcentrationMap) {
+    if (!isGreenPassMember(member, giftRatioMap, periodProfitMap, associationMap)) {
+      betConcentrationMap.set(member, result);
+    }
+  }
+
   return {
     giftRatioMap,
     betConcentrationMap,
     weekRechargeMap: rechargeRecords.weekRechargeMap,
     todayRechargeMap: rechargeRecords.todayRechargeMap,
+    periodProfitMap,
+    associationMap,
   };
 }
 
 // ================================================================
 //  8. PARSER
 // ================================================================
-const LINE_RE = /^\s*([a-zA-Z0-9_]+)\s*([a-zA-Z\u4e00-\u9fa5]+)\s*([1-9]\d*)\s*$/;
+const SPACED_LINE_RE = /^\s*([a-zA-Z0-9_]+)\s+([a-zA-Z\u4e00-\u9fa5]+)\s+([1-9]\d*)\s*$/;
+const COMPACT_CN_LINE_RE = /^\s*([a-zA-Z0-9_]+)\s*([\u4e00-\u9fa5]+)\s*([1-9]\d*)\s*$/;
+
+function normalizeEntryLine(line) {
+  return String(line || "").replace(/[，、；]/g, " ").trim();
+}
+
+function parseEntryLine(line) {
+  const normalized = normalizeEntryLine(line);
+  if (!normalized) return null;
+  let m = SPACED_LINE_RE.exec(normalized);
+  if (!m) m = COMPACT_CN_LINE_RE.exec(normalized);
+  if (!m) return null;
+  const member = String(m[1] || "").trim();
+  const rawRemark = String(m[2] || "").trim();
+  const amountStr = String(m[3] || "").trim();
+  if (!member || !rawRemark || !amountStr) return null;
+  if (/[0-9]/.test(rawRemark)) return null;
+  const amount = parseInt(amountStr, 10);
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+  const remarkLower = rawRemark.toLowerCase();
+  const aliased = CFG.REMARK_ALIASES[remarkLower] || CFG.REMARK_ALIASES[rawRemark];
+  const remark = aliased || rawRemark;
+  return { member, remark, amount, rawRemark };
+}
 
 function looksLikeEntry(line) {
   if (!line || typeof line !== "string") return false;
@@ -597,11 +801,16 @@ function diagnoseLine(line) {
   const t = line.trim().replace(/[，、；]/g, " ");
   if (!t) return null;
 
-  if (LINE_RE.test(t)) return null;
+  if (parseEntryLine(t)) return null;
 
-  const userMatch = t.match(/^([a-zA-Z0-9_]+)/);
+  const normalized = normalizeEntryLine(t);
+  if (/^[a-zA-Z0-9_]+[a-zA-Z]+[1-9]\d*$/.test(normalized) && !/\s/.test(normalized)) {
+    return "英文备注请用空格分隔";
+  }
+
+  const userMatch = normalized.match(/^([a-zA-Z0-9_]+)/);
   if (!userMatch) return "用户名只能包含字母、数字和下划线";
-  const rest1 = t.slice(userMatch[0].length).trim();
+  const rest1 = normalized.slice(userMatch[0].length).trim();
 
   const amtMatch = rest1.match(/([1-9]\d*)\s*$/);
   if (!amtMatch) {
@@ -632,23 +841,16 @@ function parseEntries(text) {
 
   try {
     for (let i = 0; i < lines.length; i++) {
-      // 规范化后再匹配，与 diagnoseLine 保持一致
-      const normalized = lines[i].replace(/[，、；]/g, " ");
-      const m = LINE_RE.exec(normalized);
-      if (!m) continue;
+      const parsedLine = parseEntryLine(lines[i]);
+      if (!parsedLine) continue;
       count++;
-      if (count > CFG.MAX_ENTRIES) { log.warn("消息条目过多, 截断处理", { total: count, max: CFG.MAX_ENTRIES }); break; }
+      if (count > CFG.MAX_ENTRIES) {
+        log.warn("消息条目过多, 拒绝处理", { totalAtLeast: count, max: CFG.MAX_ENTRIES });
+        return { valid: [], unrecognized: [], _warning: `一次最多处理${CFG.MAX_ENTRIES}笔，当前超过限制，请拆分发送` };
+      }
       matchedLineNums.add(i);
       try {
-        const member = String(m[1] || "").trim();
-        const rawRemark = String(m[2] || "").trim();
-        const amountStr = String(m[3] || "").trim();
-        if (!member || !rawRemark || !amountStr) continue;
-        const amount = parseInt(amountStr, 10);
-        const remarkLower = rawRemark.toLowerCase();
-        const aliased = CFG.REMARK_ALIASES[remarkLower] || CFG.REMARK_ALIASES[rawRemark];
-        const remark = aliased || rawRemark;
-        valid.push({ member, remark, amount });
+        valid.push({ member: parsedLine.member, remark: parsedLine.remark, amount: parsedLine.amount });
       } catch (e) { log.warn("单条解析异常", { err: e?.message, index: count }); continue; }
     }
   } catch (e) { log.error("正则解析异常", { err: e?.message }); }
@@ -672,29 +874,36 @@ function parseEntries(text) {
 // ================================================================
 //  9. CLASSIFIER
 // ================================================================
+function formatRiskFailure(name, fallback) {
+  const raw = String(name || fallback || "风控").trim();
+  return raw.split("/").filter(Boolean).map(part => {
+    return part.endsWith("查询失败") ? part : `${part}查询失败`;
+  }).join("/");
+}
+
 function classifyEntries(entries, todayRechargeMap, riskMaps) {
   const auto = [], confirm = [], overLimit = [];
   if (!Array.isArray(entries)) return { auto, confirm, overLimit };
 
-  const seen = new Map();
-  const deduped = entries.filter(e => {
-    if (!e || !e.member || !e.remark) return false;
+  const keyCounts = new Map();
+  for (const e of entries) {
+    if (!e || !e.member || !e.remark) continue;
     const key = `${String(e.member).trim()}|${String(e.remark).trim()}`;
-    if (seen.has(key)) return false;
-    seen.set(key, true);
-    return true;
-  });
+    keyCounts.set(key, (keyCounts.get(key) || 0) + 1);
+  }
 
   // 当天加款记录（来自后台 accountChangeList，替代本地 tx_log）
   // 结构: Map<member, items[]>，items 含 operatorRemark/amount 等字段
   const todayMap = (todayRechargeMap instanceof Map) ? todayRechargeMap : new Map();
 
-  // 风控预检结果（3 项新增规则）
+  // 风控预检结果
   const giftRatioMap = (riskMaps && riskMaps.giftRatioMap) || new Map();
   const betConcentrationMap = (riskMaps && riskMaps.betConcentrationMap) || new Map();
   const weekRechargeMap = (riskMaps && riskMaps.weekRechargeMap) || new Map();
+  const periodProfitMap = (riskMaps && riskMaps.periodProfitMap) || new Map();
+  const associationMap = (riskMaps && riskMaps.associationMap) || new Map();
 
-  for (const e of deduped) {
+  for (const e of entries) {
     try {
       if (!e || !e.member || typeof e.amount !== "number" || !isFinite(e.amount)) continue;
       if (e.amount > CFG.AMOUNT_MAX) { overLimit.push(e); continue; }
@@ -718,6 +927,9 @@ function classifyEntries(entries, todayRechargeMap, riskMaps) {
         return false;
       });
       const inFlight = isProcessing(key);
+      if ((keyCounts.get(key) || 0) > 1) {
+        reasons.push("批内重复");
+      }
       if (matched) {
         reasons.push("当天彩金重复");
       } else if (inFlight) {
@@ -728,21 +940,38 @@ function classifyEntries(entries, todayRechargeMap, riskMaps) {
       const isZhouka = r.includes("周卡");
 
       // 需求 1：总赠送金额 / 总充值金额 占比 > 15%
-      // 周卡 + 输钱 >= HIGH_LOSS_EXEMPT：无视赠送占比规则，可直接赠送
       const giftRatio = giftRatioMap.get(m);
       const zhoukaHighLoss = isZhouka && giftRatio && Number.isFinite(giftRatio.profitAndLoss) && giftRatio.profitAndLoss >= CFG.HIGH_LOSS_EXEMPT;
+      const greenPass = isGreenPassMember(m, giftRatioMap, periodProfitMap, associationMap);
+      const softBypass = greenPass || zhoukaHighLoss;
       if (giftRatio && giftRatio.riskCheckFailed) {
-        reasons.push("风控查询失败(限流)");
-      } else if (giftRatio && giftRatio.ratio !== undefined && !zhoukaHighLoss) {
+        reasons.push(`${giftRatio.riskCheckName || "风控"}查询失败`);
+      } else if (giftRatio && giftRatio.isNewMember && e.amount > CFG.NEW_MEMBER_AUTO_MAX) {
+        const desc = (giftRatio.newMemberReasons || []).join("、") || "资料较新";
+        reasons.push(`新会员(${desc})`);
+      } else if (giftRatio && giftRatio.ratio !== undefined && !softBypass) {
         reasons.push(`赠送占比${Math.round((giftRatio.ratio || 0) * 100)}%`);
       }
 
+      const period = periodProfitMap.get(m);
+      if (period && period.riskCheckFailed) {
+        reasons.push(`${period.riskCheckName || "周期输赢"}查询失败`);
+      } else if (period && Number.isFinite(period.periodProfit) && period.periodProfit > CFG.PERIOD_PROFIT_BLOCK) {
+        reasons.push(`近七日盈利${Math.round(period.periodProfit)}`);
+      }
+
+      const assoc = associationMap.get(m);
+      if (assoc && assoc.riskCheckFailed) {
+        reasons.push(formatRiskFailure(assoc.riskCheckName, "关联"));
+      } else if (assoc && assoc.triggered) {
+        reasons.push(...(assoc.reasons || ["关联异常"]));
+      }
+
       // 需求 2：官彩投注占比 > 20%
-      // 周卡 + 输钱 >= HIGH_LOSS_EXEMPT：无视官彩投注占比规则，可直接赠送
       const betConc = betConcentrationMap.get(m);
       if (betConc && betConc.riskCheckFailed) {
-        reasons.push("风控查询失败(限流)");
-      } else if (betConc && !zhoukaHighLoss) {
+        reasons.push(`${betConc.riskCheckName || "投注占比"}查询失败`);
+      } else if (betConc && !softBypass) {
         reasons.push(`近七日官彩投注占比${Math.round((betConc.ratio || 0) * 100)}%`);
       }
 
@@ -750,21 +979,21 @@ function classifyEntries(entries, todayRechargeMap, riskMaps) {
       // 当前备注为"周卡"时，此规则不生效
       const weekRecharge = !isZhouka ? weekRechargeMap.get(m) : undefined;
       if (weekRecharge && weekRecharge.riskCheckFailed) {
-        reasons.push("风控查询失败(限流)");
-      } else if (weekRecharge) {
+        reasons.push(`${weekRecharge.riskCheckName || "加款记录"}查询失败`);
+      } else if (weekRecharge && !softBypass) {
         reasons.push(`近七日彩金已加款${weekRecharge.count}次`);
       }
 
       // 原有规则：当天加款 >= WEEK_RECHARGE_LIMIT 次（数据来自后台 accountChangeList）
       const todayCount = todayItems.length;
-      if (todayCount >= CFG.WEEK_RECHARGE_LIMIT) {
+      if (todayCount >= CFG.WEEK_RECHARGE_LIMIT && !softBypass) {
         reasons.push(`今日赠送${todayCount + 1}次`);
       }
 
       if (reasons.length > 0) {
         const entry = { ...e };
         // 整体输赢作为展示信息附加（不是触发条件，仅人工审核时展示）
-        // profitAndLoss = 总充值 - |总提款|，正数=输钱，负数=赢钱，显示时去符号
+        // profitAndLoss：机器人内部统一为正数=输钱，负数=赢钱。
         if (giftRatio && Number.isFinite(giftRatio.profitAndLoss)) {
           const pnl = giftRatio.profitAndLoss;
           const label = pnl >= 0 ? "输钱" : "赢钱";
@@ -775,7 +1004,7 @@ function classifyEntries(entries, todayRechargeMap, riskMaps) {
         continue;
       }
 
-      const needConfirm = e.amount > CFG.AMOUNT_CONFIRM && !CFG.SAFE_REMARKS.includes(e.remark);
+      const needConfirm = e.amount > CFG.AMOUNT_CONFIRM && !CFG.SAFE_REMARKS.includes(e.remark) && !greenPass;
       (needConfirm ? confirm : auto).push(e);
     } catch (err) { log.warn("分类条目异常", { member: e?.member, err: err?.message }); }
   }
@@ -801,7 +1030,7 @@ async function executeBatch(items) {
     }
     let timer = null;
     return Promise.race([
-      apiAddBalance(item.member, item.remark, item.amount).then(r => ({ ...item, ok: r.ok, err: r.err || undefined })),
+      apiAddBalance(item.member, item.remark, item.amount, ensureRequestId(item)).then(r => ({ ...item, ok: r.ok, err: r.err || undefined })),
       new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("单任务超时")), taskTimeout); }),
     ]).catch(err => ({ ...item, ok: false, err: err?.message || "执行异常" }))
       .finally(() => { if (timer) { try { clearTimeout(timer); } catch {} timer = null; } });
@@ -818,11 +1047,16 @@ function trunc(t, max = 3800) {
   } catch { return ""; }
 }
 
+function pushSuccessSummary(lines, label, items) {
+  if (!Array.isArray(items) || !items.length) return;
+  lines.push(`${label}：${items.length} 笔`);
+}
+
 function buildBReport(classified, results, notExist) {
   const s = [];
   if (classified.overLimit && classified.overLimit.length) {
     s.push(`⛔️ 拒绝加款：${classified.overLimit.length} 笔`);
-    classified.overLimit.forEach((r) => s.push(`${r.member}  ${r.remark}  ${r.amount} - 金额超限`));
+    classified.overLimit.forEach((r) => s.push(`${r.member}  ${r.remark}  ${r.amount} - ${r._rejectReason || "金额超限"}`));
   }
   if (notExist && notExist.length) {
     s.push(`⚠️ 账号无效：${notExist.length} 笔`);
@@ -831,7 +1065,8 @@ function buildBReport(classified, results, notExist) {
   if (results && results.length) {
     const ok = results.filter((r) => r && r.ok);
     const fail = results.filter((r) => r && !r.ok);
-    if (ok.length) { s.push(`✅ 自动加款：${ok.length} 笔`); ok.forEach((r) => s.push(`${r.member}  ${r.remark}  ${r.amount}`)); }
+    pushSuccessSummary(s, "✅ 自动加款", ok);
+    ok.forEach((r) => s.push(`${r.member}  ${r.remark}  ${r.amount}`));
     if (fail.length) {
       s.push(`❌ 加款失败：${fail.length} 笔`);
       fail.forEach((r) => s.push(`${r.member}  ${r.remark}  ${r.amount}${r.err ? " - " + r.err : ""}`));
@@ -853,7 +1088,7 @@ function buildAGroupNotification(classified, results, notExist) {
   const p = [];
   if (classified.overLimit && classified.overLimit.length) {
     p.push(`⛔️ 拒绝加款：${classified.overLimit.length} 笔`);
-    classified.overLimit.forEach((r) => p.push(`${r.member}  ${r.remark}  ${r.amount} - 金额超限`));
+    classified.overLimit.forEach((r) => p.push(`${r.member}  ${r.remark}  ${r.amount} - ${r._rejectReason || "金额超限"}`));
   }
   if (notExist && notExist.length) {
     p.push(`⚠️ 账号无效：${notExist.length} 笔`);
@@ -863,15 +1098,12 @@ function buildAGroupNotification(classified, results, notExist) {
     p.push(`📝 等待审核：${classified.confirm.length} 笔`);
     classified.confirm.forEach((r) => {
       let reason = "";
-      if (r._reasons && r._reasons.length) reason = `  -  ${r._reasons.join(" / ")}`;
+      if (r._reasons && r._reasons.length) reason = `  -  ${r._reasons.join("/ ")}`;
       p.push(`${r.member}  ${r.remark}  ${r.amount}${reason}`);
     });
   }
   const ok = (results || []).filter(r => r && r.ok);
-  if (ok.length) {
-    p.push(`✅ 自动加款：${ok.length} 笔`);
-    ok.forEach(r => p.push(`${r.member}  ${r.remark}  ${r.amount}`));
-  }
+  pushSuccessSummary(p, "✅ 自动加款", ok);
   const fail = (results || []).filter(r => r && !r.ok);
   if (fail.length) {
     p.push(`❌ 自动加款失败：${fail.length} 笔`);
@@ -910,6 +1142,25 @@ const tg = {
   },
 };
 
+function displayNameFromUser(user) {
+  if (!user) return "未知";
+  const full = `${user.first_name || ""}${user.last_name ? " " + user.last_name : ""}`.trim();
+  if (full) return full;
+  if (user.username) return user.username;
+  return "未知";
+}
+
+function bjTimeShort() {
+  const t = safeNow().slice(11, 16);
+  return t ? t.replace(":", "-") : "";
+}
+
+function actionOperatorText(ctx) {
+  const name = displayNameFromUser(ctx?.from);
+  const t = bjTimeShort();
+  return t ? `${name} ${t}` : name;
+}
+
 // ================================================================
 //  13. BOT SETUP
 // ================================================================
@@ -928,6 +1179,11 @@ function unlockEntry(key) {
   else processingEntries.delete(key);
 }
 function isProcessing(key) { return processingEntries.has(key); }
+function ensureRequestId(item) {
+  if (!item || typeof item !== "object") return null;
+  if (!item._requestId) item._requestId = crypto.randomBytes(12).toString("hex");
+  return item._requestId;
+}
 
 // ================================================================
 //  auth-service 动态降级与恢复
@@ -935,7 +1191,6 @@ function isProcessing(key) { return processingEntries.has(key); }
 //  定时探测恢复后自动重新启用。
 // ================================================================
 let authRecheckIv = null;
-const AUTH_RECHECK_MS = 30000; // 30秒探测一次
 
 async function checkAuthServiceHealth() {
   try {
@@ -959,7 +1214,7 @@ function scheduleAuthRecheck() {
   log.warn("auth-service 降级, 启动定时探测恢复");
   authRecheckIv = setInterval(() => {
     checkAuthServiceHealth().catch(e => log.debug("auth-service 探测异常", { err: e?.message }));
-  }, AUTH_RECHECK_MS);
+  }, CFG.AUTH_RECHECK_MS);
 }
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN, {
@@ -1262,12 +1517,18 @@ bot.on("text", async (ctx) => {
 //   - 异常路径（pending.set 前抛错）：调用方通过 unmanagedConfirmLocks 兜底释放
 // ================================================================
 async function classifyAndExecute(entries) {
-  // 风控预检（3 项并行查询，失败不阻塞主流程）
-  let riskMaps = { giftRatioMap: new Map(), betConcentrationMap: new Map(), weekRechargeMap: new Map(), todayRechargeMap: new Map() };
+  // 风控预检：失败即转人工，避免查不到数据时自动加款。
+  let riskMaps = { giftRatioMap: new Map(), betConcentrationMap: new Map(), weekRechargeMap: new Map(), todayRechargeMap: new Map(), periodProfitMap: new Map(), associationMap: new Map() };
   try {
     riskMaps = await runRiskPreChecks(entries);
   } catch (e) {
-    log.warn("风控预检失败, 跳过风控规则", { err: e?.message || String(e) });
+    log.warn("风控预检失败, 全部转人工", { err: e?.message || String(e) });
+    const failMap = new Map();
+    for (const item of entries || []) {
+      const m = String(item?.member || "").trim();
+      if (m) failMap.set(m, { riskCheckFailed: true, riskCheckName: "风控" });
+    }
+    riskMaps = { giftRatioMap: failMap, betConcentrationMap: new Map(), weekRechargeMap: new Map(), todayRechargeMap: new Map(), periodProfitMap: new Map(), associationMap: new Map() };
   }
   const classified = classifyEntries(entries, riskMaps.todayRechargeMap, riskMaps);
 
@@ -1348,7 +1609,7 @@ async function processForGroupB(entries, sourceChatId, sourceMessageId, sourceFr
       if (baseReport) bText += "\n" + baseReport;
       bText += `\n⏳ 等待操作：${classified.confirm.length} 笔`;
       for (const t of classified.confirm) {
-        const reason = (t._reasons && t._reasons.length) ? `  -  ${t._reasons.join(" / ")}` : "";
+        const reason = (t._reasons && t._reasons.length) ? `  -  ${t._reasons.join("/ ")}` : "";
         bText += `\n${t.member || "?"}  ${t.remark || "?"}  ${t.amount}${reason}`;
       }
 
@@ -1360,6 +1621,14 @@ async function processForGroupB(entries, sourceChatId, sourceMessageId, sourceFr
         Markup.button.callback("✅ 确认", `ok_${id}`),
         Markup.button.callback("❌ 取消", `no_${id}`),
       ])).catch(e => { log.error("B群确认消息发送失败", { err: e?.message }); return null; });
+      if (!bSent) {
+        for (const lk of confirmLockKeys) unlockEntry(lk);
+        unmanagedConfirmLocks = null;
+        await bot.telegram.sendMessage(sourceChatId, "⚠️ B群确认消息发送失败，待审核加款未入队，请稍后重试。", {
+          reply_to_message_id: sourceMessageId
+        }).catch(e => log.error("A群发送确认失败通知失败", { err: e?.message }));
+        return;
+      }
 
       pending.set(id, {
         tasks: classified.confirm,
@@ -1449,7 +1718,7 @@ async function handleB(ctx, entries) {
     if (classified.confirm.length) {
       let confirmList = `⏳ 等待操作：${classified.confirm.length} 笔`;
       for (const t of classified.confirm) {
-        const reason = (t._reasons && t._reasons.length) ? `  -  ${t._reasons.join(" / ")}` : "";
+        const reason = (t._reasons && t._reasons.length) ? `  -  ${t._reasons.join("/ ")}` : "";
         confirmList += `\n${t.member || "?"}  ${t.remark || "?"}  ${t.amount}${reason}`;
       }
 
@@ -1469,6 +1738,12 @@ async function handleB(ctx, entries) {
           ]),
         });
       } catch (e) { log.error("确认消息发送失败", { err: e?.message }); }
+      if (!replyMsg) {
+        for (const lk of confirmLockKeys) unlockEntry(lk);
+        unmanagedConfirmLocks = null;
+        await tg.reply(ctx, "⚠️ 确认消息发送失败，待审核加款未入队，请稍后重试。").catch(() => {});
+        return;
+      }
 
       pending.set(id, {
         tasks: classified.confirm,
@@ -1508,6 +1783,8 @@ bot.action(/^ok_(.+)$/, async (ctx) => {
     if (cached && cached._timer) { try { clearTimeout(cached._timer); } catch {} }
     if (!cached) return tg.edit(ctx, "⏰ 已过期或不存在", { reply_markup: { inline_keyboard: [] } }).then(() => tg.cb(ctx, "已过期"));
     pending.delete(id); // 立即删除，防止双击重复执行
+    cached.actionOperator = actionOperatorText(ctx);
+    log.info("确认按钮点击", { id, operator: cached.actionOperator });
 
     // 所有路径统一在 finally 释放 confirm 锁，避免早返回导致泄漏
     let results = null;
@@ -1554,7 +1831,7 @@ bot.action(/^ok_(.+)$/, async (ctx) => {
 
       let bEditText = header ? `${header}\n📊 处理报告` : "📊 处理报告";
       if (baseReport) bEditText += "\n" + baseReport;
-      bEditText += "\n🔄 操作结果";
+      bEditText += `\n🔄 操作人员：${cached.actionOperator}`;
       const okConfirm = (results || []).filter(r => r && r.ok);
       if (okConfirm.length) {
         bEditText += `\n✅ 审核加款：${okConfirm.length} 笔`;
@@ -1585,6 +1862,10 @@ bot.action(/^no_(.+)$/, async (ctx) => {
     let cached = id ? pending.get(id) : null;
     if (cached && cached._timer) { try { clearTimeout(cached._timer); } catch {} }
     if (id) pending.delete(id);
+    if (cached) {
+      cached.actionOperator = actionOperatorText(ctx);
+      log.info("取消按钮点击", { id, operator: cached.actionOperator });
+    }
     // 释放 confirm 占位锁
     if (cached && Array.isArray(cached.confirmLockKeys)) {
       for (const lk of cached.confirmLockKeys) unlockEntry(lk);
@@ -1603,11 +1884,11 @@ bot.action(/^no_(.+)$/, async (ctx) => {
 
     let bEditText = header ? `${header}\n📊 处理报告` : "📊 处理报告";
     if (baseReport) bEditText += "\n" + baseReport;
-    bEditText += "\n🔄 操作结果";
+    bEditText += `\n🔄 操作人员：${cached.actionOperator}`;
     if (cached.tasks && cached.tasks.length) {
       bEditText += `\n❌ 取消加款：${cached.tasks.length} 笔`;
       cached.tasks.forEach(r => {
-        const reason = (r._reasons && r._reasons.length) ? `  -  ${r._reasons.join(" / ")}` : "";
+        const reason = (r._reasons && r._reasons.length) ? `  -  ${r._reasons.join("/ ")}` : "";
         bEditText += `\n${r.member || "?"}  ${r.remark || "?"}  ${r.amount}${reason}`;
       });
     }
@@ -1695,20 +1976,19 @@ async function notifyAGroup(c, action, newResults) {
   let t = "";
 
   if (c.overLimit && c.overLimit.length) {
-    t += `⛔️ 拒绝加款：${c.overLimit.length} 笔`;
-    c.overLimit.forEach(r => { t += `\n${r.member}  ${r.remark}  ${r.amount} - 金额超限`; });
+    t += (t ? "\n" : "") + `⛔️ 拒绝加款：${c.overLimit.length} 笔`;
+    c.overLimit.forEach(r => { t += `\n${r.member}  ${r.remark}  ${r.amount} - ${r._rejectReason || "金额超限"}`; });
   }
   if (c.notExist && c.notExist.length) {
     t += (t ? "\n" : "") + `⚠️ 账号无效：${c.notExist.length} 笔`;
     c.notExist.forEach(r => { t += `\n${r.member}  ${r.remark}  ${r.amount}`; });
   }
 
-  // 自动加款结果（已执行，始终展示明细，含失败项）
+  // 自动加款结果：成功项汇总，失败项逐笔展示。
   const autoOk = (c.autoResults || []).filter(r => r && r.ok);
   const autoFail = (c.autoResults || []).filter(r => r && !r.ok);
   if (autoOk.length) {
     t += (t ? "\n" : "") + `✅ 自动加款：${autoOk.length} 笔`;
-    autoOk.forEach(r => { t += `\n${r.member}  ${r.remark}  ${r.amount}`; });
   }
   if (autoFail.length) {
     t += (t ? "\n" : "") + `❌ 自动加款失败：${autoFail.length} 笔`;
@@ -1720,20 +2000,20 @@ async function notifyAGroup(c, action, newResults) {
     if (action === 'expired') {
       t += (t ? "\n" : "") + `❌ 超时取消：${c.tasks.length} 笔`;
       c.tasks.forEach(r => {
-        const reason = (r._reasons && r._reasons.length) ? `  -  ${r._reasons.join(" / ")}` : "";
+        const reason = (r._reasons && r._reasons.length) ? `  -  ${r._reasons.join("/ ")}` : "";
         t += `\n${r.member || "?"}  ${r.remark || "?"}  ${r.amount}${reason}`;
       });
     } else if (action === 'purged') {
       // 容量超限主动清理：与超时取消区分，便于运维定位 pending 容量问题
       t += (t ? "\n" : "") + `❌ 系统取消：${c.tasks.length} 笔`;
       c.tasks.forEach(r => {
-        const reason = (r._reasons && r._reasons.length) ? `  -  ${r._reasons.join(" / ")}` : "";
+        const reason = (r._reasons && r._reasons.length) ? `  -  ${r._reasons.join("/ ")}` : "";
         t += `\n${r.member || "?"}  ${r.remark || "?"}  ${r.amount}${reason}`;
       });
     } else if (action === 'cancelled') {
       t += (t ? "\n" : "") + `❌ 取消加款：${c.tasks.length} 笔`;
       c.tasks.forEach(r => {
-        const reason = (r._reasons && r._reasons.length) ? `  -  ${r._reasons.join(" / ")}` : "";
+        const reason = (r._reasons && r._reasons.length) ? `  -  ${r._reasons.join("/ ")}` : "";
         t += `\n${r.member || "?"}  ${r.remark || "?"}  ${r.amount}${reason}`;
       });
     } else if (action === 'confirmed') {
@@ -1742,7 +2022,6 @@ async function notifyAGroup(c, action, newResults) {
       const confirmFail = (newResults || []).filter(r => r && !r.ok);
       if (confirmOk.length) {
         t += (t ? "\n" : "") + `✅ 审核加款：${confirmOk.length} 笔`;
-        confirmOk.forEach(r => { t += `\n${r.member}  ${r.remark}  ${r.amount}`; });
       }
       if (confirmFail.length) {
         t += (t ? "\n" : "") + `❌ 审核失败：${confirmFail.length} 笔`;
@@ -1796,7 +2075,7 @@ async function expireEntry(id, entry, action = 'expired') {
       const cancelLabel = action === 'purged' ? "系统取消" : "超时取消";
       bText += `\n❌ ${cancelLabel}：${entry.tasks.length} 笔`;
       entry.tasks.forEach(r => {
-        const reason = (r._reasons && r._reasons.length) ? `  -  ${r._reasons.join(" / ")}` : "";
+        const reason = (r._reasons && r._reasons.length) ? `  -  ${r._reasons.join("/ ")}` : "";
         bText += `\n${r.member || "?"}  ${r.remark || "?"}  ${r.amount}${reason}`;
       });
       await bot.telegram.editMessageText(entry.bGroupId, entry.bMessageId, undefined,

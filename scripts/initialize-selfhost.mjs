@@ -1,0 +1,70 @@
+import { randomBytes } from "node:crypto";
+import { chmodSync, existsSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
+
+const base32Alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+
+function valueAfter(flag) {
+  const index = process.argv.indexOf(flag);
+  return index >= 0 ? process.argv[index + 1]?.trim() : undefined;
+}
+
+function usage(message) {
+  if (message) console.error(message);
+  console.error("Usage: node scripts/initialize-selfhost.mjs --email admin@example.com --origin https://djmima.com");
+  process.exit(1);
+}
+
+function base32(bytes = 20) {
+  const source = randomBytes(bytes);
+  let output = "";
+  let buffer = 0;
+  let bits = 0;
+  for (const byte of source) {
+    buffer = (buffer << 8) | byte;
+    bits += 8;
+    while (bits >= 5) {
+      output += base32Alphabet[(buffer >>> (bits - 5)) & 31];
+      bits -= 5;
+    }
+  }
+  if (bits > 0) output += base32Alphabet[(buffer << (5 - bits)) & 31];
+  return output;
+}
+
+const email = valueAfter("--email")?.toLowerCase();
+if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) usage("A valid administrator email is required.");
+
+let origin;
+try {
+  origin = new URL(valueAfter("--origin") ?? "");
+} catch {
+  usage("A valid HTTPS public origin is required.");
+}
+if (origin.protocol !== "https:" || origin.username || origin.password || origin.pathname !== "/" || origin.search || origin.hash) {
+  usage("The origin must be a bare HTTPS address, for example https://djmima.com.");
+}
+
+const envPath = resolve(".env");
+const setupPath = resolve(".selfhost-setup-url");
+if (existsSync(envPath) || existsSync(setupPath)) usage("Refusing to replace existing self-hosted secrets. Use a new directory or inspect the existing deployment.");
+
+const setupToken = randomBytes(32).toString("base64url");
+const values = [
+  `DJMIMA_PUBLIC_ORIGIN=${origin.origin}`,
+  "DJMIMA_TRUST_PROXY=1",
+  "DJMIMA_DATABASE_PATH=/app/data/djmima.sqlite",
+  "DJMIMA_BACKUP_DIR=/app/data/backups",
+  `PRIMARY_ADMIN_EMAIL=${email}`,
+  `VAULT_ENCRYPTION_KEY=${randomBytes(32).toString("base64url")}`,
+  `VAULT_AUDIT_SIGNING_KEY=${randomBytes(32).toString("base64url")}`,
+  `AUTH_TOTP_ENCRYPTION_KEY=${randomBytes(32).toString("base64url")}`,
+  `PRIMARY_ADMIN_TOTP_SECRET=${base32()}`,
+  `SELFHOST_SETUP_TOKEN=${setupToken}`,
+].join("\n");
+
+writeFileSync(envPath, `${values}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
+writeFileSync(setupPath, `${origin.origin}/setup?token=${setupToken}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
+chmodSync(envPath, 0o600);
+chmodSync(setupPath, 0o600);
+console.log("Created server-only .env and a one-time initial setup address in .selfhost-setup-url.");

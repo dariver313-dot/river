@@ -3359,6 +3359,42 @@ button:disabled {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
+.login-password-field {
+  display: flex;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  background: var(--surface-soft);
+  transition: border-color 180ms ease, box-shadow 180ms ease;
+}
+
+.login-password-field:focus-within {
+  border-color: var(--accent-strong);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.selfhost-login-form .login-password-field input {
+  min-width: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.selfhost-login-form .login-password-field input:focus-visible {
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.login-password-field .icon-button {
+  flex: 0 0 42px;
+  min-height: 42px;
+  border: 0;
+  border-left: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+}
+
 .selfhost-login-form small {
   color: var(--ink-faint);
   font-size: 12px;
@@ -3424,6 +3460,46 @@ button:disabled {
   color: var(--ink);
   font-size: 13px;
   letter-spacing: 0.08em;
+}
+
+.setup-card {
+  width: min(100%, 470px);
+}
+
+.setup-account {
+  margin: -4px 0 16px;
+  border-left: 3px solid var(--accent);
+  padding: 7px 10px;
+  background: var(--surface-soft);
+  color: var(--ink-soft);
+  font-size: 13px;
+}
+
+.setup-account strong {
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.setup-secret {
+  margin: 12px 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-soft);
+  padding: 12px;
+}
+
+.setup-secret h3 {
+  margin: 0 0 8px;
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.setup-secret code {
+  display: block;
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  font-size: 13px;
+  letter-spacing: 0.09em;
 }
 
 @keyframes button-spin {

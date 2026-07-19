@@ -28,4 +28,3 @@ console.log(`VAULT_ENCRYPTION_KEY=${base64Url()}`);
 console.log(`VAULT_AUDIT_SIGNING_KEY=${base64Url()}`);
 console.log(`AUTH_TOTP_ENCRYPTION_KEY=${base64Url()}`);
 console.log(`PRIMARY_ADMIN_TOTP_SECRET=${base32()}`);
-console.log(`APPROVER_TOTP_SECRET=${base32()}`);

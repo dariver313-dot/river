@@ -85,7 +85,7 @@ type CredentialForm = Pick<VaultItem, "name" | "domain" | "username" | "password
 type AuditIntegrity = "legacy" | "sealed" | "failed" | "unknown";
 type AuditEntry = { action: string; actorEmail: string; itemId: string | null; createdAt: string; integrity?: Exclude<AuditIntegrity, "unknown"> };
 type SystemUser = { email: string; role: "admin" | "user"; status: "active" | "suspended"; createdAt: string; isCurrent: boolean };
-type SystemUserProvisioning = { email: string; setupKey: string };
+type SystemUserProvisioning = { email: string; setupKey: string; temporaryPassword: string };
 type DeleteTarget = Pick<VaultItem, "id" | "name" | "username" | "type">;
 type ApprovalRequest = {
   id: string;
@@ -430,7 +430,7 @@ function ProfileOverview({
           <dl className="profile-details">
             <div><dt>账号名称</dt><dd>{viewer.displayName}</dd></div>
             <div><dt>登录邮箱</dt><dd title={viewer.email}>{viewer.email}</dd></div>
-            <div><dt>身份来源</dt><dd>双验证器安全登录</dd></div>
+            <div><dt>登录方式</dt><dd>登录密码 + 本人 Google 验证器</dd></div>
           </dl>
         </section>
 
@@ -714,6 +714,9 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
   const [approvals, setApprovals] = useState<ApprovalRequest[]>([]);
   const [systemUsers, setSystemUsers] = useState<SystemUser[]>([]);
   const [systemUserEmail, setSystemUserEmail] = useState("");
+  const [systemUserPassword, setSystemUserPassword] = useState("");
+  const [systemUserPasswordConfirmation, setSystemUserPasswordConfirmation] = useState("");
+  const [showSystemUserPassword, setShowSystemUserPassword] = useState(false);
   const [systemUserRole, setSystemUserRole] = useState<"admin" | "user">("user");
   const [systemUserProvisioning, setSystemUserProvisioning] = useState<SystemUserProvisioning | null>(null);
   const [userManagementTab, setUserManagementTab] = useState<UserManagementTab>("users");
@@ -772,7 +775,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
         setServerSessionReady(true);
       }
     }).catch(() => {
-      if (!cancelled) window.location.assign("/signout-with-chatgpt?return_to=%2Flogin");
+      if (!cancelled) window.location.assign("/signout?return_to=%2Flogin");
     });
     return () => { cancelled = true; };
   }, []);
@@ -1083,7 +1086,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
       cache: "no-store",
       credentials: "same-origin",
       headers: { "Content-Type": "application/json" },
-    }).finally(() => window.location.assign("/signout-with-chatgpt?return_to=%2Flogin"));
+    }).finally(() => window.location.assign("/signout?return_to=%2Flogin"));
   }
 
   function restartSecuritySession() {
@@ -1092,7 +1095,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
       cache: "no-store",
       credentials: "same-origin",
       headers: { "Content-Type": "application/json" },
-    }).finally(() => window.location.assign("/signout-with-chatgpt?return_to=%2F%3Freauth%3D1"));
+    }).finally(() => window.location.assign("/signout?return_to=%2F%3Freauth%3D1"));
   }
 
   async function requestVault<T>(path: string, init: RequestInit) {
@@ -1312,23 +1315,30 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
 
   async function createSystemUser(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (systemUserPassword !== systemUserPasswordConfirmation) {
+      setToast("两次输入的初始登录密码不一致。");
+      return;
+    }
     setIsSaving(true);
     try {
       const setupKey = generateLoginTotpSetupKey();
       await requestVault<{ user: SystemUser }>("/api/users", {
         method: "POST",
-        body: JSON.stringify({ email: systemUserEmail, role: systemUserRole, authTotpSecret: setupKey }),
+        body: JSON.stringify({ email: systemUserEmail, password: systemUserPassword, role: systemUserRole, authTotpSecret: setupKey }),
       });
       setPublicUserCount((current) => current + 1);
-      setSystemUserProvisioning({ email: systemUserEmail.trim().toLowerCase(), setupKey });
+      setSystemUserProvisioning({ email: systemUserEmail.trim().toLowerCase(), setupKey, temporaryPassword: systemUserPassword });
       setSystemUserEmail("");
+      setSystemUserPassword("");
+      setSystemUserPasswordConfirmation("");
+      setShowSystemUserPassword(false);
       setSystemUserRole("user");
       setShowUserCreateDialog(false);
       setUserQuery("");
       setUserCurrentPage(1);
       setUserLoadAttempt((current) => current + 1);
       setLoadAttempt((current) => current + 1);
-      setToast("系统用户已创建，请安全交付登录验证器");
+      setToast("系统用户已创建，请安全交付初始密码和登录验证器");
     } catch (error) {
       setToast(error instanceof Error ? error.message : "无法创建系统用户。");
     } finally {
@@ -1768,7 +1778,9 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
             <header><div><span className="modal-icon"><UserCog size={20} /></span><div><h2 id="create-system-user-title">添加系统用户</h2><p>创建后可在用户管理页继续调整角色与状态</p></div></div><button className="icon-button" type="button" onClick={() => setShowUserCreateDialog(false)} aria-label="关闭添加用户"><X size={20} /></button></header>
             <form className="modal-form" onSubmit={createSystemUser}>
               <div className="modal-body">
-              <label>登录邮箱（必须）<input required type="email" value={systemUserEmail} onChange={(event) => setSystemUserEmail(event.target.value)} placeholder="name@example.com" autoComplete="email" autoFocus /><small>邮箱用于识别该用户；登录时还必须通过本人和协作人的两组 Google 验证码。</small></label>
+              <label>登录邮箱（必须）<input required type="email" value={systemUserEmail} onChange={(event) => setSystemUserEmail(event.target.value)} placeholder="name@example.com" autoComplete="email" autoFocus /><small>邮箱是登录账户名；用户还需输入自己的登录密码和本人 Google 验证码。</small></label>
+              <label>初始登录密码（至少 14 位）<div className="form-password"><input required type={showSystemUserPassword ? "text" : "password"} value={systemUserPassword} onChange={(event) => setSystemUserPassword(event.target.value)} minLength={14} maxLength={512} placeholder="为用户设置初始密码" autoComplete="new-password" /><button type="button" className="password-visibility" onClick={() => setShowSystemUserPassword((value) => !value)} aria-label={showSystemUserPassword ? "隐藏初始登录密码" : "显示初始登录密码"}>{showSystemUserPassword ? <EyeOff size={16} /> : <Eye size={16} />}</button></div><small>只保存不可逆哈希。请为每位用户生成独立强密码，并通过受信任渠道交付。</small></label>
+              <label>确认初始登录密码<input required type={showSystemUserPassword ? "text" : "password"} value={systemUserPasswordConfirmation} onChange={(event) => setSystemUserPasswordConfirmation(event.target.value)} minLength={14} maxLength={512} autoComplete="new-password" /></label>
               <div className="field-control"><span>系统角色</span><SurfaceSelect id="new-user-role" ariaLabel="系统角色" value={systemUserRole} onChange={setSystemUserRole} options={[{ value: "user", label: "普通用户" }, { value: "admin", label: "管理员" }]} /></div>
               <aside className="access-setup-note" role="note"><ShieldCheck size={17} aria-hidden="true" /><div><strong>系统会为该用户生成独立验证器</strong><p>创建后仅显示一次 Setup Key。请通过受信任的线下或端到端加密渠道交给本人，不能发在普通群聊中。</p></div></aside>
               </div>
@@ -1783,7 +1795,10 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
           <section className="modal user-create-modal" role="dialog" aria-modal="true" aria-labelledby="user-provisioning-title">
             <header><div><span className="modal-icon"><KeyRound size={20} /></span><div><h2 id="user-provisioning-title">交付登录验证器</h2><p>此 Setup Key 只在当前窗口显示一次</p></div></div><button className="icon-button" type="button" onClick={() => setSystemUserProvisioning(null)} aria-label="关闭登录验证器交付"><X size={20} /></button></header>
             <div className="modal-body provisioning-body">
-              <aside className="access-setup-note" role="note"><ShieldCheck size={17} aria-hidden="true" /><div><strong>{systemUserProvisioning.email}</strong><p>请在 Google Authenticator 中选择“输入设置密钥”，账号名称使用该邮箱，密钥类型选择“基于时间”。协作人验证码由管理员预先配置的独立设备提供。</p></div></aside>
+              <aside className="access-setup-note" role="note"><ShieldCheck size={17} aria-hidden="true" /><div><strong>{systemUserProvisioning.email}</strong><p>请在 Google Authenticator 中选择“输入设置密钥”，账号名称使用该邮箱，密钥类型选择“基于时间”。日常登录只需该用户自己的验证码。</p></div></aside>
+              <label className="provisioning-key">初始登录密码
+                <span><code>{systemUserProvisioning.temporaryPassword}</code><button type="button" className="icon-button" onClick={() => copyValue(systemUserProvisioning.temporaryPassword, "初始登录密码")} aria-label="复制初始登录密码" title="复制初始登录密码"><Copy size={17} /></button></span>
+              </label>
               <label className="provisioning-key">一次性 Setup Key
                 <span><code>{systemUserProvisioning.setupKey}</code><button type="button" className="icon-button" onClick={() => copyValue(systemUserProvisioning.setupKey, "登录验证器 Setup Key")} aria-label="复制登录验证器 Setup Key" title="复制 Setup Key"><Copy size={17} /></button></span>
               </label>

@@ -1,60 +1,80 @@
-# djmima 密码管理平台
+# djmima 自托管密码管理平台
 
-面向小型团队的 Web 密码库：个人项目仅本人可见；公共项目由管理员维护，已启用用户可查看。项目可保存账号、密码、备注与最多 3 个 TOTP 验证器配置；敏感字段以 AES-GCM 加密后写入 D1。
+`djmima` 是面向小型团队的 Web 密码库：个人项目仅本人可见；公共项目由管理员维护，所有已启用用户可查看。每条项目可保存账号、密码、备注与最多 3 组 TOTP 验证器配置。
 
-## 上线前必须配置
+## 自托管边界
 
-在 Sites 的生产环境变量中至少配置以下变量：
+- 应用、SQLite 数据库、加密密钥、登录会话、审计记录和备份都运行并保存在你的服务器。
+- Docker 仅监听 `127.0.0.1:3001`；公网只经宝塔 Nginx 反向代理进入。
+- Cloudflare 可以只作为 DNS、HTTPS 证书/WAF 的外部入口；它不参与应用计算，也不保存密码库数据。
+- 本项目不是零知识密码管理器：服务器持有加密密钥，因此服务器本身必须受控、及时更新并限制 root 访问。
 
-| 变量 | 类型 | 用途 |
-| --- | --- | --- |
-| `PRIMARY_ADMIN_EMAIL` | 普通变量 | 首位且受保护的主管理员邮箱，必须与该用户用于 ChatGPT 登录及站点访问控制的邮箱一致。 |
-| `VAULT_ENCRYPTION_KEY` | 密钥变量 | 32 字节、Base64 或 Base64URL 编码的 AES-256-GCM 密钥。 |
-| `VAULT_AUDIT_SIGNING_KEY` | 密钥变量（推荐） | 32 字节、Base64 或 Base64URL 编码的审计 HMAC 密钥；未配置时会从加密密钥派生，仅用于兼容。 |
+## 登录与权限
 
-可在 PowerShell 生成新的密钥：
+日常登录固定为三要素：
 
-```powershell
-$bytes = [byte[]]::new(32)
-[System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
-[Convert]::ToBase64String($bytes)
+1. 登录邮箱（账户名）；
+2. 登录密码（服务器只保存带随机盐的 scrypt 哈希）；
+3. 本人设备上的 6 位 Google Authenticator 验证码。
+
+第二位用户**不参与每次登录**。双人确认仅用于导出明文密码库等高风险操作，避免协作人不在时所有用户都无法登录。
+
+管理员可在“用户管理”创建普通用户或管理员，并一次性交付该用户的初始登录密码和独立验证器 Setup Key。用户的 TOTP 密钥在 SQLite 中以 AES-GCM 密文保存。
+
+## 首次部署
+
+前置条件：Ubuntu 服务器、Docker Compose、宝塔 Nginx 站点及已签发的 `djmima.com` HTTPS 证书。
+
+```bash
+git clone --branch codex/selfhost --single-branch https://github.com/dariver313-dot/river.git /opt/djmima
+cd /opt/djmima
+node scripts/initialize-selfhost.mjs --email admin@example.com --origin https://djmima.com
+docker compose up -d --build
+docker compose ps
+curl --fail http://127.0.0.1:3001/api/health
 ```
 
-**请妥善保存密钥。** 新项目会使用 AES-GCM 关联数据绑定其 `vault_id` 与 `item_id`，并记录密钥版本。轮换时可使用 `VAULT_ENCRYPTION_KEYS`（键 ID 到密钥的 JSON 映射）和 `VAULT_ACTIVE_KEY_ID`；也可保留现有 `VAULT_ENCRYPTION_KEY` 作为 `legacy`，单独设置新的 `VAULT_ACTIVE_ENCRYPTION_KEY` 与新的键 ID。完成重加密、验证备份后才可移除旧键。不要把任何密钥提交到仓库、截图、聊天记录或前端配置中。
+初始化脚本只在服务器上创建权限为 `0600` 的 `.env`，其中包含所有密钥。它还会生成权限为 `0600` 的 `.selfhost-setup-url`；在服务器终端中查看该文件并在自己的浏览器打开一次性初始化地址：
 
-密码库首页会在读取数据前校验该密钥是否存在且可解析为 32 字节；配置错误会显示管理员可处理的提示，而不会等到首次写入时才失败。
+```bash
+cat .selfhost-setup-url
+```
 
-首次访问时，系统只会按 `PRIMARY_ADMIN_EMAIL` 创建主管理员；不会把第一位访问者自动设为管理员。主管理员进入“用户管理”后创建其他管理员或普通用户；同时还必须在 Sites 的访问控制中允许相同邮箱访问。
+初始化页面会显示管理员自己的 Google Authenticator Setup Key，并要求设置管理员登录密码。录入验证器并确认后，该地址立即失效。不要把 `.env`、`.selfhost-setup-url`、密钥或 Setup Key 提交到 Git、截图或发送到普通聊天群。
 
-公共密码库不会由普通用户的首次访问自动初始化。管理员创建第一条公共项目后，公共区域才会出现；此后所有已启用用户可以查看，只有管理员可以维护。
+在宝塔站点的“反向代理”中，将 `/` 转发至 `http://127.0.0.1:3001`，并使用 [`ops/selfhost/baota-nginx.conf`](ops/selfhost/baota-nginx.conf) 的安全头与敏感路径规则。
 
-## 部署检查清单
+## 运行维护
 
-- `.openai/hosting.json` 已声明 D1 绑定 `DB`，并已将 Drizzle 迁移一起发布。
-- 生产环境已配置上述变量，且加密与审计密钥均以密钥形式保存。
-- Sites 访问控制仅授予需要使用系统的邮箱；应用内“已启用”状态不替代站点访问控制。
-- 使用主管理员账户完成一次登录，创建一位普通用户并验证其只能读取公共项目。
-- 用测试项目验证新增、编辑、删除、TOTP 读取、双人确认导出、服务端会话超时与重新验证。
-- 按 [备份与恢复运行手册](docs/operations/backup-recovery-runbook.md) 建立 D1 定期备份和月度隔离恢复演练；密钥要在独立的受控托管中恢复。
+```bash
+# 查看应用日志和健康状态
+docker compose logs --tail=100 djmima
+docker compose ps
+curl --fail http://127.0.0.1:3001/api/health
 
-## 安全边界
+# 在容器内生成 SQLite 在线备份（保留最新 14 份）
+docker compose exec -T djmima node scripts/selfhost-backup.mjs
+```
 
-- 登录由 Sites 的 ChatGPT 身份机制处理，应用不接收或保存登录密码。
-- Worker 在 API 入口先按边缘 IP 限流；写入接口再强制校验 `Origin` 与 `Sec-Fetch-Site`，限制 JSON 请求大小，并对读取、写入、审计和敏感操作分别按用户及 IP 限流。
-- 安全会话由 HttpOnly、SameSite=Strict Cookie 与 D1 同步维护；每次 API 请求都会续期检查，空闲 15 分钟后服务端拒绝访问。用户管理、删除、公开发布、导出和密钥轮换需要最近 10 分钟内重新验证的会话。
-- 审计记录使用 HMAC 签名和每个密码库独立的顺序哈希链，可发现已签名记录的修改、插入和大多数缺失；要抵御数据库管理员整体回滚，仍需遵守备份留存与外部受控归档流程。
-- 单个个人密码库最多 500 项、公共密码库最多 1,000 项，系统用户最多 100 位；每位用户每小时最多导出 3 次。这些限制在服务端执行。
-- 这不是端到端、零知识密码管理器：生产运行环境持有加密密钥，因此应仅部署在受信任的受控环境中。
+备份文件位于 Docker 命名卷 `djmima_data` 的 `backups/` 目录。应再将**加密的服务器级备份**复制到另一处受控存储，并至少每月在隔离环境中恢复演练；恢复演练不得覆盖生产卷。
+
+## 安全检查清单
+
+- `.env` 与 `.selfhost-setup-url` 均仅限 root 读取，且永不进入 Git。
+- 宝塔 Nginx 使用 HTTPS，反向代理传递 `X-Forwarded-Proto`、`X-Forwarded-Host` 与真实客户端 IP。
+- 3001 不对公网开放；防火墙仅放行 80/443 和受限的管理端口。
+- 为服务器、宝塔和 GitHub 分别启用 MFA，限制 root 密码登录，优先使用 SSH 密钥。
+- 每次版本更新先执行 `docker compose build` 与 `/api/health` 健康检查，再切换反向代理；不要覆盖现有数据卷。
+- 验证新增、编辑、删除、TOTP 读取、双人导出审批、会话超时和备份恢复。
 
 ## 本地验证
 
-使用 Node.js 24（仓库中的 `.nvmrc` / `.node-version` 已固定该版本；Node.js 20 无法构建此项目）：
+使用 Node.js 22 或更高版本：
 
 ```bash
-npm run build
-npm test
+npm ci
+npm run build -- --webpack
 npm run lint
-npm run security:check
 ```
 
-每次推送和 Pull Request 都会在 Node.js 24 中运行构建、测试与 ESLint。数据库结构在 `db/schema.ts`，生产迁移在 `drizzle/`；迁移文件应经过审查后直接提交，避免把不必要的迁移生成工具带入生产开发依赖。
+生产镜像固定使用 Node 22。数据库结构与轻量迁移位于 `db/index.ts`，本地自托管数据默认位于 `.env` 指定的路径。

@@ -19,11 +19,11 @@ export async function POST(request: Request) {
   try {
     const payload = await readLimitedJsonObject(request);
     const email = typeof payload.email === "string" ? payload.email : "";
+    const password = typeof payload.password === "string" ? payload.password : "";
     const userCode = typeof payload.userCode === "string" ? payload.userCode : "";
-    const approverCode = typeof payload.approverCode === "string" ? payload.approverCode : "";
-    const authenticatedEmail = await verifySelfHostedLogin({ email, userCode, approverCode });
+    const authenticatedEmail = await verifySelfHostedLogin({ email, password, userCode });
     if (!authenticatedEmail) {
-      return secureJson({ error: "登录信息无效或已过期，请检查两组验证码后重试。" }, { status: 401 });
+      return secureJson({ error: "登录信息无效或已过期，请检查登录密码和本人验证码后重试。" }, { status: 401 });
     }
 
     return secureJson(

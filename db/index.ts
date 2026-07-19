@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS app_users (
   email TEXT PRIMARY KEY NOT NULL,
   role TEXT NOT NULL DEFAULT 'user',
   status TEXT NOT NULL DEFAULT 'active',
+  password_hash TEXT,
   auth_totp_secret TEXT,
   created_by TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -162,6 +163,11 @@ function openDatabase() {
   opened.pragma("foreign_keys = ON");
   opened.pragma("busy_timeout = 5000");
   opened.exec(schema);
+  try {
+    opened.exec("ALTER TABLE app_users ADD COLUMN password_hash TEXT");
+  } catch (error) {
+    if (!(error instanceof Error) || !error.message.includes("duplicate column name")) throw error;
+  }
   database = opened;
   return opened;
 }
@@ -216,9 +222,9 @@ function createCompatibleDatabase(): D1CompatibleDatabase {
 }
 
 /**
- * D1-shaped adapter used by the existing data layer.  Keeping the surface
- * identical makes self-hosted SQLite operations use the same parameterized
- * statements and transactional batches as the prior D1 deployment.
+ * Local SQLite adapter used by the existing data layer. It keeps parameterized
+ * statements and transactional batches on this server; it makes no remote
+ * database calls.
  */
 export function getD1(): D1CompatibleDatabase {
   if (!compatibleDatabase) compatibleDatabase = createCompatibleDatabase();

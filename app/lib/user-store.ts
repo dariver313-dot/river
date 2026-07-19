@@ -1,5 +1,6 @@
 import { getD1 } from "../../db";
 import { assertAuthTotpEncryptionReady, encryptAuthTotpSecret } from "./auth-totp-crypto";
+import { hashLoginPassword } from "./auth-password";
 import { assertSystemUserChangeAllowed, assertSystemUserDeletionAllowed } from "./system-user-policy";
 import { writeAuditEvent } from "./audit-log";
 import { parseTotpInput } from "./totp";
@@ -34,7 +35,6 @@ type UserRuntimeEnv = {
   PRIMARY_ADMIN_EMAIL?: string;
 };
 
-const nonInteractiveServiceEmail = "sites-screenshot-service-noreply@chatgpt.com";
 const maxSystemUsers = 100;
 let primaryAdminInitialization: Promise<void> | null = null;
 
@@ -82,9 +82,6 @@ async function configurePrimaryAdmin() {
     `INSERT INTO app_settings (key, value) VALUES ('initial_admin', ?)
      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP`,
   ).bind(email).run();
-  await d1.prepare(
-    "UPDATE app_users SET role = 'user', status = 'suspended', updated_at = CURRENT_TIMESTAMP WHERE email = ? AND email <> ?",
-  ).bind(nonInteractiveServiceEmail, email).run();
 }
 
 function ensureConfiguredPrimaryAdmin() {
@@ -201,6 +198,8 @@ export async function createManagedUser(actorEmail: string, input: Record<string
   const email = typeof input.email === "string" ? normalizedEmail(input.email) : "";
   if (!isValidEmail(email)) throw new Error("请输入有效的用户邮箱。");
   const role = inputRole(input.role);
+  const password = typeof input.password === "string" ? input.password : "";
+  const passwordHash = await hashLoginPassword(password);
   const authTotpSecret = typeof input.authTotpSecret === "string" ? input.authTotpSecret.trim() : "";
   if (!authTotpSecret) throw new Error("请为该用户生成登录验证器。");
   const authTotp = parseTotpInput(authTotpSecret);
@@ -209,11 +208,11 @@ export async function createManagedUser(actorEmail: string, input: Record<string
   const encryptedTotpSecret = await encryptAuthTotpSecret(email, authTotp.secret);
   const d1 = getD1();
   const inserted = await d1.prepare(
-    `INSERT INTO app_users (email, role, status, auth_totp_secret, created_by)
-     SELECT ?, ?, 'active', ?, ?
+    `INSERT INTO app_users (email, role, status, password_hash, auth_totp_secret, created_by)
+     SELECT ?, ?, 'active', ?, ?, ?
      WHERE (SELECT COUNT(*) FROM app_users) < ?
        AND NOT EXISTS (SELECT 1 FROM app_users WHERE email = ?)`,
-  ).bind(email, role, encryptedTotpSecret, actor.email, maxSystemUsers, email).run();
+  ).bind(email, role, passwordHash, encryptedTotpSecret, actor.email, maxSystemUsers, email).run();
   if ((inserted.meta.changes ?? 0) !== 1) {
     const existing = await findUser(email);
     throw new Error(existing ? "该用户已存在，可直接调整其角色或状态。" : "系统用户数量已达到安全上限。");

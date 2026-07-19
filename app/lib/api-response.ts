@@ -1,4 +1,4 @@
-import { getChatGPTUser } from "../chatgpt-auth";
+import { getAuthenticatedUser } from "../selfhost-session";
 import { ensureApplicationUser } from "./user-store";
 import { readLimitedJsonObject } from "./request-validation";
 import { secureJson } from "./response-security";
@@ -6,7 +6,7 @@ import { ClientSafeError } from "./security-errors";
 import { requireActiveSecuritySession } from "./security-session";
 
 export async function requireApplicationActor() {
-  const user = await getChatGPTUser();
+  const user = await getAuthenticatedUser();
   if (!user) return null;
   const account = await ensureApplicationUser(user.email);
   if (!account) return null;

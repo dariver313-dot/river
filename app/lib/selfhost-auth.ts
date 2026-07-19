@@ -1,6 +1,7 @@
 import { cookies } from "next/headers";
 import { getD1 } from "../../db";
 import { decryptAuthTotpSecret } from "./auth-totp-crypto";
+import { hashLoginPassword, verifyLoginPassword } from "./auth-password";
 import { generateTotpCode, parseTotpInput } from "./totp";
 
 export type SelfHostedUser = {
@@ -19,10 +20,12 @@ type AuthSessionRow = {
 type LoginUserRow = {
   email: string;
   status: "active" | "suspended";
+  password_hash: string | null;
   auth_totp_secret: string | null;
 };
 
 const authSessionTtlMs = 8 * 60 * 60_000;
+const bootstrapSetupKey = "selfhost_setup_completed";
 
 function normalizedEmail(value: string) {
   return value.trim().toLowerCase();
@@ -68,6 +71,13 @@ function equalCode(left: string, right: string) {
   return difference === 0;
 }
 
+function equalSecret(left: string, right: string) {
+  if (!left || left.length !== right.length) return false;
+  let difference = 0;
+  for (let index = 0; index < left.length; index += 1) difference |= left.charCodeAt(index) ^ right.charCodeAt(index);
+  return difference === 0;
+}
+
 async function validTotp(secret: string, suppliedCode: string) {
   if (!/^\d{6}$/.test(suppliedCode)) return false;
   const config = parseTotpInput(secret);
@@ -96,43 +106,80 @@ function configuredPrimarySecret() {
   return value;
 }
 
-function configuredApproverSecret() {
-  const value = process.env.APPROVER_TOTP_SECRET?.trim();
-  if (!value) throw new Error("APPROVER_TOTP_SECRET is not configured.");
-  return value;
+function configuredSetupToken() {
+  const value = process.env.SELFHOST_SETUP_TOKEN?.trim();
+  return value && /^[a-zA-Z0-9_-]{32,256}$/.test(value) ? value : null;
 }
 
-async function loginSecretFor(email: string) {
+async function bootstrapSetupCompleted() {
+  const row = await getD1().prepare(
+    "SELECT value FROM app_settings WHERE key = ? LIMIT 1",
+  ).bind(bootstrapSetupKey).first<{ value: string }>();
+  return row?.value === "completed";
+}
+
+export async function initialAuthenticatorSetup(token: string | null | undefined) {
+  const configuredToken = configuredSetupToken();
+  const email = primaryAdminEmail();
+  if (!configuredToken || !email || !token || !equalSecret(token, configuredToken)) return null;
+  if (await bootstrapSetupCompleted()) return null;
+  try {
+    return {
+      email,
+      primarySecret: configuredPrimarySecret(),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function completeInitialAuthenticatorSetup(token: string | null | undefined, password: string) {
+  const setup = await initialAuthenticatorSetup(token);
+  if (!setup) return false;
+  const passwordHash = await hashLoginPassword(password);
+  const d1 = getD1();
+  const results = await d1.batch([
+    d1.prepare(
+      `INSERT INTO app_users (email, role, status, password_hash, created_by)
+       SELECT ?, 'admin', 'active', ?, ?
+       WHERE NOT EXISTS (SELECT 1 FROM app_settings WHERE key = ?)
+       ON CONFLICT(email) DO UPDATE SET role = 'admin', status = 'active', password_hash = excluded.password_hash, updated_at = CURRENT_TIMESTAMP`,
+    ).bind(setup.email, passwordHash, setup.email, bootstrapSetupKey),
+    d1.prepare("INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, 'completed')").bind(bootstrapSetupKey),
+  ]);
+  return (results[1]?.meta.changes ?? 0) === 1;
+}
+
+async function loginCredentialsFor(email: string) {
   const primary = primaryAdminEmail();
   if (!primary) throw new Error("PRIMARY_ADMIN_EMAIL is not configured.");
-  if (email === primary) return configuredPrimarySecret();
-
   const user = await getD1().prepare(
-    "SELECT email, status, auth_totp_secret FROM app_users WHERE email = ? LIMIT 1",
+    "SELECT email, status, password_hash, auth_totp_secret FROM app_users WHERE email = ? LIMIT 1",
   ).bind(email).first<LoginUserRow>();
-  if (!user || user.status !== "active" || !user.auth_totp_secret) return null;
-  return decryptAuthTotpSecret(user.email, user.auth_totp_secret);
+  if (!user || user.status !== "active" || !user.password_hash) return null;
+  const totpSecret = email === primary ? configuredPrimarySecret() : user.auth_totp_secret ? await decryptAuthTotpSecret(user.email, user.auth_totp_secret) : null;
+  return totpSecret ? { passwordHash: user.password_hash, totpSecret } : null;
 }
 
-export async function verifySelfHostedLogin(input: { email: string; userCode: string; approverCode: string }) {
+export async function verifySelfHostedLogin(input: { email: string; password: string; userCode: string }) {
   const email = normalizedEmail(input.email);
   if (!isValidEmail(email)) return null;
 
-  let userSecret: string | null;
+  let credentials: { passwordHash: string; totpSecret: string } | null;
   try {
-    userSecret = await loginSecretFor(email);
+    credentials = await loginCredentialsFor(email);
   } catch {
     // Keep all login failures indistinguishable to callers.
     return null;
   }
-  if (!userSecret) return null;
+  if (!credentials) return null;
 
   try {
-    const [userValid, approverValid] = await Promise.all([
-      validTotp(userSecret, input.userCode.trim()),
-      validTotp(configuredApproverSecret(), input.approverCode.trim()),
+    const [passwordValid, userValid] = await Promise.all([
+      verifyLoginPassword(input.password, credentials.passwordHash),
+      validTotp(credentials.totpSecret, input.userCode.trim()),
     ]);
-    return userValid && approverValid ? email : null;
+    return passwordValid && userValid ? email : null;
   } catch {
     return null;
   }

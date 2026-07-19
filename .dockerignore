@@ -12,6 +12,7 @@ data
 .env
 .env.*
 !.env.example
+.selfhost-setup-url
 pnpm-lock.yaml
 pnpm-workspace.yaml
 npm-debug.log*

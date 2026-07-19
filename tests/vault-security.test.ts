@@ -4,7 +4,10 @@ import test from "node:test";
 import { crossOriginRequestResponse, secureHeaders, secureJson } from "../app/lib/response-security.ts";
 import { maxJsonRequestBytes, readLimitedJsonObject } from "../app/lib/request-validation.ts";
 import { reviewCredentialSecurity } from "../app/lib/security-review.ts";
+import { canonicalPublicVaultId, resolveSharedPublicVault } from "../app/lib/shared-public-vault.ts";
+import { assertSystemUserChangeAllowed, assertSystemUserDeletionAllowed } from "../app/lib/system-user-policy.ts";
 import { generateTotpCode, parseTotpInput } from "../app/lib/totp.ts";
+import { vaultRouteFromSearch, vaultRouteSearch } from "../app/lib/vault-navigation.ts";
 import { assertVaultMoveAllowed, boundedText } from "../app/lib/vault-policy.ts";
 
 test("公共项目不会被静默移入个人项目", () => {
@@ -91,4 +94,63 @@ test("安全检查会将未达到推荐长度的密码列为待处理项", () =>
   ]);
 
   assert.deepEqual(review.get("standard"), ["weak_password"]);
+});
+
+test("失效的公共密码库映射会回退到仍然有效的公共密码库", () => {
+  const vaults = [{ id: "shared-existing" }, { id: "shared-newer" }];
+  assert.equal(resolveSharedPublicVault("removed-vault", vaults)?.id, "shared-existing");
+  assert.equal(resolveSharedPublicVault("shared-newer", vaults)?.id, "shared-newer");
+  assert.equal(resolveSharedPublicVault(null, []), null);
+  assert.equal(canonicalPublicVaultId, "djmima-shared-public-vault");
+});
+
+test("关键页面可通过 URL 恢复，非管理员不能进入用户管理", () => {
+  assert.deepEqual(vaultRouteFromSearch("?view=security&focus=reused_password", true), {
+    page: "vault",
+    collection: "security",
+    securityFocus: "reused_password",
+    userManagementTab: "users",
+  });
+  assert.deepEqual(vaultRouteFromSearch("?view=users&tab=audit", false), {
+    page: "vault",
+    collection: "all",
+    securityFocus: "all",
+    userManagementTab: "users",
+  });
+  assert.equal(vaultRouteSearch({ page: "users", collection: "all", securityFocus: "all", userManagementTab: "audit" }), "?view=users&tab=audit");
+});
+
+test("用户管理始终保留有效主管理员", () => {
+  const primaryAdmin = { email: "admin@example.com", role: "admin" as const, status: "active" as const };
+  assert.throws(
+    () => assertSystemUserChangeAllowed({
+      actorEmail: primaryAdmin.email,
+      target: primaryAdmin,
+      configuredPrimaryAdminEmail: primaryAdmin.email,
+      nextRole: "user",
+      nextStatus: "active",
+      activeAdminCount: 2,
+    }),
+    /不能降低或停用/,
+  );
+  assert.throws(
+    () => assertSystemUserDeletionAllowed({
+      actorEmail: "other@example.com",
+      target: primaryAdmin,
+      configuredPrimaryAdminEmail: primaryAdmin.email,
+      activeAdminCount: 2,
+    }),
+    /不能删除/,
+  );
+  assert.throws(
+    () => assertSystemUserChangeAllowed({
+      actorEmail: "other@example.com",
+      target: { email: "second@example.com", role: "admin", status: "active" },
+      configuredPrimaryAdminEmail: primaryAdmin.email,
+      nextRole: "user",
+      nextStatus: "active",
+      activeAdminCount: 1,
+    }),
+    /至少需要保留一位有效管理员/,
+  );
 });

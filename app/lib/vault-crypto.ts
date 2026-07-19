@@ -41,6 +41,14 @@ function getEncryptionKey() {
   return keyPromise;
 }
 
+export async function assertVaultEncryptionReady() {
+  try {
+    await getEncryptionKey();
+  } catch {
+    throw new Error("密码库加密配置无效。请联系系统管理员检查密钥变量。");
+  }
+}
+
 export async function encryptVaultPayload(payload: unknown): Promise<EncryptedPayload> {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const source = new TextEncoder().encode(JSON.stringify(payload));

@@ -1990,7 +1990,7 @@ button:disabled {
 .modal header p {
   margin: 2px 0 0;
   color: var(--ink-soft);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .modal-form {
@@ -2077,14 +2077,16 @@ button:disabled {
 
 .modal label > small {
   color: var(--ink-soft);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 400;
+  line-height: 1.5;
 }
 
 .field-control > small {
   color: var(--ink-soft);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 400;
+  line-height: 1.5;
 }
 
 .surface-select {
@@ -2356,7 +2358,7 @@ button:disabled {
 .totp-entry > p {
   margin: 0;
   color: var(--ink-soft);
-  font-size: 10px;
+  font-size: 12px;
   line-height: 1.55;
 }
 
@@ -3513,7 +3515,7 @@ button:disabled {
     flex: 0 0 auto;
     color: var(--ink-faint);
     content: attr(data-label);
-    font-size: 10px;
+    font-size: 12px;
   }
 
   .system-user-table td:first-child,
@@ -3556,6 +3558,22 @@ button:disabled {
 
   .modal-body {
     padding: 15px;
+  }
+
+  .modal input,
+  .modal .surface-select-trigger,
+  .modal .form-password .password-visibility,
+  .modal .form-password button,
+  .modal .totp-entry-card-head input,
+  .modal .totp-remove-button,
+  .modal .totp-image-button,
+  .modal .totp-add-button,
+  .modal-footer button {
+    min-height: 44px;
+  }
+
+  .modal .totp-entry-card-head input {
+    font-size: 16px;
   }
 
   .modal-footer {

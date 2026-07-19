@@ -33,18 +33,16 @@ import {
   X,
 } from "lucide-react";
 import jsQR from "jsqr";
-import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { SecurityIssue } from "./lib/security-review";
 import { generateTotpCode, parseTotpInput, totpLabel, totpSecondsRemaining, type TotpConfig } from "./lib/totp";
+import { vaultRouteFromSearch, vaultRouteSearch, type SecurityFocus, type UserManagementTab, type VaultPage } from "./lib/vault-navigation";
 
 type Strength = "安全" | "一般" | "风险";
 type ItemType = "登录" | "卡片" | "安全笔记";
 type Space = "全部" | "个人" | "公共";
 type Collection = "all" | "security";
-type Page = "vault" | "profile" | "users";
-type SecurityFocus = "all" | SecurityIssue;
 type SortOrder = "updated" | "name";
-type UserManagementTab = "users" | "audit";
 type VaultTotp = { label: string; config: TotpConfig };
 type TotpFormEntry = { id: string; label: string; value: string; config?: TotpConfig };
 
@@ -608,7 +606,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
   const [category, setCategory] = useState("全部");
   const [sortOrder, setSortOrder] = useState<SortOrder>("updated");
   const [collection, setCollection] = useState<Collection>("all");
-  const [page, setPage] = useState<Page>("vault");
+  const [page, setPage] = useState<VaultPage>("vault");
   const [securityFocus, setSecurityFocus] = useState<SecurityFocus>("all");
   const [revealed, setRevealed] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
@@ -651,6 +649,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
   const [form, setForm] = useState<CredentialForm>(emptyCredentialForm);
   const [editForm, setEditForm] = useState<CredentialForm>(emptyCredentialForm);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const mainContentRef = useRef<HTMLElement>(null);
 
   const debouncedVaultQuery = useDebouncedValue(query);
   const debouncedUserQuery = useDebouncedValue(userQuery);
@@ -681,11 +680,38 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
   }, [toast]);
 
   useEffect(() => {
+    const syncFromAddress = (moveFocus = false) => {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("view") === "users" && !isAdmin) {
+        window.history.replaceState(null, "", `${window.location.pathname}${window.location.hash}`);
+      }
+      const route = vaultRouteFromSearch(window.location.search, isAdmin);
+      setPage(route.page);
+      setCollection(route.collection);
+      setSecurityFocus(route.securityFocus);
+      setUserManagementTab(route.userManagementTab);
+      if (moveFocus) focusMainContent();
+    };
+
+    syncFromAddress();
+    const onPopState = () => syncFromAddress(true);
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, [isAdmin]);
+
+  useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
         if (page !== "vault") {
           setPage("vault");
+          setCollection("all");
+          setSpace("全部");
+          setCategory("全部");
+          setSortOrder("updated");
+          setSecurityFocus("all");
+          setVaultCurrentPage(1);
+          window.history.pushState(null, "", `${window.location.pathname}${window.location.hash}`);
           window.setTimeout(() => searchInputRef.current?.focus(), 0);
         } else {
           searchInputRef.current?.focus();
@@ -1058,6 +1084,17 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
     }
   }
 
+  function focusMainContent() {
+    window.setTimeout(() => mainContentRef.current?.focus({ preventScroll: true }), 0);
+  }
+
+  function writeRoute(next: { page: VaultPage; collection: Collection; securityFocus: SecurityFocus; userManagementTab: UserManagementTab }, replace = false) {
+    const search = vaultRouteSearch(next);
+    const destination = `${window.location.pathname}${search}${window.location.hash}`;
+    if (`${window.location.pathname}${window.location.search}${window.location.hash}` === destination) return;
+    window.history[replace ? "replaceState" : "pushState"](null, "", destination);
+  }
+
   function openUserManagement() {
     if (!isAdmin) return;
     setPage("users");
@@ -1065,6 +1102,22 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
     setShowUserCreateDialog(false);
     setUserQuery("");
     setUserCurrentPage(1);
+    writeRoute({ page: "users", collection: "all", securityFocus: "all", userManagementTab: "users" });
+    focusMainContent();
+  }
+
+  function selectUserManagementTab(tab: UserManagementTab) {
+    if (!isAdmin) return;
+    setPage("users");
+    setUserManagementTab(tab);
+    writeRoute({ page: "users", collection: "all", securityFocus: "all", userManagementTab: tab });
+  }
+
+  function handleUserManagementTabKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    selectUserManagementTab(userManagementTab === "users" ? "audit" : "users");
+    window.setTimeout(() => document.getElementById(userManagementTab === "users" ? "audit-tab" : "users-tab")?.focus(), 0);
   }
 
   function openAccountManagement() {
@@ -1076,11 +1129,15 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
     setSecurityFocus("all");
     setVaultCurrentPage(1);
     setMobileNav(false);
+    writeRoute({ page: "vault", collection: "all", securityFocus: "all", userManagementTab: "users" });
+    focusMainContent();
   }
 
   function openProfile() {
     setPage("profile");
     setMobileNav(false);
+    writeRoute({ page: "profile", collection: "all", securityFocus: "all", userManagementTab: "users" });
+    focusMainContent();
   }
 
   function openSecurityReview(focus: SecurityFocus = "all") {
@@ -1093,6 +1150,8 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
     setSecurityFocus(focus);
     setVaultCurrentPage(1);
     setMobileNav(false);
+    writeRoute({ page: "vault", collection: "security", securityFocus: focus, userManagementTab: "users" });
+    focusMainContent();
   }
 
   function clearVaultFilters() {
@@ -1308,7 +1367,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
         </button>
       </aside>
 
-      <main id="main-content" className="main-shell">
+      <main ref={mainContentRef} id="main-content" className="main-shell" tabIndex={-1}>
         <header className={`topbar ${page === "profile" ? "is-compact" : ""}`}>
           <button className="icon-button mobile-menu" onClick={() => setMobileNav(true)} aria-label="打开导航"><Menu size={21} /></button>
           <div className="page-title"><h1>{page === "profile" ? "个人信息" : page === "users" ? userManagementTab === "audit" ? "操作审计" : "用户管理" : "账户管理"}</h1><p>{page === "profile" ? "查看账户资料、系统角色、项目权限与数据安全" : page === "users" ? userManagementTab === "audit" ? "查看公共项目、系统用户与数据导出的管理操作" : "创建、调整、停用或删除系统用户" : "集中管理账号、密码与验证器代码；按风险筛选需处理账户"}</p></div>
@@ -1332,12 +1391,12 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
           <section className="users-panel" aria-labelledby="users-page-title" aria-busy={userManagementTab === "users" ? isUsersLoading : isLoading}>
             <div className="users-toolbar">
               <div className="users-toolbar-copy"><h2 id="users-page-title">{userManagementTab === "users" ? "系统用户" : "操作审计"}</h2><span>{userManagementTab === "users" ? isUsersLoading ? "正在读取用户" : `本页 ${systemUsers.length} 位，共 ${userPagination.total} 位用户` : `最近 ${adminAudit.length} 条管理记录`}</span></div>
-              <div className="users-toolbar-actions"><div className="users-tabs" role="tablist" aria-label="用户管理内容"><button type="button" role="tab" aria-selected={userManagementTab === "users"} className={userManagementTab === "users" ? "is-active" : ""} onClick={() => setUserManagementTab("users")}>系统用户</button><button type="button" role="tab" aria-selected={userManagementTab === "audit"} className={userManagementTab === "audit" ? "is-active" : ""} onClick={() => setUserManagementTab("audit")}>操作审计</button></div></div>
+              <div className="users-toolbar-actions"><div className="users-tabs" role="tablist" aria-label="用户管理内容"><button id="users-tab" type="button" role="tab" aria-selected={userManagementTab === "users"} aria-controls="users-tabpanel" tabIndex={userManagementTab === "users" ? 0 : -1} className={userManagementTab === "users" ? "is-active" : ""} onClick={() => selectUserManagementTab("users")} onKeyDown={handleUserManagementTabKeyDown}>系统用户</button><button id="audit-tab" type="button" role="tab" aria-selected={userManagementTab === "audit"} aria-controls="audit-tabpanel" tabIndex={userManagementTab === "audit" ? 0 : -1} className={userManagementTab === "audit" ? "is-active" : ""} onClick={() => selectUserManagementTab("audit")} onKeyDown={handleUserManagementTabKeyDown}>操作审计</button></div></div>
             </div>
-            {userManagementTab === "users" ? <>
+            {userManagementTab === "users" ? <div role="tabpanel" id="users-tabpanel" aria-labelledby="users-tab">
               {isUsersLoading ? <UserTableLoading /> : userLoadError ? <div className="users-empty users-load-error" role="alert"><AlertTriangle size={18} aria-hidden="true" /><span>{userLoadError}</span><button type="button" className="secondary-button" onClick={() => setUserLoadAttempt((current) => current + 1)}>重新加载</button></div> : systemUsers.length > 0 ? <div className="system-user-table-wrap"><table className="system-user-table"><thead><tr><th scope="col">用户</th><th scope="col">角色</th><th scope="col">状态</th><th scope="col">创建时间</th><th scope="col">管理</th></tr></thead><tbody>{systemUsers.map((user) => <tr key={user.email}><td data-label="用户"><div className="system-user-identity"><strong title={user.email}>{user.email}</strong>{user.isCurrent && <span className="current-user">当前账户</span>}</div></td><td data-label="角色"><b className={`role-badge role-${user.role}`}>{user.role === "admin" ? "管理员" : "普通用户"}</b></td><td data-label="状态"><b className={`status-badge status-${user.status}`}>{user.status === "active" ? "已启用" : "已停用"}</b></td><td data-label="创建时间"><span className="system-user-created">{user.createdAt}</span></td><td data-label="管理">{user.isCurrent ? <span className="current-user">当前账户不可调整</span> : <div className="system-user-actions"><SurfaceSelect id={`role-${user.email}`} ariaLabel={`调整${user.email}的系统角色`} value={user.role} onChange={(role) => void updateSystemUser(user, { role })} options={[{ value: "user", label: "普通用户" }, { value: "admin", label: "管理员" }]} disabled={isSaving} compact /><button type="button" className="secondary-button" onClick={() => user.status === "active" ? setSystemUserAction({ user, kind: "suspend" }) : void updateSystemUser(user, { status: "active" })} disabled={isSaving}>{user.status === "active" ? "停用" : "启用"}</button><button type="button" className="secondary-button user-delete-button" onClick={() => setSystemUserAction({ user, kind: "delete" })} disabled={isSaving}>删除</button></div>}</td></tr>)}</tbody></table></div> : <p className="users-empty">没有找到匹配的系统用户。</p>}
               {!isUsersLoading && <PaginationControls pagination={userPagination} onChange={setUserCurrentPage} label="系统用户" />}
-            </> : <section className="audit-panel" aria-labelledby="audit-panel-title"><div className="audit-panel-header"><div><h3 id="audit-panel-title">管理操作记录</h3><p>仅显示公共项目变更、系统用户管理与数据导出审批；不会展示密码或验证码的查看、复制记录。</p></div><span>最近 20 条</span></div>{isLoading ? <p className="users-empty">正在读取操作审计。</p> : adminAudit.length > 0 ? <ul className="audit-list audit-list-panel">{adminAudit.map((entry, index) => <li key={`${entry.action}-${entry.createdAt}-${index}`}><span><strong>{entry.actorEmail}</strong>{auditLabel(entry.action)}</span><time>{entry.createdAt}</time></li>)}</ul> : <p className="users-empty">暂无公共项目、系统用户或导出相关的管理记录。</p>}</section>}
+            </div> : <section className="audit-panel" role="tabpanel" id="audit-tabpanel" aria-labelledby="audit-tab"><div className="audit-panel-header"><div><h3 id="audit-panel-title">管理操作记录</h3><p>仅显示公共项目变更、系统用户管理与数据导出审批；不会展示密码或验证码的查看、复制记录。</p></div><span>最近 20 条</span></div>{isLoading ? <p className="users-empty">正在读取操作审计。</p> : adminAudit.length > 0 ? <ul className="audit-list audit-list-panel">{adminAudit.map((entry, index) => <li key={`${entry.action}-${entry.createdAt}-${index}`}><span><strong>{entry.actorEmail}</strong>{auditLabel(entry.action)}</span><time>{entry.createdAt}</time></li>)}</ul> : <p className="users-empty">暂无公共项目、系统用户或导出相关的管理记录。</p>}</section>}
           </section>
         </section> : page === "profile" ? <ProfileOverview viewer={viewer} viewerInitial={viewerInitial} isLoading={isLoading} securityScore={securityScore} securityIssueCount={securityIssueCount} publicUserCount={publicUserCount} approvals={approvals} isSaving={isSaving} onOpenSecurity={openSecurityReview} onRequestExportApproval={() => void requestExportApproval()} onDecideExportApproval={(id, decision) => void decideExportApproval(id, decision)} onDownloadApprovedExport={(id) => void downloadApprovedExport(id)} /> : <>
         <section className="security-strip" aria-label="账户安全概览" aria-busy={isLoading}>

@@ -1,5 +1,6 @@
 import { env } from "cloudflare:workers";
 import { getD1 } from "../../db";
+import { assertSystemUserChangeAllowed, assertSystemUserDeletionAllowed } from "./system-user-policy";
 
 export type AppRole = "admin" | "user";
 export type AppUserStatus = "active" | "suspended";
@@ -220,16 +221,22 @@ export async function updateManagedUser(actorEmail: string, input: Record<string
   if (!current) throw new Error("未找到该用户。");
   const nextRole = input.role === undefined ? current.role : inputRole(input.role);
   const nextStatus = input.status === undefined ? current.status : inputStatus(input.status);
-  const isCurrentActor = current.email === actor.email;
-  const isConfiguredPrimaryAdmin = current.email === configuredPrimaryAdminEmail();
-
-  if ((isCurrentActor || isConfiguredPrimaryAdmin) && (nextRole !== "admin" || nextStatus !== "active")) {
-    throw new Error("不能降低或停用当前的主管理员账户。");
-  }
-
   const removesActiveAdmin = current.role === "admin" && current.status === "active"
     && (nextRole !== "admin" || nextStatus !== "active");
   const d1 = getD1();
+  const activeAdmins = removesActiveAdmin
+    ? await d1.prepare(
+      "SELECT COUNT(*) AS count FROM app_users WHERE role = 'admin' AND status = 'active'",
+    ).first<{ count: number }>()
+    : null;
+  assertSystemUserChangeAllowed({
+    actorEmail: actor.email,
+    target: { email: current.email, role: current.role, status: current.status },
+    configuredPrimaryAdminEmail: configuredPrimaryAdminEmail(),
+    nextRole,
+    nextStatus,
+    activeAdminCount: activeAdmins?.count ?? Number.MAX_SAFE_INTEGER,
+  });
   const updatedResult = removesActiveAdmin
     ? await d1.prepare(
       `UPDATE app_users
@@ -257,16 +264,17 @@ export async function deleteManagedUser(actorEmail: string, input: Record<string
 
   const current = await findUser(email);
   if (!current) throw new Error("未找到该用户。");
-  if (current.email === actor.email || current.email === configuredPrimaryAdminEmail()) {
-    throw new Error("不能删除当前的主管理员账户。");
-  }
-
-  if (current.role === "admin" && current.status === "active") {
-    const admins = await getD1().prepare(
+  const admins = current.role === "admin" && current.status === "active"
+    ? await getD1().prepare(
       "SELECT COUNT(*) AS count FROM app_users WHERE role = 'admin' AND status = 'active'",
-    ).first<{ count: number }>();
-    if ((admins?.count ?? 0) <= 1) throw new Error("系统至少需要保留一位有效管理员。");
-  }
+    ).first<{ count: number }>()
+    : null;
+  assertSystemUserDeletionAllowed({
+    actorEmail: actor.email,
+    target: { email: current.email, role: current.role, status: current.status },
+    configuredPrimaryAdminEmail: configuredPrimaryAdminEmail(),
+    activeAdminCount: admins?.count ?? Number.MAX_SAFE_INTEGER,
+  });
 
   const d1 = getD1();
   const personalVaults = await d1.prepare(

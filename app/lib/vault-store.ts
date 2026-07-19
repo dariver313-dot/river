@@ -1,9 +1,10 @@
 import { getD1 } from "../../db";
 import { parseTotpInput, toTotpConfig, type TotpConfig } from "./totp";
 import { countActiveApplicationUsers, getActiveApplicationActor } from "./user-store";
-import { decryptVaultPayload, encryptVaultPayload } from "./vault-crypto";
+import { assertVaultEncryptionReady, decryptVaultPayload, encryptVaultPayload } from "./vault-crypto";
 import { assertVaultMoveAllowed, boundedText, isVaultSpace, type VaultSpace } from "./vault-policy";
 import { reviewCredentialSecurity, type SecurityIssue } from "./security-review";
+import { canonicalPublicVaultId, resolveSharedPublicVault } from "./shared-public-vault";
 
 export type VaultItemType = "登录" | "卡片" | "安全笔记";
 export type VaultStrength = "安全" | "一般" | "风险";
@@ -222,20 +223,16 @@ async function findSharedPublicVault(): Promise<AccessibleVault | null> {
   const existing = await d1.prepare(
     "SELECT id, owner_email, kind FROM vaults WHERE kind = 'public' ORDER BY created_at ASC LIMIT 1",
   ).first<{ id: string; owner_email: string; kind: VaultKind }>();
-  if (!existing) return null;
-  await d1.prepare(
-    "INSERT OR IGNORE INTO app_settings (key, value) VALUES ('shared_public_vault', ?)",
-  ).bind(existing.id).run();
+  const selected = resolveSharedPublicVault(configured?.value, existing ? [existing] : []);
+  if (!selected) return null;
 
-  const selected = await d1.prepare(
-    "SELECT value FROM app_settings WHERE key = 'shared_public_vault' LIMIT 1",
-  ).first<{ value: string }>();
-  const vaultId = selected?.value ?? existing.id;
-  const vault = await d1.prepare(
-    "SELECT id, owner_email, kind FROM vaults WHERE id = ? AND kind = 'public' LIMIT 1",
-  ).bind(vaultId).first<{ id: string; owner_email: string; kind: VaultKind }>();
-  if (!vault) return null;
-  return { id: vault.id, ownerEmail: vault.owner_email, kind: vault.kind, role: "owner" };
+  // 站点迁移或人工清理可能留下指向已删除密码库的旧设置。只要存在有效的
+  // 公共密码库，就以最早创建的项目恢复唯一映射，避免公共项目整体不可见。
+  await d1.prepare(
+    `INSERT INTO app_settings (key, value) VALUES ('shared_public_vault', ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP`,
+  ).bind(selected.id).run();
+  return { id: selected.id, ownerEmail: selected.owner_email, kind: selected.kind, role: "owner" };
 }
 
 async function ensureSharedPublicVault(adminEmail: string): Promise<AccessibleVault> {
@@ -245,11 +242,14 @@ async function ensureSharedPublicVault(adminEmail: string): Promise<AccessibleVa
   const existing = await findSharedPublicVault();
   if (existing) return existing;
 
-  const candidate = await ensureOwnedVault(adminEmail, "public");
   const d1 = getD1();
   await d1.prepare(
-    "INSERT OR IGNORE INTO app_settings (key, value) VALUES ('shared_public_vault', ?)",
-  ).bind(candidate.id).run();
+    "INSERT OR IGNORE INTO vaults (id, owner_email, kind, name) VALUES (?, ?, 'public', '公共密码库')",
+  ).bind(canonicalPublicVaultId, adminEmail).run();
+  await d1.prepare(
+    `INSERT INTO app_settings (key, value) VALUES ('shared_public_vault', ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP`,
+  ).bind(canonicalPublicVaultId).run();
 
   const shared = await findSharedPublicVault();
   if (!shared) throw new Error("无法初始化公共密码库。");
@@ -331,6 +331,7 @@ export async function listVaultData(email: string) {
   const d1 = getD1();
   const actor = await getActiveApplicationActor(email);
   if (!actor) throw new Error("当前系统账户未启用。");
+  await assertVaultEncryptionReady();
   const vaultAccess = await accessibleVaults(email);
   const items: Array<{ value: VaultCredential; updatedAt: string }> = [];
 

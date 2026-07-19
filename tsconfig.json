@@ -31,5 +31,5 @@
     ".next/dev/types/**/*.ts",
     "**/*.mts"
   ],
-  "exclude": ["node_modules", "drizzle.config.ts", "worker", "examples", "ops"]
+  "exclude": ["node_modules", "drizzle.config.ts", "vite.config.ts", "build", "worker", "examples", "ops"]
 }

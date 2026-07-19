@@ -21,14 +21,14 @@ export async function POST(request: Request) {
     const email = typeof payload.email === "string" ? payload.email : "";
     const password = typeof payload.password === "string" ? payload.password : "";
     const userCode = typeof payload.userCode === "string" ? payload.userCode : "";
-    const authenticatedEmail = await verifySelfHostedLogin({ email, password, userCode });
-    if (!authenticatedEmail) {
+    const authenticated = await verifySelfHostedLogin({ email, password, userCode });
+    if (!authenticated) {
       return secureJson({ error: "登录信息无效或已过期，请检查登录密码和本人验证码后重试。" }, { status: 401 });
     }
 
     return secureJson(
-      { next: safeReturnTo(payload.returnTo) },
-      { headers: { "Set-Cookie": await createAuthSession(authenticatedEmail, request) } },
+      { next: authenticated.mustChangePassword ? "/account/password?first_login=1" : safeReturnTo(payload.returnTo) },
+      { headers: { "Set-Cookie": await createAuthSession(authenticated.email, request) } },
     );
   } catch (error) {
     console.error("djmima_login_failed", { message: error instanceof Error ? error.message : String(error) });

@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS app_users (
   status TEXT NOT NULL DEFAULT 'active',
   password_hash TEXT,
   auth_totp_secret TEXT,
+  must_change_password INTEGER NOT NULL DEFAULT 0,
   created_by TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -165,6 +166,11 @@ function openDatabase() {
   opened.exec(schema);
   try {
     opened.exec("ALTER TABLE app_users ADD COLUMN password_hash TEXT");
+  } catch (error) {
+    if (!(error instanceof Error) || !error.message.includes("duplicate column name")) throw error;
+  }
+  try {
+    opened.exec("ALTER TABLE app_users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0");
   } catch (error) {
     if (!(error instanceof Error) || !error.message.includes("duplicate column name")) throw error;
   }

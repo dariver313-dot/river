@@ -432,6 +432,7 @@ function ProfileOverview({
             <div><dt>登录邮箱</dt><dd title={viewer.email}>{viewer.email}</dd></div>
             <div><dt>登录方式</dt><dd>登录密码 + 本人 Google 验证器</dd></div>
           </dl>
+          <a className="secondary-button" href="/account/password"><KeyRound size={17} />修改登录密码</a>
         </section>
 
         <section className="profile-card" aria-labelledby="profile-permission-title">

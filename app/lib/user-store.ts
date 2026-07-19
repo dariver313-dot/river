@@ -28,6 +28,7 @@ type AppUserRow = {
   email: string;
   role: AppRole;
   status: AppUserStatus;
+  must_change_password: number;
   created_at: string;
 };
 
@@ -64,7 +65,7 @@ function timeLabel(value: string) {
 
 async function findUser(email: string) {
   return getD1().prepare(
-    "SELECT email, role, status, created_at FROM app_users WHERE email = ? LIMIT 1",
+    "SELECT email, role, status, must_change_password, created_at FROM app_users WHERE email = ? LIMIT 1",
   ).bind(normalizedEmail(email)).first<AppUserRow>();
 }
 
@@ -114,6 +115,12 @@ export async function getActiveApplicationActor(email: string): Promise<AppActor
   return user?.status === "active" ? { email: user.email, role: user.role } : null;
 }
 
+/** A provisioned user cannot read vault data until they replace the one-time password. */
+export async function isPasswordChangeRequired(email: string) {
+  const user = await findUser(email);
+  return Boolean(user && user.status === "active" && user.must_change_password === 1);
+}
+
 export async function countActiveApplicationUsers() {
   const result = await getD1().prepare(
     "SELECT COUNT(*) AS count FROM app_users WHERE status = 'active'",
@@ -139,7 +146,7 @@ export async function listManagedUsers(actorEmail: string, options: { page?: num
   const page = Math.min(boundedPage(options.page), pageCount);
   const offset = (page - 1) * pageSize;
   const result = await d1.prepare(
-    `SELECT email, role, status, created_at FROM app_users ${where}
+    `SELECT email, role, status, must_change_password, created_at FROM app_users ${where}
      ORDER BY CASE role WHEN 'admin' THEN 0 ELSE 1 END, created_at ASC, email ASC LIMIT ? OFFSET ?`,
   ).bind(...parameters, pageSize, offset).all<AppUserRow>();
 
@@ -208,8 +215,8 @@ export async function createManagedUser(actorEmail: string, input: Record<string
   const encryptedTotpSecret = await encryptAuthTotpSecret(email, authTotp.secret);
   const d1 = getD1();
   const inserted = await d1.prepare(
-    `INSERT INTO app_users (email, role, status, password_hash, auth_totp_secret, created_by)
-     SELECT ?, ?, 'active', ?, ?, ?
+    `INSERT INTO app_users (email, role, status, password_hash, auth_totp_secret, must_change_password, created_by)
+     SELECT ?, ?, 'active', ?, ?, 1, ?
      WHERE (SELECT COUNT(*) FROM app_users) < ?
        AND NOT EXISTS (SELECT 1 FROM app_users WHERE email = ?)`,
   ).bind(email, role, passwordHash, encryptedTotpSecret, actor.email, maxSystemUsers, email).run();

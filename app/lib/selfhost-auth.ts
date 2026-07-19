@@ -22,6 +22,7 @@ type LoginUserRow = {
   status: "active" | "suspended";
   password_hash: string | null;
   auth_totp_secret: string | null;
+  must_change_password: number;
 };
 
 const authSessionTtlMs = 8 * 60 * 60_000;
@@ -140,10 +141,10 @@ export async function completeInitialAuthenticatorSetup(token: string | null | u
   const d1 = getD1();
   const results = await d1.batch([
     d1.prepare(
-      `INSERT INTO app_users (email, role, status, password_hash, created_by)
-       SELECT ?, 'admin', 'active', ?, ?
+      `INSERT INTO app_users (email, role, status, password_hash, must_change_password, created_by)
+       SELECT ?, 'admin', 'active', ?, 0, ?
        WHERE NOT EXISTS (SELECT 1 FROM app_settings WHERE key = ?)
-       ON CONFLICT(email) DO UPDATE SET role = 'admin', status = 'active', password_hash = excluded.password_hash, updated_at = CURRENT_TIMESTAMP`,
+       ON CONFLICT(email) DO UPDATE SET role = 'admin', status = 'active', password_hash = excluded.password_hash, must_change_password = 0, updated_at = CURRENT_TIMESTAMP`,
     ).bind(setup.email, passwordHash, setup.email, bootstrapSetupKey),
     d1.prepare("INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, 'completed')").bind(bootstrapSetupKey),
   ]);
@@ -154,18 +155,18 @@ async function loginCredentialsFor(email: string) {
   const primary = primaryAdminEmail();
   if (!primary) throw new Error("PRIMARY_ADMIN_EMAIL is not configured.");
   const user = await getD1().prepare(
-    "SELECT email, status, password_hash, auth_totp_secret FROM app_users WHERE email = ? LIMIT 1",
+    "SELECT email, status, password_hash, auth_totp_secret, must_change_password FROM app_users WHERE email = ? LIMIT 1",
   ).bind(email).first<LoginUserRow>();
   if (!user || user.status !== "active" || !user.password_hash) return null;
   const totpSecret = email === primary ? configuredPrimarySecret() : user.auth_totp_secret ? await decryptAuthTotpSecret(user.email, user.auth_totp_secret) : null;
-  return totpSecret ? { passwordHash: user.password_hash, totpSecret } : null;
+  return totpSecret ? { passwordHash: user.password_hash, totpSecret, mustChangePassword: user.must_change_password === 1 } : null;
 }
 
 export async function verifySelfHostedLogin(input: { email: string; password: string; userCode: string }) {
   const email = normalizedEmail(input.email);
   if (!isValidEmail(email)) return null;
 
-  let credentials: { passwordHash: string; totpSecret: string } | null;
+  let credentials: { passwordHash: string; totpSecret: string; mustChangePassword: boolean } | null;
   try {
     credentials = await loginCredentialsFor(email);
   } catch {
@@ -179,10 +180,29 @@ export async function verifySelfHostedLogin(input: { email: string; password: st
       verifyLoginPassword(input.password, credentials.passwordHash),
       validTotp(credentials.totpSecret, input.userCode.trim()),
     ]);
-    return passwordValid && userValid ? email : null;
+    return passwordValid && userValid ? { email, mustChangePassword: credentials.mustChangePassword } : null;
   } catch {
     return null;
   }
+}
+
+/** Re-authenticate before changing a password, including the user's own TOTP code. */
+export async function changeSelfHostedPassword(input: { email: string; currentPassword: string; userCode: string; newPassword: string }) {
+  const email = normalizedEmail(input.email);
+  if (!isValidEmail(email)) return false;
+  const authenticated = await verifySelfHostedLogin({ email, password: input.currentPassword, userCode: input.userCode });
+  if (!authenticated || authenticated.email !== email) return false;
+
+  const passwordHash = await hashLoginPassword(input.newPassword);
+  const d1 = getD1();
+  await d1.batch([
+    d1.prepare(
+      "UPDATE app_users SET password_hash = ?, must_change_password = 0, updated_at = CURRENT_TIMESTAMP WHERE email = ? AND status = 'active'",
+    ).bind(passwordHash, email),
+    d1.prepare("UPDATE auth_sessions SET revoked_at = ? WHERE email = ? AND revoked_at IS NULL").bind(new Date().toISOString(), email),
+    d1.prepare("UPDATE security_sessions SET revoked_at = ? WHERE email = ? AND revoked_at IS NULL").bind(new Date().toISOString(), email),
+  ]);
+  return true;
 }
 
 export async function createAuthSession(email: string, request: Request) {

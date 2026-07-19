@@ -4,7 +4,7 @@ const applicationSecurityPolicy = [
   "connect-src 'self'",
   "font-src 'self' data:",
   "form-action 'self'",
-  "frame-ancestors 'self'",
+  "frame-ancestors 'none'",
   "img-src 'self' blob: data:",
   "object-src 'none'",
   "script-src 'self' 'unsafe-inline'",

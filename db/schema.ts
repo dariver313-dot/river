@@ -9,6 +9,7 @@ export const appUsers = sqliteTable(
     status: text("status", { enum: ["active", "suspended"] }).notNull().default("active"),
     passwordHash: text("password_hash"),
     authTotpSecret: text("auth_totp_secret"),
+    mustChangePassword: integer("must_change_password").notNull().default(0),
     createdBy: text("created_by"),
     createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
     updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),

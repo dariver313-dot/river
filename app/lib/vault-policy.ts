@@ -1,5 +1,15 @@
 export type VaultSpace = "个人" | "公共";
 
+// 小型团队产品的硬上限：避免单次全量解密、导出或安全检查被异常数据量拖垮。
+export const vaultItemLimitBySpace: Record<VaultSpace, number> = {
+  个人: 500,
+  公共: 1_000,
+};
+
+export function vaultItemLimit(space: VaultSpace) {
+  return vaultItemLimitBySpace[space];
+}
+
 const fieldLimits = {
   name: 120,
   domain: 255,

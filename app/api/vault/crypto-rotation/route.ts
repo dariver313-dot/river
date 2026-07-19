@@ -1,8 +1,8 @@
-import { actorRequiredResponse, apiError, readJsonObject, requireVaultActor } from "../../../lib/api-response";
-import { crossOriginRequestResponse, secureJson } from "../../../lib/response-security";
+import { actorRequiredResponse, adminRequiredResponse, apiError, readJsonObject, requireVaultActor } from "../../../lib/api-response";
 import { rateLimitResponse } from "../../../lib/rate-limit";
+import { crossOriginRequestResponse, secureJson } from "../../../lib/response-security";
 import { requireRecentSecurityConfirmation } from "../../../lib/security-session";
-import { exportVaultData } from "../../../lib/vault-store";
+import { rotateVaultEncryption } from "../../../lib/vault-store";
 
 export const dynamic = "force-dynamic";
 
@@ -11,19 +11,13 @@ export async function POST(request: Request) {
   if (crossOriginResponse) return crossOriginResponse;
   const actor = await requireVaultActor(request);
   if (!actor) return actorRequiredResponse();
+  if (actor.role !== "admin") return adminRequiredResponse();
   const rateLimited = await rateLimitResponse(request, actor.email, "sensitive");
   if (rateLimited) return rateLimited;
 
   try {
     await requireRecentSecurityConfirmation(actor.email, request);
-    const body = await readJsonObject(request);
-    const approvalId = typeof body.approvalId === "string" ? body.approvalId : "";
-    if (!approvalId) return secureJson({ error: "缺少批准请求。" }, { status: 400 });
-    return secureJson(await exportVaultData(actor.email, approvalId), {
-      headers: {
-        "Content-Disposition": "attachment; filename=djmima-vault-export.json",
-      },
-    });
+    return secureJson(await rotateVaultEncryption(actor.email, await readJsonObject(request)));
   } catch (error) {
     return apiError(error, 400, request);
   }

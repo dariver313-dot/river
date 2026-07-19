@@ -55,6 +55,8 @@ export const vaultItems = sqliteTable(
     vaultId: text("vault_id").notNull(),
     ciphertext: text("ciphertext").notNull(),
     iv: text("iv").notNull(),
+    keyId: text("key_id").notNull().default("legacy"),
+    encryptionVersion: integer("encryption_version").notNull().default(1),
     createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
     updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   },
@@ -69,9 +71,48 @@ export const auditEvents = sqliteTable(
     actorEmail: text("actor_email").notNull(),
     action: text("action").notNull(),
     itemId: text("item_id"),
+    signature: text("signature"),
+    signatureKeyId: text("signature_key_id"),
+    eventVersion: integer("event_version").notNull().default(0),
+    sequence: integer("sequence"),
+    previousHash: text("previous_hash"),
+    chainHash: text("chain_hash"),
     createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   },
-  (table) => [index("audit_events_vault_created_idx").on(table.vaultId, table.createdAt)],
+  (table) => [index("audit_events_vault_created_idx").on(table.vaultId, table.createdAt), uniqueIndex("audit_events_vault_sequence_idx").on(table.vaultId, table.sequence)],
+);
+
+export const auditChainStates = sqliteTable("audit_chain_states", {
+  vaultId: text("vault_id").primaryKey(),
+  lastSequence: integer("last_sequence").notNull(),
+  headHash: text("head_hash").notNull(),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const requestRateLimits = sqliteTable(
+  "request_rate_limits",
+  {
+    keyHash: text("key_hash").primaryKey(),
+    windowStartedAt: integer("window_started_at").notNull(),
+    requestCount: integer("request_count").notNull(),
+    expiresAt: integer("expires_at").notNull(),
+    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [index("request_rate_limits_expiry_idx").on(table.expiresAt)],
+);
+
+export const securitySessions = sqliteTable(
+  "security_sessions",
+  {
+    id: text("id").primaryKey(),
+    email: text("email").notNull(),
+    recentVerifiedAt: text("recent_verified_at").notNull(),
+    lastActiveAt: text("last_active_at").notNull(),
+    expiresAt: text("expires_at").notNull(),
+    revokedAt: text("revoked_at"),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [index("security_sessions_email_idx").on(table.email, table.expiresAt)],
 );
 
 export const approvalRequests = sqliteTable(

@@ -1,5 +1,6 @@
 import { actorRequiredResponse, adminRequiredResponse, apiError, requireVaultActor } from "../../../lib/api-response";
 import { secureJson } from "../../../lib/response-security";
+import { rateLimitResponse } from "../../../lib/rate-limit";
 import { listManagementAudit, type ManagementAuditCategory } from "../../../lib/vault-store";
 
 export const dynamic = "force-dynamic";
@@ -15,9 +16,11 @@ function auditCategory(value: string | null): ManagementAuditCategory {
 }
 
 export async function GET(request: Request) {
-  const actor = await requireVaultActor();
+  const actor = await requireVaultActor(request);
   if (!actor) return actorRequiredResponse();
   if (actor.role !== "admin") return adminRequiredResponse();
+  const rateLimited = await rateLimitResponse(request, actor.email, "read");
+  if (rateLimited) return rateLimited;
 
   try {
     const search = new URL(request.url).searchParams;
@@ -27,6 +30,6 @@ export async function GET(request: Request) {
       category: auditCategory(search.get("category")),
     }));
   } catch (error) {
-    return apiError(error);
+    return apiError(error, 500, request);
   }
 }

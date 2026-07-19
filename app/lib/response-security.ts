@@ -49,6 +49,13 @@ export function secureApplicationResponse(response: Response, noStore = false) {
 
 export function crossOriginRequestResponse(request: Request) {
   const origin = request.headers.get("origin");
-  if (!origin || origin === new URL(request.url).origin) return null;
-  return secureJson({ error: "已拒绝跨站请求。请从 djmima 页面重新操作。" }, { status: 403 });
+  const fetchSite = request.headers.get("sec-fetch-site");
+  const expectedOrigin = new URL(request.url).origin;
+
+  // 所有写操作都必须来自本站页面。缺少 Origin、不同源或非同源 Fetch
+  // 都按 CSRF 处理，不能为了 curl 或旧客户端静默放行。
+  if (origin !== expectedOrigin || fetchSite !== "same-origin") {
+    return secureJson({ error: "已拒绝跨站请求。请从 djmima 页面重新操作。", code: "CSRF_REJECTED" }, { status: 403 });
+  }
+  return null;
 }

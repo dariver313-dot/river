@@ -1,6 +1,7 @@
 import { env } from "cloudflare:workers";
 import { getD1 } from "../../db";
 import { assertSystemUserChangeAllowed, assertSystemUserDeletionAllowed } from "./system-user-policy";
+import { writeAuditEvent } from "./audit-log";
 
 export type AppRole = "admin" | "user";
 export type AppUserStatus = "active" | "suspended";
@@ -33,6 +34,7 @@ type UserRuntimeEnv = {
 };
 
 const nonInteractiveServiceEmail = "sites-screenshot-service-noreply@chatgpt.com";
+const maxSystemUsers = 100;
 let primaryAdminInitialization: Promise<void> | null = null;
 
 function normalizedEmail(value: string) {
@@ -170,9 +172,7 @@ async function writeSystemAudit(actorEmail: string, action: string, subjectEmail
   ).first<{ value: string }>();
   if (!sharedVault?.value) return;
 
-  await d1.prepare(
-    "INSERT INTO audit_events (id, vault_id, actor_email, action, item_id) VALUES (?, ?, ?, ?, ?)",
-  ).bind(crypto.randomUUID(), sharedVault.value, actorEmail, action, subjectEmail).run();
+  await writeAuditEvent(sharedVault.value, actorEmail, action, subjectEmail);
 }
 
 function inputRole(value: unknown): AppRole {
@@ -202,9 +202,15 @@ export async function createManagedUser(actorEmail: string, input: Record<string
   const role = inputRole(input.role);
   const d1 = getD1();
   const inserted = await d1.prepare(
-    "INSERT OR IGNORE INTO app_users (email, role, status, created_by) VALUES (?, ?, 'active', ?)",
-  ).bind(email, role, actor.email).run();
-  if ((inserted.meta.changes ?? 0) !== 1) throw new Error("该用户已存在，可直接调整其角色或状态。");
+    `INSERT INTO app_users (email, role, status, created_by)
+     SELECT ?, ?, 'active', ?
+     WHERE (SELECT COUNT(*) FROM app_users) < ?
+       AND NOT EXISTS (SELECT 1 FROM app_users WHERE email = ?)`,
+  ).bind(email, role, actor.email, maxSystemUsers, email).run();
+  if ((inserted.meta.changes ?? 0) !== 1) {
+    const existing = await findUser(email);
+    throw new Error(existing ? "该用户已存在，可直接调整其角色或状态。" : "系统用户数量已达到安全上限。");
+  }
 
   const created = await findUser(email);
   if (!created) throw new Error("用户创建失败，请重试。");
@@ -283,7 +289,6 @@ export async function deleteManagedUser(actorEmail: string, input: Record<string
   const statements = personalVaults.results.flatMap((vault) => [
     d1.prepare("DELETE FROM vault_items WHERE vault_id = ?").bind(vault.id),
     d1.prepare("DELETE FROM vault_members WHERE vault_id = ?").bind(vault.id),
-    d1.prepare("DELETE FROM audit_events WHERE vault_id = ?").bind(vault.id),
     d1.prepare("DELETE FROM approval_requests WHERE vault_id = ?").bind(vault.id),
     d1.prepare("DELETE FROM vaults WHERE id = ?").bind(vault.id),
   ]);

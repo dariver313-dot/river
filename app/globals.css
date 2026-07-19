@@ -2594,6 +2594,21 @@ button:disabled {
   line-height: 1.55;
 }
 
+.audit-integrity {
+  margin-top: 6px !important;
+  font-size: 12px !important;
+  font-weight: 650;
+  color: var(--ink-soft) !important;
+}
+
+.audit-integrity.is-sealed {
+  color: var(--accent-strong) !important;
+}
+
+.audit-integrity.is-failed {
+  color: var(--danger) !important;
+}
+
 .audit-panel-actions {
   flex: 0 0 auto;
   display: flex;

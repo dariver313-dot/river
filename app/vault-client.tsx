@@ -82,7 +82,8 @@ type Viewer = {
 type CredentialForm = Pick<VaultItem, "name" | "domain" | "username" | "password" | "category" | "group"> & {
   totpEntries: TotpFormEntry[];
 };
-type AuditEntry = { action: string; actorEmail: string; itemId: string | null; createdAt: string };
+type AuditIntegrity = "legacy" | "sealed" | "failed" | "unknown";
+type AuditEntry = { action: string; actorEmail: string; itemId: string | null; createdAt: string; integrity?: Exclude<AuditIntegrity, "unknown"> };
 type SystemUser = { email: string; role: "admin" | "user"; status: "active" | "suspended"; createdAt: string; isCurrent: boolean };
 type ApprovalRequest = {
   id: string;
@@ -123,6 +124,13 @@ const auditCategoryOptions = [
   { value: "user", label: "系统用户" },
   { value: "export", label: "数据导出" },
 ] as const satisfies readonly SurfaceSelectOption<AuditCategory>[];
+
+function auditIntegrityLabel(value: AuditIntegrity) {
+  if (value === "sealed") return "审计链完整";
+  if (value === "failed") return "审计链校验失败，请立即停止敏感操作";
+  if (value === "legacy") return "含历史未签名记录";
+  return "正在校验审计链";
+}
 
 function newTotpFormEntry(index = 0, config?: TotpConfig, label?: string): TotpFormEntry {
   return { id: crypto.randomUUID(), label: label ?? (index === 0 ? "登录验证器" : `验证器 ${index + 1}`), value: "", ...(config ? { config } : {}) };
@@ -366,6 +374,7 @@ function ProfileOverview({
   onRequestExportApproval,
   onDecideExportApproval,
   onDownloadApprovedExport,
+  onRestartSecuritySession,
 }: {
   viewer: Viewer;
   viewerInitial: string;
@@ -379,6 +388,7 @@ function ProfileOverview({
   onRequestExportApproval: () => void;
   onDecideExportApproval: (id: string, decision: "approved" | "rejected") => void;
   onDownloadApprovedExport: (id: string) => void;
+  onRestartSecuritySession: () => void;
 }) {
   const isAdmin = viewer.role === "admin";
   const hasOwnPendingExport = approvals.some((approval) => approval.isRequester && approval.status === "pending");
@@ -412,14 +422,16 @@ function ProfileOverview({
         <section className="profile-card profile-security-card" aria-labelledby="profile-security-title">
           <div className="profile-card-heading"><span className="profile-card-icon"><ShieldCheck size={18} /></span><div><h3 id="profile-security-title">账户安全</h3><p>基础安全与会话保护状态</p></div></div>
           <div className="profile-security-summary"><div><strong>{isLoading ? <Skeleton className="skeleton-score" /> : securityScore}</strong><span>基础安全评分</span></div><p>{isLoading ? <Skeleton className="skeleton-line skeleton-line-profile" /> : securityIssueCount === 0 ? "未发现需要处理的基础风险" : `${securityIssueCount} 条基础风险待处理`}</p></div>
-          <div className="profile-security-footer"><span>空闲 15 分钟后自动结束会话</span><button type="button" className="secondary-button" onClick={onOpenSecurity} disabled={isLoading}>{isLoading ? "正在读取安全状态" : "查看安全检查"}</button></div>
+          <div className="profile-security-footer"><span>服务端和当前设备均会在空闲 15 分钟后结束会话</span><button type="button" className="secondary-button" onClick={onOpenSecurity} disabled={isLoading}>{isLoading ? "正在读取安全状态" : "查看安全检查"}</button></div>
         </section>
 
         <section className="profile-card profile-data-security-card" aria-labelledby="profile-data-security-title">
           <div className="profile-card-heading"><span className="profile-card-icon"><Archive size={18} /></span><div><h3 id="profile-data-security-title">数据与安全</h3><p>导出敏感数据前需要另一位已启用用户确认</p></div></div>
           <aside className="data-security-note" role="note"><ShieldCheck size={17} aria-hidden="true" /><div><strong>双人确认导出</strong><span>导出文件包含你的个人项目和全部公共项目的明文信息；确认有效期为 10 分钟。</span></div></aside>
           <div className="data-security-actions">
-            {isLoading ? <Skeleton className="skeleton-button" /> : publicUserCount > 1 && !hasOwnPendingExport ? <button type="button" className="secondary-button" onClick={onRequestExportApproval} disabled={isSaving}><Archive size={17} />发起导出确认</button> : publicUserCount <= 1 ? <p className="data-security-empty">请先由管理员创建并启用另一位系统用户，才能使用双人确认导出。</p> : <p className="data-security-empty">你的导出确认正在等待另一位已启用用户批准。</p>}
+            {isLoading ? <Skeleton className="skeleton-button" /> : <button type="button" className="secondary-button" onClick={onRestartSecuritySession} disabled={isSaving}><ShieldCheck size={17} />重新验证登录</button>}
+            {!isLoading && <p className="data-security-empty">敏感操作仅在重新验证后的 10 分钟内可用。</p>}
+            {isLoading ? null : publicUserCount > 1 && !hasOwnPendingExport ? <button type="button" className="secondary-button" onClick={onRequestExportApproval} disabled={isSaving}><Archive size={17} />发起导出确认</button> : publicUserCount <= 1 ? <p className="data-security-empty">请先由管理员创建并启用另一位系统用户，才能使用双人确认导出。</p> : <p className="data-security-empty">你的导出确认正在等待另一位已启用用户批准。</p>}
           </div>
           <div className="data-security-requests">
             <div className="data-security-section-title"><h4>当前导出请求</h4><span>{isLoading ? "正在读取" : approvals.length > 0 ? `${approvals.length} 条` : "暂无"}</span></div>
@@ -651,6 +663,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
   const [mobileNav, setMobileNav] = useState(false);
   const [toast, setToast] = useState("");
   const [isLoading, setIsLoading] = useState(true);
+  const [serverSessionReady, setServerSessionReady] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [vaultCurrentPage, setVaultCurrentPage] = useState(1);
@@ -664,6 +677,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
   const [isSaving, setIsSaving] = useState(false);
   const [publicUserCount, setPublicUserCount] = useState(0);
   const [audit, setAudit] = useState<AuditEntry[]>([]);
+  const [auditChainIntegrity, setAuditChainIntegrity] = useState<AuditIntegrity>("unknown");
   const [auditCategory, setAuditCategory] = useState<AuditCategory>("all");
   const [auditCurrentPage, setAuditCurrentPage] = useState(1);
   const [auditPagination, setAuditPagination] = useState<Pagination>(emptyPagination);
@@ -712,6 +726,28 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
     const timer = window.setTimeout(() => setToast(""), 3200);
     return () => window.clearTimeout(timer);
   }, [toast]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetch("/api/security/session", {
+      method: "POST",
+      cache: "no-store",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+    }).then(async (response) => {
+      if (!response.ok) throw new Error("安全会话已结束。");
+      if (!cancelled) {
+        if (new URLSearchParams(window.location.search).get("reauth") === "1") {
+          window.history.replaceState(null, "", `${window.location.pathname}${window.location.hash}`);
+          setToast("登录已重新验证；敏感操作可在 10 分钟内进行");
+        }
+        setServerSessionReady(true);
+      }
+    }).catch(() => {
+      if (!cancelled) window.location.assign("/signout-with-chatgpt?return_to=%2Flogin");
+    });
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     const syncFromAddress = (moveFocus = false) => {
@@ -853,6 +889,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
           sortOrder,
         });
         const response = await fetch(`/api/vault?${search.toString()}`, { cache: "no-store", signal: controller.signal });
+        if (response.status === 401) endSession();
         const payload = await readJsonResponse<{
           items?: VaultItemSummary[];
           publicUserCount?: number;
@@ -889,12 +926,12 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
       }
     }
 
-    void loadVault();
+    if (serverSessionReady) void loadVault();
     return () => { cancelled = true; controller.abort(); };
-  }, [activeCategory, collection, debouncedVaultQuery, loadAttempt, securityFocus, sortOrder, space, vaultCurrentPage]);
+  }, [activeCategory, collection, debouncedVaultQuery, loadAttempt, securityFocus, serverSessionReady, sortOrder, space, vaultCurrentPage]);
 
   useEffect(() => {
-    if (page !== "users" || userManagementTab !== "users" || !isAdmin) return;
+    if (!serverSessionReady || page !== "users" || userManagementTab !== "users" || !isAdmin) return;
     let cancelled = false;
     const controller = new AbortController();
 
@@ -922,10 +959,10 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
 
     void loadUsers();
     return () => { cancelled = true; controller.abort(); };
-  }, [debouncedUserQuery, isAdmin, page, userCurrentPage, userLoadAttempt, userManagementTab]);
+  }, [debouncedUserQuery, isAdmin, page, serverSessionReady, userCurrentPage, userLoadAttempt, userManagementTab]);
 
   useEffect(() => {
-    if (page !== "users" || userManagementTab !== "audit" || !isAdmin) return;
+    if (!serverSessionReady || page !== "users" || userManagementTab !== "audit" || !isAdmin) return;
     let cancelled = false;
     const controller = new AbortController();
 
@@ -934,10 +971,11 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
       setAuditLoadError(null);
       try {
         const search = new URLSearchParams({ page: String(auditCurrentPage), category: auditCategory });
-        const payload = await requestVault<{ audit: AuditEntry[]; pagination?: Pagination }>(`/api/vault/audit-log?${search.toString()}`, { method: "GET", signal: controller.signal });
+        const payload = await requestVault<{ audit: AuditEntry[]; chainIntegrity?: Exclude<AuditIntegrity, "unknown">; pagination?: Pagination }>(`/api/vault/audit-log?${search.toString()}`, { method: "GET", signal: controller.signal });
         if (cancelled) return;
         const nextPagination = payload.pagination ?? emptyPagination;
         setAudit(payload.audit ?? []);
+        setAuditChainIntegrity(payload.chainIntegrity ?? "legacy");
         setAuditPagination(nextPagination);
         setAuditCurrentPage((current) => current === nextPagination.page ? current : nextPagination.page);
       } catch (error) {
@@ -953,10 +991,10 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
 
     void loadAudit();
     return () => { cancelled = true; controller.abort(); };
-  }, [auditCategory, auditCurrentPage, auditLoadAttempt, isAdmin, page, userManagementTab]);
+  }, [auditCategory, auditCurrentPage, auditLoadAttempt, isAdmin, page, serverSessionReady, userManagementTab]);
 
   useEffect(() => {
-    if (!activeSelectedId) return;
+    if (!serverSessionReady || !activeSelectedId) return;
 
     let cancelled = false;
     const controller = new AbortController();
@@ -977,7 +1015,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
     });
 
     return () => { cancelled = true; controller.abort(); };
-  }, [activeSelectedId, detailAttempt]);
+  }, [activeSelectedId, detailAttempt, serverSessionReady]);
 
   useEffect(() => {
     let idleTimer = window.setTimeout(endSession, 15 * 60_000);
@@ -1012,7 +1050,21 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
   }, []);
 
   function endSession() {
-    window.location.assign("/signout-with-chatgpt?return_to=%2Flogin");
+    void fetch("/api/security/session", {
+      method: "DELETE",
+      cache: "no-store",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+    }).finally(() => window.location.assign("/signout-with-chatgpt?return_to=%2Flogin"));
+  }
+
+  function restartSecuritySession() {
+    void fetch("/api/security/session", {
+      method: "DELETE",
+      cache: "no-store",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+    }).finally(() => window.location.assign("/signout-with-chatgpt?return_to=%2F%3Freauth%3D1"));
   }
 
   async function requestVault<T>(path: string, init: RequestInit) {
@@ -1023,6 +1075,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
       headers: { "Content-Type": "application/json", ...(init.headers ?? {}) },
     });
     const payload = response.status === 204 ? null : await readJsonResponse<T & { error?: string }>(response, "操作未完成，请稍后重试。");
+    if (response.status === 401 && path !== "/api/security/session") endSession();
     if (!response.ok) throw new Error(payload?.error ?? "操作未完成，请稍后重试。");
     return payload as T;
   }
@@ -1466,7 +1519,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
               <div className="audit-panel-header">
                 <div className="audit-panel-heading">
                   <span className="audit-panel-icon" aria-hidden="true"><ShieldCheck size={18} /></span>
-                  <div><h3 id="audit-panel-title">管理操作记录</h3><p>仅保留公共项目、系统用户和数据导出的管理行为；密码与验证码的查看、复制不会在此处显示。</p></div>
+                  <div><h3 id="audit-panel-title">管理操作记录</h3><p>仅保留公共项目、系统用户和数据导出的管理行为；密码与验证码的查看、复制不会在此处显示。</p><p className={`audit-integrity is-${auditChainIntegrity}`} role={auditChainIntegrity === "failed" ? "alert" : "status"}>{auditIntegrityLabel(auditChainIntegrity)}</p></div>
                 </div>
                 <div className="audit-panel-actions">
                   <SurfaceSelect id="audit-category" ariaLabel="筛选操作类型" value={auditCategory} onChange={(nextCategory) => {
@@ -1484,7 +1537,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
               </> : <p className="users-empty">当前筛选下没有管理记录。</p>}
             </section>}
           </section>
-        </section> : page === "profile" ? <ProfileOverview viewer={viewer} viewerInitial={viewerInitial} isLoading={isLoading} securityScore={securityScore} securityIssueCount={securityIssueCount} publicUserCount={publicUserCount} approvals={approvals} isSaving={isSaving} onOpenSecurity={openSecurityReview} onRequestExportApproval={() => void requestExportApproval()} onDecideExportApproval={(id, decision) => void decideExportApproval(id, decision)} onDownloadApprovedExport={(id) => void downloadApprovedExport(id)} /> : <>
+        </section> : page === "profile" ? <ProfileOverview viewer={viewer} viewerInitial={viewerInitial} isLoading={isLoading} securityScore={securityScore} securityIssueCount={securityIssueCount} publicUserCount={publicUserCount} approvals={approvals} isSaving={isSaving} onOpenSecurity={openSecurityReview} onRequestExportApproval={() => void requestExportApproval()} onDecideExportApproval={(id, decision) => void decideExportApproval(id, decision)} onDownloadApprovedExport={(id) => void downloadApprovedExport(id)} onRestartSecuritySession={restartSecuritySession} /> : <>
         <section className="security-strip" aria-label="账户安全概览" aria-busy={isLoading}>
           {isLoading ? <SecurityStripLoading /> : securityIssueCount > 0 ? <button type="button" className="risk-item" onClick={() => openSecurityReview()} aria-label="查看全部账户安全检查结果">
             <span className="risk-icon risk-danger"><AlertTriangle size={17} /></span><span><strong id="security-heading">基础安全评分 {securityScore}/100</strong><small>{securityIssueCount} 条基础风险待处理</small></span><ChevronRight size={18} aria-hidden="true" />

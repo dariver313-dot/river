@@ -9,6 +9,7 @@ import { assertSystemUserChangeAllowed, assertSystemUserDeletionAllowed } from "
 import { generateTotpCode, parseTotpInput } from "../app/lib/totp.ts";
 import { vaultRouteFromSearch, vaultRouteSearch } from "../app/lib/vault-navigation.ts";
 import { assertVaultMoveAllowed, boundedText } from "../app/lib/vault-policy.ts";
+import { vaultItemLimit } from "../app/lib/vault-policy.ts";
 
 test("公共项目不会被静默移入个人项目", () => {
   assert.throws(
@@ -51,7 +52,27 @@ test("跨站写入或导出请求会被拒绝", async () => {
     headers: { Origin: "https://attacker.example.test" },
   }));
   assert.equal(response?.status, 403);
-  assert.deepEqual(await response?.json(), { error: "已拒绝跨站请求。请从 djmima 页面重新操作。" });
+  assert.deepEqual(await response?.json(), { error: "已拒绝跨站请求。请从 djmima 页面重新操作。", code: "CSRF_REJECTED" });
+
+  const missingOrigin = crossOriginRequestResponse(new Request("https://vault.example.test/api/vault/export", {
+    headers: { "Sec-Fetch-Site": "same-origin" },
+  }));
+  assert.equal(missingOrigin?.status, 403);
+
+  const missingFetchMetadata = crossOriginRequestResponse(new Request("https://vault.example.test/api/vault/export", {
+    headers: { Origin: "https://vault.example.test" },
+  }));
+  assert.equal(missingFetchMetadata?.status, 403);
+
+  const allowed = crossOriginRequestResponse(new Request("https://vault.example.test/api/vault/export", {
+    headers: { Origin: "https://vault.example.test", "Sec-Fetch-Site": "same-origin" },
+  }));
+  assert.equal(allowed, null);
+});
+
+test("密码库与系统用户都具有服务端数据上限", () => {
+  assert.equal(vaultItemLimit("个人"), 500);
+  assert.equal(vaultItemLimit("公共"), 1_000);
 });
 
 test("写入接口拒绝无效或过大的 JSON 请求", async () => {

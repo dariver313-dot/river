@@ -1,4 +1,5 @@
 import { actorRequiredResponse, apiError, requireVaultActor } from "../../lib/api-response";
+import { rateLimitResponse } from "../../lib/rate-limit";
 import { secureJson } from "../../lib/response-security";
 import { listVaultSummaryData } from "../../lib/vault-store";
 
@@ -10,8 +11,10 @@ function positiveInteger(value: string | null) {
 }
 
 export async function GET(request: Request) {
-  const actor = await requireVaultActor();
+  const actor = await requireVaultActor(request);
   if (!actor) return actorRequiredResponse();
+  const rateLimited = await rateLimitResponse(request, actor.email, "read");
+  if (rateLimited) return rateLimited;
 
   try {
     const search = new URL(request.url).searchParams;
@@ -26,6 +29,6 @@ export async function GET(request: Request) {
       sortOrder: search.get("sortOrder") === "name" ? "name" : "updated",
     }));
   } catch (error) {
-    return apiError(error);
+    return apiError(error, 500, request);
   }
 }

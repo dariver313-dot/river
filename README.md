@@ -5,7 +5,7 @@
 ## 自托管边界
 
 - 应用、SQLite 数据库、加密密钥、登录会话、审计记录和备份都运行并保存在你的服务器。
-- Docker 仅监听 `127.0.0.1:3001`；公网只经宝塔 Nginx 反向代理进入。
+- Docker 仅监听 `127.0.0.1:3101`；公网只经宝塔 Nginx 反向代理进入。
 - Cloudflare 可以只作为 DNS、HTTPS 证书/WAF 的外部入口；它不参与应用计算，也不保存密码库数据。
 - 本项目不是零知识密码管理器：服务器持有加密密钥，因此服务器本身必须受控、及时更新并限制 root 访问。
 
@@ -31,7 +31,7 @@ cd /opt/djmima
 node scripts/initialize-selfhost.mjs --email admin@example.com --origin https://djmima.com
 docker compose up -d --build
 docker compose ps
-curl --fail http://127.0.0.1:3001/api/health
+curl --fail http://127.0.0.1:3101/api/health
 ```
 
 初始化脚本只在服务器上创建权限为 `0600` 的 `.env`，其中包含所有密钥。它还会生成权限为 `0600` 的 `.selfhost-setup-url`；在服务器终端中查看该文件并在自己的浏览器打开一次性初始化地址：
@@ -42,7 +42,7 @@ cat .selfhost-setup-url
 
 初始化页面会显示管理员自己的 Google Authenticator Setup Key，并要求设置管理员登录密码。录入验证器并确认后，该地址立即失效。不要把 `.env`、`.selfhost-setup-url`、密钥或 Setup Key 提交到 Git、截图或发送到普通聊天群。
 
-在宝塔站点的“反向代理”中，将 `/` 转发至 `http://127.0.0.1:3001`，并使用 [`ops/selfhost/baota-nginx.conf`](ops/selfhost/baota-nginx.conf) 的安全头与敏感路径规则。
+在宝塔站点的“反向代理”中，将 `/` 转发至 `http://127.0.0.1:3101`，并使用 [`ops/selfhost/baota-nginx.conf`](ops/selfhost/baota-nginx.conf) 的安全头与敏感路径规则。
 
 ## 运行维护
 
@@ -50,7 +50,7 @@ cat .selfhost-setup-url
 # 查看应用日志和健康状态
 docker compose logs --tail=100 djmima
 docker compose ps
-curl --fail http://127.0.0.1:3001/api/health
+curl --fail http://127.0.0.1:3101/api/health
 
 # 在容器内生成 SQLite 在线备份（保留最新 14 份）
 docker compose exec -T djmima node scripts/selfhost-backup.mjs

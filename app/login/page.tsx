@@ -1,5 +1,5 @@
 import { KeyRound, ShieldCheck, UsersRound } from "lucide-react";
-import { chatGPTSignInPath } from "../chatgpt-auth";
+import LoginForm from "./login-form";
 
 export const dynamic = "force-dynamic";
 
@@ -28,12 +28,8 @@ export default function LoginPage() {
           <span className="login-card-icon" aria-hidden="true"><KeyRound size={24} /></span>
           <p className="eyebrow">安全登录</p>
           <h2 id="login-title">进入你的密码库</h2>
-          <p className="login-copy">无需在 djmima 中输入账号或密码。使用 ChatGPT 账号继续。</p>
-          <a className="login-action" href={chatGPTSignInPath("/")}>
-            <ShieldCheck size={19} aria-hidden="true" />
-            使用 ChatGPT 继续
-          </a>
-          <p className="login-note">登录后会创建当前设备的安全会话。密码库数据不会保存到浏览器。</p>
+          <p className="login-copy">无需输入登录密码。邮箱用于识别已开通的账户，两组独立 Google 验证码共同完成登录。</p>
+          <LoginForm />
         </div>
         <p className="login-footer">djmima 将登录与密码库数据分开处理。</p>
       </section>

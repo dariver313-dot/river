@@ -1,7 +1,8 @@
-import { env } from "cloudflare:workers";
 import { getD1 } from "../../db";
+import { assertAuthTotpEncryptionReady, encryptAuthTotpSecret } from "./auth-totp-crypto";
 import { assertSystemUserChangeAllowed, assertSystemUserDeletionAllowed } from "./system-user-policy";
 import { writeAuditEvent } from "./audit-log";
+import { parseTotpInput } from "./totp";
 
 export type AppRole = "admin" | "user";
 export type AppUserStatus = "active" | "suspended";
@@ -46,7 +47,7 @@ function isValidEmail(value: string) {
 }
 
 function configuredPrimaryAdminEmail() {
-  const email = (env as unknown as UserRuntimeEnv).PRIMARY_ADMIN_EMAIL;
+  const email = (process.env as UserRuntimeEnv).PRIMARY_ADMIN_EMAIL;
   const normalized = email ? normalizedEmail(email) : "";
   return isValidEmail(normalized) ? normalized : null;
 }
@@ -200,13 +201,19 @@ export async function createManagedUser(actorEmail: string, input: Record<string
   const email = typeof input.email === "string" ? normalizedEmail(input.email) : "";
   if (!isValidEmail(email)) throw new Error("请输入有效的用户邮箱。");
   const role = inputRole(input.role);
+  const authTotpSecret = typeof input.authTotpSecret === "string" ? input.authTotpSecret.trim() : "";
+  if (!authTotpSecret) throw new Error("请为该用户生成登录验证器。");
+  const authTotp = parseTotpInput(authTotpSecret);
+  if (authTotp.digits !== 6) throw new Error("系统登录仅支持 6 位 Google 验证器代码。");
+  await assertAuthTotpEncryptionReady();
+  const encryptedTotpSecret = await encryptAuthTotpSecret(email, authTotp.secret);
   const d1 = getD1();
   const inserted = await d1.prepare(
-    `INSERT INTO app_users (email, role, status, created_by)
-     SELECT ?, ?, 'active', ?
+    `INSERT INTO app_users (email, role, status, auth_totp_secret, created_by)
+     SELECT ?, ?, 'active', ?, ?
      WHERE (SELECT COUNT(*) FROM app_users) < ?
        AND NOT EXISTS (SELECT 1 FROM app_users WHERE email = ?)`,
-  ).bind(email, role, actor.email, maxSystemUsers, email).run();
+  ).bind(email, role, encryptedTotpSecret, actor.email, maxSystemUsers, email).run();
   if ((inserted.meta.changes ?? 0) !== 1) {
     const existing = await findUser(email);
     throw new Error(existing ? "该用户已存在，可直接调整其角色或状态。" : "系统用户数量已达到安全上限。");
@@ -256,6 +263,12 @@ export async function updateManagedUser(actorEmail: string, input: Record<string
   if ((updatedResult.meta.changes ?? 0) !== 1) {
     throw new Error(removesActiveAdmin ? "系统至少需要保留一位有效管理员。" : "用户更新失败，请重试。");
   }
+  if (current.status === "active" && nextStatus === "suspended") {
+    await d1.batch([
+      d1.prepare("UPDATE auth_sessions SET revoked_at = ? WHERE email = ? AND revoked_at IS NULL").bind(new Date().toISOString(), current.email),
+      d1.prepare("UPDATE security_sessions SET revoked_at = ? WHERE email = ? AND revoked_at IS NULL").bind(new Date().toISOString(), current.email),
+    ]);
+  }
   if (nextRole !== current.role) await writeSystemAudit(actor.email, "system_user_role_changed", current.email);
   if (nextStatus !== current.status) await writeSystemAudit(actor.email, "system_user_status_changed", current.email);
   const updated = await findUser(current.email);
@@ -295,6 +308,8 @@ export async function deleteManagedUser(actorEmail: string, input: Record<string
   statements.push(
     d1.prepare("DELETE FROM vault_members WHERE email = ?").bind(current.email),
     d1.prepare("DELETE FROM approval_requests WHERE requested_by = ? OR approver_email = ?").bind(current.email, current.email),
+    d1.prepare("DELETE FROM auth_sessions WHERE email = ?").bind(current.email),
+    d1.prepare("DELETE FROM security_sessions WHERE email = ?").bind(current.email),
     d1.prepare("DELETE FROM app_users WHERE email = ?").bind(current.email),
   );
   await d1.batch(statements);

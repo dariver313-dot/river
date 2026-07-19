@@ -3327,6 +3327,109 @@ button:disabled {
   transform: translateY(-1px);
 }
 
+.selfhost-login-form {
+  display: grid;
+  gap: 14px;
+}
+
+.selfhost-login-form > label {
+  display: grid;
+  gap: 7px;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.selfhost-login-form input {
+  min-height: 42px;
+  width: 100%;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  background: var(--surface-soft);
+  color: var(--ink);
+  padding: 0 12px;
+  font: inherit;
+  font-weight: 500;
+  outline: none;
+  transition: border-color 180ms ease, box-shadow 180ms ease;
+}
+
+.selfhost-login-form input:focus-visible {
+  border-color: var(--accent-strong);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.selfhost-login-form small {
+  color: var(--ink-faint);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.45;
+}
+
+.selfhost-login-form .login-action {
+  width: 100%;
+  justify-content: center;
+  margin-top: 4px;
+}
+
+.selfhost-login-form .login-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 0;
+}
+
+.login-error {
+  margin: -2px 0 0;
+  border: 1px solid #e9c4bd;
+  border-radius: 8px;
+  background: #fff7f4;
+  color: #a23b2d;
+  padding: 9px 10px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.button-spinner {
+  animation: button-spin 800ms linear infinite;
+}
+
+.provisioning-body {
+  display: grid;
+  gap: 16px;
+}
+
+.provisioning-key {
+  display: grid;
+  gap: 8px;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.provisioning-key > span {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.provisioning-key code {
+  min-width: 0;
+  flex: 1;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  padding: 10px 12px;
+  color: var(--ink);
+  font-size: 13px;
+  letter-spacing: 0.08em;
+}
+
+@keyframes button-spin {
+  to { transform: rotate(360deg); }
+}
+
 .login-note {
   margin: 18px 0 0;
   color: var(--ink-faint);

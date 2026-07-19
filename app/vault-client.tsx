@@ -34,7 +34,7 @@ import {
   X,
 } from "lucide-react";
 import jsQR from "jsqr";
-import { ChangeEvent, FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, FormEvent, KeyboardEvent as ReactKeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { SecurityIssue } from "./lib/security-review";
 import { generateTotpCode, parseTotpInput, totpLabel, totpSecondsRemaining, type TotpConfig } from "./lib/totp";
 import { vaultRouteFromSearch, vaultRouteSearch, type AuditCategory, type SecurityFocus, type UserManagementTab, type VaultPage, type VaultRoute } from "./lib/vault-navigation";
@@ -85,6 +85,8 @@ type CredentialForm = Pick<VaultItem, "name" | "domain" | "username" | "password
 type AuditIntegrity = "legacy" | "sealed" | "failed" | "unknown";
 type AuditEntry = { action: string; actorEmail: string; itemId: string | null; createdAt: string; integrity?: Exclude<AuditIntegrity, "unknown"> };
 type SystemUser = { email: string; role: "admin" | "user"; status: "active" | "suspended"; createdAt: string; isCurrent: boolean };
+type SystemUserProvisioning = { email: string; setupKey: string };
+type DeleteTarget = Pick<VaultItem, "id" | "name" | "username" | "type">;
 type ApprovalRequest = {
   id: string;
   action: "export_vault";
@@ -96,6 +98,24 @@ type ApprovalRequest = {
   isRequester: boolean;
 };
 type Pagination = { page: number; pageSize: number; total: number; pageCount: number };
+
+function generateLoginTotpSetupKey() {
+  const bytes = crypto.getRandomValues(new Uint8Array(20));
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  let output = "";
+  let buffer = 0;
+  let bits = 0;
+  for (const byte of bytes) {
+    buffer = (buffer << 8) | byte;
+    bits += 8;
+    while (bits >= 5) {
+      output += alphabet[(buffer >>> (bits - 5)) & 31];
+      bits -= 5;
+    }
+  }
+  if (bits > 0) output += alphabet[(buffer << (5 - bits)) & 31];
+  return output;
+}
 type VaultSecuritySummary = {
   totalItems: number;
   weakPasswordCount: number;
@@ -152,7 +172,7 @@ function generateStrongPassword() {
   return password.join("");
 }
 
-function BrandMark({ item }: { item: VaultItem }) {
+function BrandMark({ item }: { item: Pick<VaultItem, "name" | "brand" | "type"> }) {
   const initials = item.name.slice(0, 1).toUpperCase();
   return (
     <span className={`brand-mark brand-${item.brand}`} aria-hidden="true">
@@ -256,7 +276,7 @@ function SurfaceSelect<T extends string>({
     const closeOnOutsidePress = (event: PointerEvent) => {
       if (!rootRef.current?.contains(event.target as Node)) setIsOpen(false);
     };
-    const closeOnEscape = (event: KeyboardEvent) => {
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
       if (event.key === "Escape") setIsOpen(false);
     };
     document.addEventListener("pointerdown", closeOnOutsidePress);
@@ -410,7 +430,7 @@ function ProfileOverview({
           <dl className="profile-details">
             <div><dt>账号名称</dt><dd>{viewer.displayName}</dd></div>
             <div><dt>登录邮箱</dt><dd title={viewer.email}>{viewer.email}</dd></div>
-            <div><dt>身份来源</dt><dd>ChatGPT 账号登录</dd></div>
+            <div><dt>身份来源</dt><dd>双验证器安全登录</dd></div>
           </dl>
         </section>
 
@@ -663,7 +683,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
   const [showAdd, setShowAdd] = useState(false);
   const [editingItem, setEditingItem] = useState<VaultItem | null>(null);
   const [pendingPublicPublish, setPendingPublicPublish] = useState<PendingPublicPublish | null>(null);
-  const [deleteTarget, setDeleteTarget] = useState<VaultItemSummary | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
   const [showUserCreateDialog, setShowUserCreateDialog] = useState(false);
   const [systemUserAction, setSystemUserAction] = useState<SystemUserAction | null>(null);
   const [mobileNav, setMobileNav] = useState(false);
@@ -695,6 +715,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
   const [systemUsers, setSystemUsers] = useState<SystemUser[]>([]);
   const [systemUserEmail, setSystemUserEmail] = useState("");
   const [systemUserRole, setSystemUserRole] = useState<"admin" | "user">("user");
+  const [systemUserProvisioning, setSystemUserProvisioning] = useState<SystemUserProvisioning | null>(null);
   const [userManagementTab, setUserManagementTab] = useState<UserManagementTab>("users");
   const [userQuery, setUserQuery] = useState("");
   const [isUsersLoading, setIsUsersLoading] = useState(false);
@@ -778,7 +799,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
   }, [isAdmin]);
 
   useEffect(() => {
-    const closeOnEscape = (event: KeyboardEvent) => {
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
         if (page !== "vault") {
@@ -847,7 +868,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
       const preferred = dialog.querySelector<HTMLElement>("[data-dialog-initial-focus], [autofocus]");
       (preferred ?? controls[0])?.focus({ preventScroll: true });
     };
-    const trapFocus = (event: KeyboardEvent) => {
+    const trapFocus = (event: globalThis.KeyboardEvent) => {
       if (event.key !== "Tab") return;
       const dialog = getActiveDialog();
       if (!dialog) return;
@@ -1239,7 +1260,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
     writeRoute({ page: "users", collection: "all", securityFocus: "all", userManagementTab: tab, auditCategory: tab === "audit" ? auditCategory : "all" });
   }
 
-  function handleUserManagementTabKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
+  function handleUserManagementTabKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>) {
     if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
     event.preventDefault();
     selectUserManagementTab(userManagementTab === "users" ? "audit" : "users");
@@ -1293,11 +1314,13 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
     event.preventDefault();
     setIsSaving(true);
     try {
+      const setupKey = generateLoginTotpSetupKey();
       await requestVault<{ user: SystemUser }>("/api/users", {
         method: "POST",
-        body: JSON.stringify({ email: systemUserEmail, role: systemUserRole }),
+        body: JSON.stringify({ email: systemUserEmail, role: systemUserRole, authTotpSecret: setupKey }),
       });
       setPublicUserCount((current) => current + 1);
+      setSystemUserProvisioning({ email: systemUserEmail.trim().toLowerCase(), setupKey });
       setSystemUserEmail("");
       setSystemUserRole("user");
       setShowUserCreateDialog(false);
@@ -1305,7 +1328,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
       setUserCurrentPage(1);
       setUserLoadAttempt((current) => current + 1);
       setLoadAttempt((current) => current + 1);
-      setToast("系统用户已创建");
+      setToast("系统用户已创建，请安全交付登录验证器");
     } catch (error) {
       setToast(error instanceof Error ? error.message : "无法创建系统用户。");
     } finally {
@@ -1745,12 +1768,28 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
             <header><div><span className="modal-icon"><UserCog size={20} /></span><div><h2 id="create-system-user-title">添加系统用户</h2><p>创建后可在用户管理页继续调整角色与状态</p></div></div><button className="icon-button" type="button" onClick={() => setShowUserCreateDialog(false)} aria-label="关闭添加用户"><X size={20} /></button></header>
             <form className="modal-form" onSubmit={createSystemUser}>
               <div className="modal-body">
-              <label>登录邮箱（必须）<input required type="email" value={systemUserEmail} onChange={(event) => setSystemUserEmail(event.target.value)} placeholder="name@example.com" autoComplete="email" autoFocus /><small>请填写对方用于登录 ChatGPT、并在站点访问控制中获授权的同一邮箱。</small></label>
+              <label>登录邮箱（必须）<input required type="email" value={systemUserEmail} onChange={(event) => setSystemUserEmail(event.target.value)} placeholder="name@example.com" autoComplete="email" autoFocus /><small>邮箱用于识别该用户；登录时还必须通过本人和协作人的两组 Google 验证码。</small></label>
               <div className="field-control"><span>系统角色</span><SurfaceSelect id="new-user-role" ariaLabel="系统角色" value={systemUserRole} onChange={setSystemUserRole} options={[{ value: "user", label: "普通用户" }, { value: "admin", label: "管理员" }]} /></div>
-              <aside className="access-setup-note" role="note"><ShieldCheck size={17} aria-hidden="true" /><div><strong>邮箱就是该用户的登录身份</strong><p>系统用户创建成功后，请在站点访问控制中允许该邮箱访问；不支持使用单独的用户名登录。</p></div></aside>
+              <aside className="access-setup-note" role="note"><ShieldCheck size={17} aria-hidden="true" /><div><strong>系统会为该用户生成独立验证器</strong><p>创建后仅显示一次 Setup Key。请通过受信任的线下或端到端加密渠道交给本人，不能发在普通群聊中。</p></div></aside>
               </div>
               <footer className="modal-footer"><button type="button" className="secondary-button" onClick={() => setShowUserCreateDialog(false)} disabled={isSaving}>取消</button><button type="submit" className="primary-button" disabled={isSaving}><UserCog size={17} />{isSaving ? "正在创建" : "创建用户"}</button></footer>
             </form>
+          </section>
+        </div>
+      )}
+
+      {systemUserProvisioning && isAdmin && (
+        <div className="modal-layer" role="presentation">
+          <section className="modal user-create-modal" role="dialog" aria-modal="true" aria-labelledby="user-provisioning-title">
+            <header><div><span className="modal-icon"><KeyRound size={20} /></span><div><h2 id="user-provisioning-title">交付登录验证器</h2><p>此 Setup Key 只在当前窗口显示一次</p></div></div><button className="icon-button" type="button" onClick={() => setSystemUserProvisioning(null)} aria-label="关闭登录验证器交付"><X size={20} /></button></header>
+            <div className="modal-body provisioning-body">
+              <aside className="access-setup-note" role="note"><ShieldCheck size={17} aria-hidden="true" /><div><strong>{systemUserProvisioning.email}</strong><p>请在 Google Authenticator 中选择“输入设置密钥”，账号名称使用该邮箱，密钥类型选择“基于时间”。协作人验证码由管理员预先配置的独立设备提供。</p></div></aside>
+              <label className="provisioning-key">一次性 Setup Key
+                <span><code>{systemUserProvisioning.setupKey}</code><button type="button" className="icon-button" onClick={() => copyValue(systemUserProvisioning.setupKey, "登录验证器 Setup Key")} aria-label="复制登录验证器 Setup Key" title="复制 Setup Key"><Copy size={17} /></button></span>
+              </label>
+              <p className="form-hint">复制后请立即通过安全渠道交付；关闭窗口后不会在系统中再次显示明文密钥。</p>
+            </div>
+            <footer className="modal-footer"><button type="button" className="primary-button" onClick={() => setSystemUserProvisioning(null)}><Check size={17} />已安全交付</button></footer>
           </section>
         </div>
       )}

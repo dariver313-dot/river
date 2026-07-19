@@ -34,8 +34,14 @@ async function opaqueKey(value: string) {
 }
 
 function clientAddress(request: Request) {
-  // Cloudflare 在边缘写入该头；不要信任可由客户端伪造的 X-Forwarded-For。
-  return request.headers.get("cf-connecting-ip")?.trim() || "unavailable";
+  // 自托管时端口仅绑定到本机，由宝塔 Nginx 覆盖写入 X-Real-IP；只有明确
+  // 启用受信代理时才使用该值，避免把客户端伪造的转发头当作真实来源。
+  const cloudflareAddress = request.headers.get("cf-connecting-ip")?.trim();
+  if (cloudflareAddress) return cloudflareAddress;
+  if (process.env.DJMIMA_TRUST_PROXY === "1") {
+    return request.headers.get("x-real-ip")?.trim() || "unavailable";
+  }
+  return "unavailable";
 }
 
 async function consume(key: string, policy: RateLimitPolicy) {

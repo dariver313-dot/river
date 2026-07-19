@@ -1,5 +1,3 @@
-import { env } from "cloudflare:workers";
-
 type VaultRuntimeEnv = {
   VAULT_ENCRYPTION_KEY?: string;
   VAULT_ACTIVE_ENCRYPTION_KEY?: string;
@@ -85,7 +83,7 @@ function parseKeyring(value: string | undefined, fallback: string | undefined, a
 function encryptionKeyring() {
   if (!encryptionKeyringPromise) {
     encryptionKeyringPromise = Promise.resolve().then(() => {
-      const runtime = env as unknown as VaultRuntimeEnv;
+      const runtime = process.env as VaultRuntimeEnv;
       return parseKeyring(runtime.VAULT_ENCRYPTION_KEYS, runtime.VAULT_ENCRYPTION_KEY, runtime.VAULT_ACTIVE_ENCRYPTION_KEY, runtime.VAULT_ACTIVE_KEY_ID, "legacy");
     });
   }
@@ -113,7 +111,7 @@ function getEncryptionKey(keyId: string) {
 async function auditKeyring() {
   if (!auditKeyringPromise) {
     auditKeyringPromise = (async () => {
-      const runtime = env as unknown as VaultRuntimeEnv;
+      const runtime = process.env as VaultRuntimeEnv;
       if (runtime.VAULT_AUDIT_SIGNING_KEYS || runtime.VAULT_AUDIT_SIGNING_KEY) {
         return parseKeyring(
           runtime.VAULT_AUDIT_SIGNING_KEYS,

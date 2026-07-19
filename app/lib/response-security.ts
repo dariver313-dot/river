@@ -4,7 +4,7 @@ const applicationSecurityPolicy = [
   "connect-src 'self'",
   "font-src 'self' data:",
   "form-action 'self'",
-  "frame-ancestors 'self' https://chatgpt.com https://*.chatgpt.com",
+  "frame-ancestors 'self'",
   "img-src 'self' blob: data:",
   "object-src 'none'",
   "script-src 'self' 'unsafe-inline'",
@@ -50,7 +50,20 @@ export function secureApplicationResponse(response: Response, noStore = false) {
 export function crossOriginRequestResponse(request: Request) {
   const origin = request.headers.get("origin");
   const fetchSite = request.headers.get("sec-fetch-site");
-  const expectedOrigin = new URL(request.url).origin;
+  const configuredOrigin = process.env.DJMIMA_PUBLIC_ORIGIN?.trim();
+  let expectedOrigin = new URL(request.url).origin;
+  try {
+    if (configuredOrigin) {
+      expectedOrigin = new URL(configuredOrigin).origin;
+    } else if (process.env.DJMIMA_TRUST_PROXY === "1") {
+      const protocol = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim();
+      const host = request.headers.get("x-forwarded-host")?.split(",")[0]?.trim();
+      if (protocol && host) expectedOrigin = new URL(`${protocol}://${host}`).origin;
+    }
+  } catch {
+    // Invalid deployment configuration fails closed below because the derived
+    // request origin will not match the browser's configured production origin.
+  }
 
   // 所有写操作都必须来自本站页面。缺少 Origin、不同源或非同源 Fetch
   // 都按 CSRF 处理，不能为了 curl 或旧客户端静默放行。

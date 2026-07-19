@@ -18,14 +18,16 @@ export async function GET(request: Request) {
 
   try {
     const search = new URL(request.url).searchParams;
+    const requestedSpace = search.get("space");
+    const requestedSecurityFocus = search.get("securityFocus");
     return secureJson(await listVaultSummaryData(actor.email, {
       page: positiveInteger(search.get("page")),
       pageSize: 20,
       query: search.get("query") ?? "",
-      space: search.get("space") === "个人" || search.get("space") === "公共" ? search.get("space") : "全部",
+      space: requestedSpace === "个人" || requestedSpace === "公共" ? requestedSpace : "全部",
       category: search.get("category") ?? "全部",
       collection: search.get("collection") === "security" ? "security" : "all",
-      securityFocus: search.get("securityFocus") === "weak_password" || search.get("securityFocus") === "reused_password" || search.get("securityFocus") === "missing_two_factor" ? search.get("securityFocus") : "all",
+      securityFocus: requestedSecurityFocus === "weak_password" || requestedSecurityFocus === "reused_password" || requestedSecurityFocus === "missing_two_factor" ? requestedSecurityFocus : "all",
       sortOrder: search.get("sortOrder") === "name" ? "name" : "updated",
     }));
   } catch (error) {

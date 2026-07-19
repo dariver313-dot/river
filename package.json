@@ -11,14 +11,15 @@
     "prestart": "node ./scripts/check-node-version.mjs",
     "pretest": "node ./scripts/check-node-version.mjs",
     "prelint": "node ./scripts/check-node-version.mjs",
-    "dev": "vinext dev",
-    "build": "vinext build",
-    "start": "vinext start",
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
     "test": "npm run build && node --experimental-strip-types --test tests/*.test.ts",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "security:check": "npm audit --audit-level=high && node ./scripts/security-check.mjs"
   },
   "dependencies": {
+    "better-sqlite3": "^12.6.2",
     "drizzle-orm": "0.45.2",
     "jsqr": "^1.4.0",
     "lucide-react": "^1.25.0",
@@ -27,6 +28,7 @@
     "react-dom": "19.2.6"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
     "@cloudflare/vite-plugin": "1.45.1",
     "@cloudflare/workers-types": "5.20260719.1",
     "@tailwindcss/postcss": "4.2.1",

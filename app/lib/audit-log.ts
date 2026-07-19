@@ -112,14 +112,17 @@ export async function writeAuditEvent(vaultId: string, actorEmail: string, actio
 
 export async function auditIntegrity(event: StoredAuditEvent) {
   if (event.eventVersion !== 1) return "legacy" as const;
-  if (event.sequence === null || !event.previousHash || !event.chainHash || !event.signature) return "failed" as const;
-  const signatureIntegrity = await verifyAuditEvent(event);
+  const sequence = event.sequence;
+  const previousHash = event.previousHash;
+  const signature = event.signature;
+  if (sequence === null || !previousHash || !event.chainHash || !signature) return "failed" as const;
+  const signatureIntegrity = await verifyAuditEvent({ ...event, sequence, previousHash, signature });
   if (signatureIntegrity !== "sealed") return signatureIntegrity;
   const expectedHash = await chainHash({
     id: event.id,
-    sequence: event.sequence,
-    previousHash: event.previousHash,
-    signature: event.signature,
+    sequence,
+    previousHash,
+    signature,
   });
   return expectedHash === event.chainHash ? "sealed" as const : "failed" as const;
 }

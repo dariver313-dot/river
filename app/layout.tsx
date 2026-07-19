@@ -16,8 +16,9 @@ const geistMono = Geist_Mono({
 export async function generateMetadata(): Promise<Metadata> {
   const incomingHeaders = await headers();
   const host = incomingHeaders.get("host") ?? "localhost:3000";
+  const configuredOrigin = process.env.DJMIMA_PUBLIC_ORIGIN?.trim();
   const protocol = host.startsWith("localhost") || host.startsWith("127.0.0.1") ? "http" : "https";
-  const origin = `${protocol}://${host}`;
+  const origin = configuredOrigin && /^https?:\/\//.test(configuredOrigin) ? configuredOrigin.replace(/\/$/, "") : `${protocol}://${host}`;
   const title = "djmima｜个人账号与密码安全中心";
   const description = "集中管理账号、密码与验证器代码，并通过权限与审计记录保护敏感信息。";
 

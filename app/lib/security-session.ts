@@ -32,7 +32,10 @@ function toIso(value: number) {
 
 function cookieSettings(request: Request) {
   const url = new URL(request.url);
-  const secure = url.protocol === "https:";
+  const forwardedProtocol = process.env.DJMIMA_TRUST_PROXY === "1"
+    ? request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim().toLowerCase()
+    : undefined;
+  const secure = url.protocol === "https:" || forwardedProtocol === "https";
   return {
     name: secure ? "__Host-djmima-session" : "djmima-session",
     secure: secure ? "; Secure" : "",

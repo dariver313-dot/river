@@ -1780,7 +1780,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
             <form className="modal-form" onSubmit={createSystemUser}>
               <div className="modal-body">
               <label>登录邮箱（必须）<input required type="email" value={systemUserEmail} onChange={(event) => setSystemUserEmail(event.target.value)} placeholder="name@example.com" autoComplete="email" autoFocus /><small>邮箱是登录账户名；用户还需输入自己的登录密码和本人 Google 验证码。</small></label>
-              <label>初始登录密码（至少 14 位）<div className="form-password"><input required type={showSystemUserPassword ? "text" : "password"} value={systemUserPassword} onChange={(event) => setSystemUserPassword(event.target.value)} minLength={14} maxLength={512} placeholder="为用户设置初始密码" autoComplete="new-password" /><button type="button" className="password-visibility" onClick={() => setShowSystemUserPassword((value) => !value)} aria-label={showSystemUserPassword ? "隐藏初始登录密码" : "显示初始登录密码"}>{showSystemUserPassword ? <EyeOff size={16} /> : <Eye size={16} />}</button></div><small>只保存不可逆哈希。请为每位用户生成独立强密码，并通过受信任渠道交付。</small></label>
+              <label>一次性初始密码（至少 14 位）<div className="form-password"><input required type={showSystemUserPassword ? "text" : "password"} value={systemUserPassword} onChange={(event) => setSystemUserPassword(event.target.value)} minLength={14} maxLength={512} placeholder="为用户设置一次性初始密码" autoComplete="new-password" /><button type="button" className="password-visibility" onClick={() => setShowSystemUserPassword((value) => !value)} aria-label={showSystemUserPassword ? "隐藏初始登录密码" : "显示初始登录密码"}>{showSystemUserPassword ? <EyeOff size={16} /> : <Eye size={16} />}</button></div><small>只保存不可逆哈希。用户首次登录验证后必须立即更换；请用受信任渠道交付。</small></label>
               <label>确认初始登录密码<input required type={showSystemUserPassword ? "text" : "password"} value={systemUserPasswordConfirmation} onChange={(event) => setSystemUserPasswordConfirmation(event.target.value)} minLength={14} maxLength={512} autoComplete="new-password" /></label>
               <div className="field-control"><span>系统角色</span><SurfaceSelect id="new-user-role" ariaLabel="系统角色" value={systemUserRole} onChange={setSystemUserRole} options={[{ value: "user", label: "普通用户" }, { value: "admin", label: "管理员" }]} /></div>
               <aside className="access-setup-note" role="note"><ShieldCheck size={17} aria-hidden="true" /><div><strong>系统会为该用户生成独立验证器</strong><p>创建后仅显示一次 Setup Key。请通过受信任的线下或端到端加密渠道交给本人，不能发在普通群聊中。</p></div></aside>
@@ -1794,16 +1794,16 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
       {systemUserProvisioning && isAdmin && (
         <div className="modal-layer" role="presentation">
           <section className="modal user-create-modal" role="dialog" aria-modal="true" aria-labelledby="user-provisioning-title">
-            <header><div><span className="modal-icon"><KeyRound size={20} /></span><div><h2 id="user-provisioning-title">交付登录验证器</h2><p>此 Setup Key 只在当前窗口显示一次</p></div></div><button className="icon-button" type="button" onClick={() => setSystemUserProvisioning(null)} aria-label="关闭登录验证器交付"><X size={20} /></button></header>
+            <header><div><span className="modal-icon"><KeyRound size={20} /></span><div><h2 id="user-provisioning-title">交付首次登录凭据</h2><p>初始密码和 Setup Key 均只在当前窗口显示一次</p></div></div><button className="icon-button" type="button" onClick={() => setSystemUserProvisioning(null)} aria-label="关闭登录验证器交付"><X size={20} /></button></header>
             <div className="modal-body provisioning-body">
-              <aside className="access-setup-note" role="note"><ShieldCheck size={17} aria-hidden="true" /><div><strong>{systemUserProvisioning.email}</strong><p>请在 Google Authenticator 中选择“输入设置密钥”，账号名称使用该邮箱，密钥类型选择“基于时间”。日常登录只需该用户自己的验证码。</p></div></aside>
-              <label className="provisioning-key">初始登录密码
-                <span><code>{systemUserProvisioning.temporaryPassword}</code><button type="button" className="icon-button" onClick={() => copyValue(systemUserProvisioning.temporaryPassword, "初始登录密码")} aria-label="复制初始登录密码" title="复制初始登录密码"><Copy size={17} /></button></span>
+              <aside className="access-setup-note" role="note"><ShieldCheck size={17} aria-hidden="true" /><div><strong>{systemUserProvisioning.email}</strong><p>请在 Google Authenticator 中选择“输入设置密钥”，账号名称使用该邮箱，密钥类型选择“基于时间”。首次登录后，用户必须用自己的 6 位验证码确认并更换初始密码。</p></div></aside>
+              <label className="provisioning-key">一次性初始密码
+                <span><code>{systemUserProvisioning.temporaryPassword}</code><button type="button" className="icon-button" onClick={() => copyValue(systemUserProvisioning.temporaryPassword, "一次性初始密码")} aria-label="复制一次性初始密码" title="复制一次性初始密码"><Copy size={17} /></button></span>
               </label>
               <label className="provisioning-key">一次性 Setup Key
                 <span><code>{systemUserProvisioning.setupKey}</code><button type="button" className="icon-button" onClick={() => copyValue(systemUserProvisioning.setupKey, "登录验证器 Setup Key")} aria-label="复制登录验证器 Setup Key" title="复制 Setup Key"><Copy size={17} /></button></span>
               </label>
-              <p className="form-hint">复制后请立即通过安全渠道交付；关闭窗口后不会在系统中再次显示明文密钥。</p>
+              <p className="form-hint">请将密码与 Setup Key 分两个受信任渠道交付；关闭窗口后不会在系统中再次显示明文密钥。</p>
             </div>
             <footer className="modal-footer"><button type="button" className="primary-button" onClick={() => setSystemUserProvisioning(null)}><Check size={17} />已安全交付</button></footer>
           </section>

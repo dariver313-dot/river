@@ -51,6 +51,10 @@ if (!cryptoSource.includes("additionalData") || !cryptoSource.includes("VAULT_AC
   violations.push("app/lib/vault-crypto.ts: 缺少 AAD 绑定或双密钥轮换支持");
 }
 
+if (!readFileSync("worker/index.ts", "utf8").includes("anonymousEdgeRateLimitResponse")) {
+  violations.push("worker/index.ts: API 入口缺少匿名 IP 限流");
+}
+
 if (violations.length > 0) {
   console.error("安全检查失败：\n" + violations.join("\n"));
   process.exit(1);

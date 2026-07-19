@@ -16,6 +16,10 @@ const policies: Record<RateLimitScope, RateLimitPolicy> = {
   audit: { windowMs: 60_000, userLimit: 90, ipLimit: 150 },
   maintenance: { windowMs: 10 * 60_000, userLimit: 60, ipLimit: 80 },
 };
+const edgePolicies = {
+  read: { windowMs: 60_000, limit: 240 },
+  write: { windowMs: 60_000, limit: 90 },
+};
 let lastCleanupAt = 0;
 
 function toBase64Url(bytes: Uint8Array) {
@@ -80,5 +84,24 @@ export async function rateLimitResponse(request: Request, email: string, scope: 
     console.error("djmima_rate_limit_error", { path: new URL(request.url).pathname, message: error instanceof Error ? error.message : String(error) });
     // 限流存储不可用时宁可短暂拒绝，也不让敏感接口在无保护状态下继续运行。
     return secureJson({ error: "安全防护暂时不可用，请稍后重试。", code: "SECURITY_CHECK_UNAVAILABLE" }, { status: 503 });
+  }
+}
+
+export async function anonymousEdgeRateLimitResponse(request: Request) {
+  const policy = request.method === "GET" || request.method === "HEAD" ? edgePolicies.read : edgePolicies.write;
+  try {
+    const result = await consume(`edge:${request.method}:${clientAddress(request)}`, {
+      windowMs: policy.windowMs,
+      userLimit: policy.limit,
+      ipLimit: policy.limit,
+    });
+    if (result.count <= policy.limit) return null;
+    return secureJson(
+      { error: "请求过于频繁。请稍后再试。", code: "EDGE_RATE_LIMITED" },
+      { status: 429, headers: { "Retry-After": String(result.retryAfterSeconds) } },
+    );
+  } catch (error) {
+    console.error("djmima_edge_rate_limit_error", { path: new URL(request.url).pathname, message: error instanceof Error ? error.message : String(error) });
+    return secureJson({ error: "安全防护暂时不可用，请稍后重试。", code: "EDGE_SECURITY_CHECK_UNAVAILABLE" }, { status: 503 });
   }
 }

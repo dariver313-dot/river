@@ -2,6 +2,7 @@
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
 import { secureApplicationResponse } from "../app/lib/response-security";
+import { anonymousEdgeRateLimitResponse } from "../app/lib/rate-limit";
 
 interface Env {
   ASSETS: Fetcher;
@@ -29,6 +30,11 @@ interface ExecutionContext {
 const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
+
+    if (url.pathname.startsWith("/api/")) {
+      const limited = await anonymousEdgeRateLimitResponse(request);
+      if (limited) return secureApplicationResponse(limited, true);
+    }
 
     if (url.pathname === "/_vinext/image") {
       const allowedWidths = [...DEFAULT_DEVICE_SIZES, ...DEFAULT_IMAGE_SIZES];

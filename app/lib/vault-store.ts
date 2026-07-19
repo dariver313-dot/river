@@ -47,6 +47,13 @@ export type VaultListOptions = {
   sortOrder?: "updated" | "name";
 };
 
+export type ManagementAuditCategory = "all" | "project" | "user" | "export";
+
+export type ManagementAuditPage = {
+  audit: Array<{ action: string; actorEmail: string; itemId: string | null; createdAt: string }>;
+  pagination: { page: number; pageSize: number; total: number; pageCount: number };
+};
+
 export type ApprovalRequest = {
   id: string;
   action: "export_vault";
@@ -83,6 +90,24 @@ type VaultItemRow = {
   created_at: string;
   updated_at: string;
 };
+
+type AuditEventRow = {
+  action: string;
+  actor_email: string;
+  item_id: string | null;
+  created_at: string;
+};
+
+const managementAuditActions = {
+  all: [
+    "item_created", "item_updated", "item_published_to_public", "item_deleted",
+    "system_user_created", "system_user_role_changed", "system_user_status_changed", "system_user_deleted",
+    "export_approval_requested", "export_approved", "export_rejected", "vault_exported",
+  ],
+  project: ["item_created", "item_updated", "item_published_to_public", "item_deleted"],
+  user: ["system_user_created", "system_user_role_changed", "system_user_status_changed", "system_user_deleted"],
+  export: ["export_approval_requested", "export_approved", "export_rejected", "vault_exported"],
+} as const satisfies Record<ManagementAuditCategory, readonly string[]>;
 
 function isItemType(value: unknown): value is VaultItemType {
   return value === "登录" || value === "卡片" || value === "安全笔记";
@@ -350,29 +375,52 @@ export async function listVaultData(email: string) {
     }
   }
 
-  const publicVaults = vaultAccess.filter((vault) => vault.kind === "public");
-  const auditActions = [
-    "item_created", "item_updated", "item_published_to_public", "item_deleted",
-    "system_user_created", "system_user_role_changed", "system_user_status_changed", "system_user_deleted",
-    "export_approval_requested", "export_approved", "export_rejected", "vault_exported",
-  ];
-  const auditResults = actor.role === "admin"
-    ? await Promise.all(publicVaults.map((vault) => d1.prepare(
-      `SELECT action, actor_email, item_id, created_at FROM audit_events
-       WHERE vault_id = ? AND action IN (${auditActions.map(() => "?").join(", ")})
-       ORDER BY created_at DESC LIMIT 20`,
-    ).bind(vault.id, ...auditActions).all<{ action: string; actor_email: string; item_id: string | null; created_at: string }>()))
-    : [];
-  const audit = auditResults
-    .flatMap((result) => result.results)
-    .sort((left, right) => right.created_at.localeCompare(left.created_at))
-    .slice(0, 20);
-
   return {
     items: items.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)).map((item) => item.value),
     publicUserCount: await countActiveApplicationUsers(),
-    audit: audit.map((event) => ({ action: event.action, actorEmail: event.actor_email, itemId: event.item_id, createdAt: timeLabel(event.created_at) })),
     approvals: await listApprovalRequests(email),
+  };
+}
+
+export async function listManagementAudit(email: string, options: { page?: number; pageSize?: number; category?: ManagementAuditCategory } = {}): Promise<ManagementAuditPage> {
+  const actor = await getActiveApplicationActor(email);
+  if (!actor || actor.role !== "admin") throw new Error("只有管理员可以查看操作审计。");
+
+  const publicVault = await findSharedPublicVault();
+  const pageSize = boundedPageSize(options.pageSize);
+  const requestedPage = boundedPage(options.page);
+  const category = options.category ?? "all";
+  const actions = managementAuditActions[category] ?? managementAuditActions.all;
+
+  if (!publicVault) {
+    return { audit: [], pagination: { page: 1, pageSize, total: 0, pageCount: 1 } };
+  }
+
+  const d1 = getD1();
+  const actionMarkers = actions.map(() => "?").join(", ");
+  const totalRow = await d1.prepare(
+    `SELECT COUNT(*) AS count FROM audit_events
+     WHERE vault_id = ? AND action IN (${actionMarkers})`,
+  ).bind(publicVault.id, ...actions).first<{ count: number }>();
+  const total = totalRow?.count ?? 0;
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  const page = Math.min(requestedPage, pageCount);
+  const offset = (page - 1) * pageSize;
+  const result = await d1.prepare(
+    `SELECT action, actor_email, item_id, created_at FROM audit_events
+     WHERE vault_id = ? AND action IN (${actionMarkers})
+     ORDER BY created_at DESC
+     LIMIT ? OFFSET ?`,
+  ).bind(publicVault.id, ...actions, pageSize, offset).all<AuditEventRow>();
+
+  return {
+    audit: result.results.map((event) => ({
+      action: event.action,
+      actorEmail: event.actor_email,
+      itemId: event.item_id,
+      createdAt: timeLabel(event.created_at),
+    })),
+    pagination: { page, pageSize, total, pageCount },
   };
 }
 

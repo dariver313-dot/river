@@ -110,14 +110,23 @@ test("关键页面可通过 URL 恢复，非管理员不能进入用户管理", 
     collection: "security",
     securityFocus: "reused_password",
     userManagementTab: "users",
+    auditCategory: "all",
   });
   assert.deepEqual(vaultRouteFromSearch("?view=users&tab=audit", false), {
     page: "vault",
     collection: "all",
     securityFocus: "all",
     userManagementTab: "users",
+    auditCategory: "all",
   });
-  assert.equal(vaultRouteSearch({ page: "users", collection: "all", securityFocus: "all", userManagementTab: "audit" }), "?view=users&tab=audit");
+  assert.deepEqual(vaultRouteFromSearch("?view=users&tab=audit&audit=export", true), {
+    page: "users",
+    collection: "all",
+    securityFocus: "all",
+    userManagementTab: "audit",
+    auditCategory: "export",
+  });
+  assert.equal(vaultRouteSearch({ page: "users", collection: "all", securityFocus: "all", userManagementTab: "audit", auditCategory: "export" }), "?view=users&tab=audit&audit=export");
 });
 
 test("用户管理始终保留有效主管理员", () => {

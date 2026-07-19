@@ -21,6 +21,7 @@ import {
   LogOut,
   Menu,
   Plus,
+  RefreshCw,
   Search,
   ShieldCheck,
   ShieldEllipsis,
@@ -36,7 +37,7 @@ import jsQR from "jsqr";
 import { ChangeEvent, FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { SecurityIssue } from "./lib/security-review";
 import { generateTotpCode, parseTotpInput, totpLabel, totpSecondsRemaining, type TotpConfig } from "./lib/totp";
-import { vaultRouteFromSearch, vaultRouteSearch, type SecurityFocus, type UserManagementTab, type VaultPage } from "./lib/vault-navigation";
+import { vaultRouteFromSearch, vaultRouteSearch, type AuditCategory, type SecurityFocus, type UserManagementTab, type VaultPage, type VaultRoute } from "./lib/vault-navigation";
 
 type Strength = "安全" | "一般" | "风险";
 type ItemType = "登录" | "卡片" | "安全笔记";
@@ -116,6 +117,12 @@ const emptySecuritySummary: VaultSecuritySummary = {
 };
 
 const spaceFilters = ["全部", "个人", "公共"] as const;
+const auditCategoryOptions = [
+  { value: "all", label: "全部操作" },
+  { value: "project", label: "公共项目" },
+  { value: "user", label: "系统用户" },
+  { value: "export", label: "数据导出" },
+] as const satisfies readonly SurfaceSelectOption<AuditCategory>[];
 
 function newTotpFormEntry(index = 0, config?: TotpConfig, label?: string): TotpFormEntry {
   return { id: crypto.randomUUID(), label: label ?? (index === 0 ? "登录验证器" : `验证器 ${index + 1}`), value: "", ...(config ? { config } : {}) };
@@ -335,6 +342,14 @@ function UserTableLoading() {
     <span className="sr-only">正在读取系统用户</span>
     <div className="user-table-loading-head" aria-hidden="true">{Array.from({ length: 5 }, (_, index) => <Skeleton className="skeleton-line skeleton-line-label" key={index} />)}</div>
     {Array.from({ length: 3 }, (_, index) => <div className="user-table-loading-row" key={index} aria-hidden="true"><Skeleton className="skeleton-line skeleton-line-title" /><Skeleton className="skeleton-status" /><Skeleton className="skeleton-status" /><Skeleton className="skeleton-time" /><Skeleton className="skeleton-line skeleton-line-copy" /></div>)}
+  </div>;
+}
+
+function AuditLogLoading() {
+  return <div className="audit-log-loading" role="status" aria-label="正在读取操作审计">
+    <span className="sr-only">正在读取操作审计</span>
+    <div className="audit-list-head" aria-hidden="true"><span>操作</span><span>操作者</span><span>时间</span></div>
+    {Array.from({ length: 4 }, (_, index) => <div className="audit-log-loading-row" key={index} aria-hidden="true"><Skeleton className="skeleton-icon" /><div><Skeleton className="skeleton-line skeleton-line-title" /><Skeleton className="skeleton-line skeleton-line-copy" /></div><Skeleton className="skeleton-line skeleton-line-copy" /><Skeleton className="skeleton-time" /></div>)}
   </div>;
 }
 
@@ -590,6 +605,24 @@ function auditLabel(action: string) {
   return labels[action] ?? "执行了安全操作";
 }
 
+function auditScopeLabel(action: string) {
+  if (action.startsWith("system_user_")) return "系统用户";
+  if (action.startsWith("export_") || action === "vault_exported") return "数据导出";
+  return "公共项目";
+}
+
+function AuditEventRow({ entry }: { entry: AuditEntry }) {
+  const scope = auditScopeLabel(entry.action);
+  const Icon = scope === "系统用户" ? UserCog : scope === "数据导出" ? FileKey2 : KeyRound;
+  const tone = scope === "系统用户" ? "user" : scope === "数据导出" ? "export" : "project";
+  return <li>
+    <span className={`audit-event-icon is-${tone}`} aria-hidden="true"><Icon size={16} /></span>
+    <div className="audit-event-copy"><strong>{auditLabel(entry.action)}</strong><span>{scope}</span></div>
+    <span className="audit-event-actor" title={entry.actorEmail}>{entry.actorEmail}</span>
+    <time>{entry.createdAt}</time>
+  </li>;
+}
+
 function approvalStatusLabel(approval: ApprovalRequest) {
   if (approval.status === "approved") return `已由 ${approval.approverEmail ?? "另一位用户"} 批准`;
   if (approval.status === "rejected") return "已被拒绝";
@@ -631,6 +664,12 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
   const [isSaving, setIsSaving] = useState(false);
   const [publicUserCount, setPublicUserCount] = useState(0);
   const [audit, setAudit] = useState<AuditEntry[]>([]);
+  const [auditCategory, setAuditCategory] = useState<AuditCategory>("all");
+  const [auditCurrentPage, setAuditCurrentPage] = useState(1);
+  const [auditPagination, setAuditPagination] = useState<Pagination>(emptyPagination);
+  const [isAuditLoading, setIsAuditLoading] = useState(false);
+  const [auditLoadError, setAuditLoadError] = useState<string | null>(null);
+  const [auditLoadAttempt, setAuditLoadAttempt] = useState(0);
   const [approvals, setApprovals] = useState<ApprovalRequest[]>([]);
   const [systemUsers, setSystemUsers] = useState<SystemUser[]>([]);
   const [systemUserEmail, setSystemUserEmail] = useState("");
@@ -664,11 +703,6 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
       : space === "全部" ? "全部项目" : `${space}项目`;
   const viewerInitial = viewer.displayName.trim().slice(0, 1).toLocaleUpperCase() || "你";
   const isAdmin = viewer.role === "admin";
-  const adminAudit = useMemo(() => audit.filter((entry) => [
-    "item_created", "item_updated", "item_published_to_public", "item_deleted",
-    "system_user_created", "system_user_role_changed", "system_user_status_changed", "system_user_deleted",
-    "export_approval_requested", "export_approved", "export_rejected", "vault_exported",
-  ].includes(entry.action)), [audit]);
   const activeDialogKey = pendingPublicPublish ? "publish" : deleteTarget ? "delete" : systemUserAction ? "system-user-action" : showUserCreateDialog ? "user-create" : editingItem ? "edit" : showAdd ? "add" : null;
   const isModalOpen = activeDialogKey !== null;
   const { totalItems, weakPasswordCount, reusedPasswordCount, missingTwoFactorCount, securityIssueCount, score: securityScore } = securitySummary;
@@ -690,6 +724,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
       setCollection(route.collection);
       setSecurityFocus(route.securityFocus);
       setUserManagementTab(route.userManagementTab);
+      setAuditCategory(route.auditCategory);
       if (moveFocus) focusMainContent();
     };
 
@@ -821,7 +856,6 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
         const payload = await readJsonResponse<{
           items?: VaultItemSummary[];
           publicUserCount?: number;
-          audit?: AuditEntry[];
           approvals?: ApprovalRequest[];
           categoryNames?: string[];
           spaceCounts?: Record<Space, number>;
@@ -836,7 +870,6 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
         const loadedItems = payload.items ?? [];
         setItems(loadedItems);
         setPublicUserCount(payload.publicUserCount ?? 0);
-        setAudit(payload.audit ?? []);
         setApprovals(payload.approvals ?? []);
         setCategoryNames(payload.categoryNames ?? []);
         setSpaceCounts(payload.spaceCounts ?? { 全部: 0, 个人: 0, 公共: 0 });
@@ -861,7 +894,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
   }, [activeCategory, collection, debouncedVaultQuery, loadAttempt, securityFocus, sortOrder, space, vaultCurrentPage]);
 
   useEffect(() => {
-    if (page !== "users" || !isAdmin) return;
+    if (page !== "users" || userManagementTab !== "users" || !isAdmin) return;
     let cancelled = false;
     const controller = new AbortController();
 
@@ -889,7 +922,38 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
 
     void loadUsers();
     return () => { cancelled = true; controller.abort(); };
-  }, [debouncedUserQuery, isAdmin, page, userCurrentPage, userLoadAttempt]);
+  }, [debouncedUserQuery, isAdmin, page, userCurrentPage, userLoadAttempt, userManagementTab]);
+
+  useEffect(() => {
+    if (page !== "users" || userManagementTab !== "audit" || !isAdmin) return;
+    let cancelled = false;
+    const controller = new AbortController();
+
+    async function loadAudit() {
+      setIsAuditLoading(true);
+      setAuditLoadError(null);
+      try {
+        const search = new URLSearchParams({ page: String(auditCurrentPage), category: auditCategory });
+        const payload = await requestVault<{ audit: AuditEntry[]; pagination?: Pagination }>(`/api/vault/audit-log?${search.toString()}`, { method: "GET", signal: controller.signal });
+        if (cancelled) return;
+        const nextPagination = payload.pagination ?? emptyPagination;
+        setAudit(payload.audit ?? []);
+        setAuditPagination(nextPagination);
+        setAuditCurrentPage((current) => current === nextPagination.page ? current : nextPagination.page);
+      } catch (error) {
+        if (!cancelled) {
+          const message = error instanceof Error ? error.message : "无法读取操作审计。";
+          setAuditLoadError(message);
+          setToast(message);
+        }
+      } finally {
+        if (!cancelled) setIsAuditLoading(false);
+      }
+    }
+
+    void loadAudit();
+    return () => { cancelled = true; controller.abort(); };
+  }, [auditCategory, auditCurrentPage, auditLoadAttempt, isAdmin, page, userManagementTab]);
 
   useEffect(() => {
     if (!activeSelectedId) return;
@@ -1088,7 +1152,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
     window.setTimeout(() => mainContentRef.current?.focus({ preventScroll: true }), 0);
   }
 
-  function writeRoute(next: { page: VaultPage; collection: Collection; securityFocus: SecurityFocus; userManagementTab: UserManagementTab }, replace = false) {
+  function writeRoute(next: VaultRoute, replace = false) {
     const search = vaultRouteSearch(next);
     const destination = `${window.location.pathname}${search}${window.location.hash}`;
     if (`${window.location.pathname}${window.location.search}${window.location.hash}` === destination) return;
@@ -1102,7 +1166,9 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
     setShowUserCreateDialog(false);
     setUserQuery("");
     setUserCurrentPage(1);
-    writeRoute({ page: "users", collection: "all", securityFocus: "all", userManagementTab: "users" });
+    setAuditCategory("all");
+    setAuditCurrentPage(1);
+    writeRoute({ page: "users", collection: "all", securityFocus: "all", userManagementTab: "users", auditCategory: "all" });
     focusMainContent();
   }
 
@@ -1110,7 +1176,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
     if (!isAdmin) return;
     setPage("users");
     setUserManagementTab(tab);
-    writeRoute({ page: "users", collection: "all", securityFocus: "all", userManagementTab: tab });
+    writeRoute({ page: "users", collection: "all", securityFocus: "all", userManagementTab: tab, auditCategory: tab === "audit" ? auditCategory : "all" });
   }
 
   function handleUserManagementTabKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
@@ -1129,14 +1195,14 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
     setSecurityFocus("all");
     setVaultCurrentPage(1);
     setMobileNav(false);
-    writeRoute({ page: "vault", collection: "all", securityFocus: "all", userManagementTab: "users" });
+    writeRoute({ page: "vault", collection: "all", securityFocus: "all", userManagementTab: "users", auditCategory: "all" });
     focusMainContent();
   }
 
   function openProfile() {
     setPage("profile");
     setMobileNav(false);
-    writeRoute({ page: "profile", collection: "all", securityFocus: "all", userManagementTab: "users" });
+    writeRoute({ page: "profile", collection: "all", securityFocus: "all", userManagementTab: "users", auditCategory: "all" });
     focusMainContent();
   }
 
@@ -1150,7 +1216,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
     setSecurityFocus(focus);
     setVaultCurrentPage(1);
     setMobileNav(false);
-    writeRoute({ page: "vault", collection: "security", securityFocus: focus, userManagementTab: "users" });
+    writeRoute({ page: "vault", collection: "security", securityFocus: focus, userManagementTab: "users", auditCategory: "all" });
     focusMainContent();
   }
 
@@ -1368,9 +1434,9 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
       </aside>
 
       <main ref={mainContentRef} id="main-content" className="main-shell" tabIndex={-1}>
-        <header className={`topbar ${page === "profile" ? "is-compact" : ""}`}>
+        <header className={`topbar ${page === "profile" || (page === "users" && userManagementTab === "audit") ? "is-compact" : ""}`}>
           <button className="icon-button mobile-menu" onClick={() => setMobileNav(true)} aria-label="打开导航"><Menu size={21} /></button>
-          <div className="page-title"><h1>{page === "profile" ? "个人信息" : page === "users" ? userManagementTab === "audit" ? "操作审计" : "用户管理" : "账户管理"}</h1><p>{page === "profile" ? "查看账户资料、系统角色、项目权限与数据安全" : page === "users" ? userManagementTab === "audit" ? "查看公共项目、系统用户与数据导出的管理操作" : "创建、调整、停用或删除系统用户" : "集中管理账号、密码与验证器代码；按风险筛选需处理账户"}</p></div>
+          <div className="page-title"><h1>{page === "profile" ? "个人信息" : page === "users" ? "用户管理" : "账户管理"}</h1><p>{page === "profile" ? "查看账户资料、系统角色、项目权限与数据安全" : page === "users" ? userManagementTab === "audit" ? "审查公共项目、系统用户与数据导出的管理操作" : "创建、调整、停用或删除系统用户" : "集中管理账号、密码与验证器代码；按风险筛选需处理账户"}</p></div>
           {page === "vault" && <div className="topbar-search">
             <Search size={18} aria-hidden="true" />
             <label className="sr-only" htmlFor="vault-search">搜索密码库</label>
@@ -1382,21 +1448,41 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
             <label className="sr-only" htmlFor="user-search">搜索系统用户</label>
             <input id="user-search" value={userQuery} onChange={(event) => { setUserQuery(event.target.value); setUserCurrentPage(1); }} placeholder="搜索用户邮箱" />
           </div>}
-          <button className="secondary-button lock-button" onClick={endSession}><LogOut size={17} />结束会话</button>
+          <button className="secondary-button lock-button" onClick={endSession} aria-label="结束会话" title="结束会话"><LogOut size={17} /></button>
           {page === "vault" && <button className="primary-button" onClick={() => setShowAdd(true)} disabled={isLoading || isSaving}><Plus size={18} />新建项目</button>}
           {page === "users" && userManagementTab === "users" && <button className="primary-button user-add-button" onClick={() => setShowUserCreateDialog(true)} disabled={isSaving}><Plus size={18} />添加用户</button>}
         </header>
 
         {page === "users" ? <section className="users-page" aria-labelledby="users-page-title">
-          <section className="users-panel" aria-labelledby="users-page-title" aria-busy={userManagementTab === "users" ? isUsersLoading : isLoading}>
+          <section className="users-panel" aria-labelledby="users-page-title" aria-busy={userManagementTab === "users" ? isUsersLoading : isAuditLoading}>
             <div className="users-toolbar">
-              <div className="users-toolbar-copy"><h2 id="users-page-title">{userManagementTab === "users" ? "系统用户" : "操作审计"}</h2><span>{userManagementTab === "users" ? isUsersLoading ? "正在读取用户" : `本页 ${systemUsers.length} 位，共 ${userPagination.total} 位用户` : `最近 ${adminAudit.length} 条管理记录`}</span></div>
+              <div className="users-toolbar-copy"><h2 id="users-page-title">{userManagementTab === "users" ? "系统用户" : "操作审计"}</h2><span>{userManagementTab === "users" ? isUsersLoading ? "正在读取用户" : `本页 ${systemUsers.length} 位，共 ${userPagination.total} 位用户` : isAuditLoading ? "正在读取记录" : `本页 ${audit.length} 条，共 ${auditPagination.total} 条记录`}</span></div>
               <div className="users-toolbar-actions"><div className="users-tabs" role="tablist" aria-label="用户管理内容"><button id="users-tab" type="button" role="tab" aria-selected={userManagementTab === "users"} aria-controls="users-tabpanel" tabIndex={userManagementTab === "users" ? 0 : -1} className={userManagementTab === "users" ? "is-active" : ""} onClick={() => selectUserManagementTab("users")} onKeyDown={handleUserManagementTabKeyDown}>系统用户</button><button id="audit-tab" type="button" role="tab" aria-selected={userManagementTab === "audit"} aria-controls="audit-tabpanel" tabIndex={userManagementTab === "audit" ? 0 : -1} className={userManagementTab === "audit" ? "is-active" : ""} onClick={() => selectUserManagementTab("audit")} onKeyDown={handleUserManagementTabKeyDown}>操作审计</button></div></div>
             </div>
             {userManagementTab === "users" ? <div role="tabpanel" id="users-tabpanel" aria-labelledby="users-tab">
               {isUsersLoading ? <UserTableLoading /> : userLoadError ? <div className="users-empty users-load-error" role="alert"><AlertTriangle size={18} aria-hidden="true" /><span>{userLoadError}</span><button type="button" className="secondary-button" onClick={() => setUserLoadAttempt((current) => current + 1)}>重新加载</button></div> : systemUsers.length > 0 ? <div className="system-user-table-wrap"><table className="system-user-table"><thead><tr><th scope="col">用户</th><th scope="col">角色</th><th scope="col">状态</th><th scope="col">创建时间</th><th scope="col">管理</th></tr></thead><tbody>{systemUsers.map((user) => <tr key={user.email}><td data-label="用户"><div className="system-user-identity"><strong title={user.email}>{user.email}</strong>{user.isCurrent && <span className="current-user">当前账户</span>}</div></td><td data-label="角色"><b className={`role-badge role-${user.role}`}>{user.role === "admin" ? "管理员" : "普通用户"}</b></td><td data-label="状态"><b className={`status-badge status-${user.status}`}>{user.status === "active" ? "已启用" : "已停用"}</b></td><td data-label="创建时间"><span className="system-user-created">{user.createdAt}</span></td><td data-label="管理">{user.isCurrent ? <span className="current-user">当前账户不可调整</span> : <div className="system-user-actions"><SurfaceSelect id={`role-${user.email}`} ariaLabel={`调整${user.email}的系统角色`} value={user.role} onChange={(role) => void updateSystemUser(user, { role })} options={[{ value: "user", label: "普通用户" }, { value: "admin", label: "管理员" }]} disabled={isSaving} compact /><button type="button" className="secondary-button" onClick={() => user.status === "active" ? setSystemUserAction({ user, kind: "suspend" }) : void updateSystemUser(user, { status: "active" })} disabled={isSaving}>{user.status === "active" ? "停用" : "启用"}</button><button type="button" className="secondary-button user-delete-button" onClick={() => setSystemUserAction({ user, kind: "delete" })} disabled={isSaving}>删除</button></div>}</td></tr>)}</tbody></table></div> : <p className="users-empty">没有找到匹配的系统用户。</p>}
               {!isUsersLoading && <PaginationControls pagination={userPagination} onChange={setUserCurrentPage} label="系统用户" />}
-            </div> : <section className="audit-panel" role="tabpanel" id="audit-tabpanel" aria-labelledby="audit-tab"><div className="audit-panel-header"><div><h3 id="audit-panel-title">管理操作记录</h3><p>仅显示公共项目变更、系统用户管理与数据导出审批；不会展示密码或验证码的查看、复制记录。</p></div><span>最近 20 条</span></div>{isLoading ? <p className="users-empty">正在读取操作审计。</p> : adminAudit.length > 0 ? <ul className="audit-list audit-list-panel">{adminAudit.map((entry, index) => <li key={`${entry.action}-${entry.createdAt}-${index}`}><span><strong>{entry.actorEmail}</strong>{auditLabel(entry.action)}</span><time>{entry.createdAt}</time></li>)}</ul> : <p className="users-empty">暂无公共项目、系统用户或导出相关的管理记录。</p>}</section>}
+            </div> : <section className="audit-panel" role="tabpanel" id="audit-tabpanel" aria-labelledby="audit-tab">
+              <div className="audit-panel-header">
+                <div className="audit-panel-heading">
+                  <span className="audit-panel-icon" aria-hidden="true"><ShieldCheck size={18} /></span>
+                  <div><h3 id="audit-panel-title">管理操作记录</h3><p>仅保留公共项目、系统用户和数据导出的管理行为；密码与验证码的查看、复制不会在此处显示。</p></div>
+                </div>
+                <div className="audit-panel-actions">
+                  <SurfaceSelect id="audit-category" ariaLabel="筛选操作类型" value={auditCategory} onChange={(nextCategory) => {
+                    setAuditCategory(nextCategory);
+                    setAuditCurrentPage(1);
+                    writeRoute({ page: "users", collection: "all", securityFocus: "all", userManagementTab: "audit", auditCategory: nextCategory });
+                  }} options={auditCategoryOptions} compact />
+                  <button type="button" className="secondary-button audit-refresh-button" onClick={() => setAuditLoadAttempt((current) => current + 1)} disabled={isAuditLoading}><RefreshCw size={15} aria-hidden="true" />{isAuditLoading ? "刷新中" : "刷新"}</button>
+                </div>
+              </div>
+              {isAuditLoading ? <AuditLogLoading /> : auditLoadError ? <div className="users-empty users-load-error" role="alert"><AlertTriangle size={18} aria-hidden="true" /><span>{auditLoadError}</span><button type="button" className="secondary-button" onClick={() => setAuditLoadAttempt((current) => current + 1)}>重新加载</button></div> : audit.length > 0 ? <>
+                <div className="audit-list-head" aria-hidden="true"><span>操作</span><span>操作者</span><span>时间</span></div>
+                <ul className="audit-list audit-list-panel">{audit.map((entry, index) => <AuditEventRow entry={entry} key={`${entry.action}-${entry.actorEmail}-${entry.createdAt}-${entry.itemId ?? ""}-${index}`} />)}</ul>
+                <PaginationControls pagination={auditPagination} onChange={setAuditCurrentPage} label="操作审计" />
+              </> : <p className="users-empty">当前筛选下没有管理记录。</p>}
+            </section>}
           </section>
         </section> : page === "profile" ? <ProfileOverview viewer={viewer} viewerInitial={viewerInitial} isLoading={isLoading} securityScore={securityScore} securityIssueCount={securityIssueCount} publicUserCount={publicUserCount} approvals={approvals} isSaving={isSaving} onOpenSecurity={openSecurityReview} onRequestExportApproval={() => void requestExportApproval()} onDecideExportApproval={(id, decision) => void decideExportApproval(id, decision)} onDownloadApprovedExport={(id) => void downloadApprovedExport(id)} /> : <>
         <section className="security-strip" aria-label="账户安全概览" aria-busy={isLoading}>

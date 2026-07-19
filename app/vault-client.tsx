@@ -375,6 +375,8 @@ function ProfileOverview({
   onDecideExportApproval,
   onDownloadApprovedExport,
   onRestartSecuritySession,
+  keyRotationRemaining,
+  onRotateEncryption,
 }: {
   viewer: Viewer;
   viewerInitial: string;
@@ -389,6 +391,8 @@ function ProfileOverview({
   onDecideExportApproval: (id: string, decision: "approved" | "rejected") => void;
   onDownloadApprovedExport: (id: string) => void;
   onRestartSecuritySession: () => void;
+  keyRotationRemaining: number | null;
+  onRotateEncryption: () => void;
 }) {
   const isAdmin = viewer.role === "admin";
   const hasOwnPendingExport = approvals.some((approval) => approval.isRequester && approval.status === "pending");
@@ -432,7 +436,9 @@ function ProfileOverview({
             {isLoading ? <Skeleton className="skeleton-button" /> : <button type="button" className="secondary-button" onClick={onRestartSecuritySession} disabled={isSaving}><ShieldCheck size={17} />重新验证登录</button>}
             {!isLoading && <p className="data-security-empty">敏感操作仅在重新验证后的 10 分钟内可用。</p>}
             {isLoading ? null : publicUserCount > 1 && !hasOwnPendingExport ? <button type="button" className="secondary-button" onClick={onRequestExportApproval} disabled={isSaving}><Archive size={17} />发起导出确认</button> : publicUserCount <= 1 ? <p className="data-security-empty">请先由管理员创建并启用另一位系统用户，才能使用双人确认导出。</p> : <p className="data-security-empty">你的导出确认正在等待另一位已启用用户批准。</p>}
+            {isAdmin && <button type="button" className="secondary-button" onClick={onRotateEncryption} disabled={isSaving}><RefreshCw size={17} />{keyRotationRemaining && keyRotationRemaining > 0 ? `继续迁移（剩余 ${keyRotationRemaining}）` : "迁移加密密钥"}</button>}
           </div>
+          {isAdmin && <p className="data-security-empty">密钥迁移每次最多处理 50 个项目；请先重新验证登录，再执行或继续迁移。</p>}
           <div className="data-security-requests">
             <div className="data-security-section-title"><h4>当前导出请求</h4><span>{isLoading ? "正在读取" : approvals.length > 0 ? `${approvals.length} 条` : "暂无"}</span></div>
             {isLoading ? <div className="approval-list" aria-label="正在读取导出请求"><div className="approval-row" aria-hidden="true"><div><Skeleton className="skeleton-line skeleton-line-title" /><Skeleton className="skeleton-line skeleton-line-copy" /></div><Skeleton className="skeleton-button" /></div></div> : approvals.length > 0 ? <div className="approval-list">{approvals.map((approval) => (
@@ -678,6 +684,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
   const [publicUserCount, setPublicUserCount] = useState(0);
   const [audit, setAudit] = useState<AuditEntry[]>([]);
   const [auditChainIntegrity, setAuditChainIntegrity] = useState<AuditIntegrity>("unknown");
+  const [keyRotationRemaining, setKeyRotationRemaining] = useState<number | null>(null);
   const [auditCategory, setAuditCategory] = useState<AuditCategory>("all");
   const [auditCurrentPage, setAuditCurrentPage] = useState(1);
   const [auditPagination, setAuditPagination] = useState<Pagination>(emptyPagination);
@@ -1406,6 +1413,22 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
     }
   }
 
+  async function rotateEncryption() {
+    setIsSaving(true);
+    try {
+      const payload = await requestVault<{ rotated: number; remaining: number; complete: boolean; activeKeyId: string }>("/api/vault/crypto-rotation", {
+        method: "POST",
+        body: JSON.stringify({ batchSize: 50 }),
+      });
+      setKeyRotationRemaining(payload.remaining);
+      setToast(payload.complete ? "加密密钥迁移已完成" : `已迁移 ${payload.rotated} 个项目，剩余 ${payload.remaining} 个`);
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "加密密钥迁移未完成。");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
   async function decideExportApproval(id: string, decision: "approved" | "rejected") {
     setIsSaving(true);
     try {
@@ -1537,7 +1560,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
               </> : <p className="users-empty">当前筛选下没有管理记录。</p>}
             </section>}
           </section>
-        </section> : page === "profile" ? <ProfileOverview viewer={viewer} viewerInitial={viewerInitial} isLoading={isLoading} securityScore={securityScore} securityIssueCount={securityIssueCount} publicUserCount={publicUserCount} approvals={approvals} isSaving={isSaving} onOpenSecurity={openSecurityReview} onRequestExportApproval={() => void requestExportApproval()} onDecideExportApproval={(id, decision) => void decideExportApproval(id, decision)} onDownloadApprovedExport={(id) => void downloadApprovedExport(id)} onRestartSecuritySession={restartSecuritySession} /> : <>
+        </section> : page === "profile" ? <ProfileOverview viewer={viewer} viewerInitial={viewerInitial} isLoading={isLoading} securityScore={securityScore} securityIssueCount={securityIssueCount} publicUserCount={publicUserCount} approvals={approvals} isSaving={isSaving} onOpenSecurity={openSecurityReview} onRequestExportApproval={() => void requestExportApproval()} onDecideExportApproval={(id, decision) => void decideExportApproval(id, decision)} onDownloadApprovedExport={(id) => void downloadApprovedExport(id)} onRestartSecuritySession={restartSecuritySession} keyRotationRemaining={keyRotationRemaining} onRotateEncryption={() => void rotateEncryption()} /> : <>
         <section className="security-strip" aria-label="账户安全概览" aria-busy={isLoading}>
           {isLoading ? <SecurityStripLoading /> : securityIssueCount > 0 ? <button type="button" className="risk-item" onClick={() => openSecurityReview()} aria-label="查看全部账户安全检查结果">
             <span className="risk-icon risk-danger"><AlertTriangle size={17} /></span><span><strong id="security-heading">基础安全评分 {securityScore}/100</strong><small>{securityIssueCount} 条基础风险待处理</small></span><ChevronRight size={18} aria-hidden="true" />

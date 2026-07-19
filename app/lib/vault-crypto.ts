@@ -2,6 +2,7 @@ import { env } from "cloudflare:workers";
 
 type VaultRuntimeEnv = {
   VAULT_ENCRYPTION_KEY?: string;
+  VAULT_ACTIVE_ENCRYPTION_KEY?: string;
   VAULT_ENCRYPTION_KEYS?: string;
   VAULT_ACTIVE_KEY_ID?: string;
   VAULT_AUDIT_SIGNING_KEY?: string;
@@ -59,7 +60,7 @@ function validKeyId(value: string) {
   return /^[a-zA-Z0-9._-]{1,64}$/.test(value);
 }
 
-function parseKeyring(value: string | undefined, fallback: string | undefined, activeOverride: string | undefined, defaultKeyId: string): Keyring {
+function parseKeyring(value: string | undefined, fallback: string | undefined, activeSecret: string | undefined, activeOverride: string | undefined, defaultKeyId: string): Keyring {
   if (value) {
     let parsed: unknown;
     try {
@@ -78,14 +79,14 @@ function parseKeyring(value: string | undefined, fallback: string | undefined, a
   if (!fallback) throw new Error("Vault encryption is not configured.");
   const activeKeyId = activeOverride || defaultKeyId;
   // 单密钥部署仍兼容历史 legacy 行，同时允许先把新写入标记到指定 key id。
-  return { activeKeyId, keys: { legacy: fallback, [activeKeyId]: fallback } };
+  return { activeKeyId, keys: { legacy: fallback, [activeKeyId]: activeSecret || fallback } };
 }
 
 function encryptionKeyring() {
   if (!encryptionKeyringPromise) {
     encryptionKeyringPromise = Promise.resolve().then(() => {
       const runtime = env as unknown as VaultRuntimeEnv;
-      return parseKeyring(runtime.VAULT_ENCRYPTION_KEYS, runtime.VAULT_ENCRYPTION_KEY, runtime.VAULT_ACTIVE_KEY_ID, "legacy");
+      return parseKeyring(runtime.VAULT_ENCRYPTION_KEYS, runtime.VAULT_ENCRYPTION_KEY, runtime.VAULT_ACTIVE_ENCRYPTION_KEY, runtime.VAULT_ACTIVE_KEY_ID, "legacy");
     });
   }
   return encryptionKeyringPromise;
@@ -117,6 +118,7 @@ async function auditKeyring() {
         return parseKeyring(
           runtime.VAULT_AUDIT_SIGNING_KEYS,
           runtime.VAULT_AUDIT_SIGNING_KEY,
+          undefined,
           runtime.VAULT_ACTIVE_AUDIT_SIGNING_KEY_ID,
           "audit-v1",
         );

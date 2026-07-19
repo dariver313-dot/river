@@ -14,6 +14,17 @@ const secretPatterns = [
   /(?:VAULT_ENCRYPTION_KEY|VAULT_AUDIT_SIGNING_KEY)\s*=\s*["']?[A-Za-z0-9_+\/=\-]{32,}/,
 ];
 
+const protectedWriteRoutes = [
+  "app/api/security/session/route.ts",
+  "app/api/users/route.ts",
+  "app/api/vault/approvals/route.ts",
+  "app/api/vault/audit/route.ts",
+  "app/api/vault/crypto-rotation/route.ts",
+  "app/api/vault/export/route.ts",
+  "app/api/vault/items/route.ts",
+  "app/api/vault/items/[id]/route.ts",
+];
+
 for (const file of tracked) {
   if (secretFile.test(file)) {
     violations.push(`${file}: 不应提交密钥或环境变量文件`);
@@ -23,6 +34,21 @@ for (const file of tracked) {
   if (secretPatterns.some((pattern) => pattern.test(content))) {
     violations.push(`${file}: 检测到疑似密钥或访问令牌`);
   }
+}
+
+for (const file of protectedWriteRoutes) {
+  const source = readFileSync(file, "utf8");
+  if (!source.includes("crossOriginRequestResponse")) violations.push(`${file}: 写接口缺少严格 CSRF 防护`);
+  if (!source.includes("rateLimitResponse")) violations.push(`${file}: 写接口缺少服务端限流`);
+}
+
+for (const file of ["app/api/users/route.ts", "app/api/vault/approvals/route.ts", "app/api/vault/crypto-rotation/route.ts", "app/api/vault/export/route.ts", "app/api/vault/items/[id]/route.ts"]) {
+  if (!readFileSync(file, "utf8").includes("requireRecentSecurityConfirmation")) violations.push(`${file}: 敏感接口缺少近期身份确认`);
+}
+
+const cryptoSource = readFileSync("app/lib/vault-crypto.ts", "utf8");
+if (!cryptoSource.includes("additionalData") || !cryptoSource.includes("VAULT_ACTIVE_ENCRYPTION_KEY")) {
+  violations.push("app/lib/vault-crypto.ts: 缺少 AAD 绑定或双密钥轮换支持");
 }
 
 if (violations.length > 0) {

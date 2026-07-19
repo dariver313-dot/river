@@ -1,7 +1,7 @@
 import { getD1 } from "../../db";
 import { secureJson } from "./response-security";
 
-type RateLimitScope = "read" | "write" | "sensitive" | "audit";
+type RateLimitScope = "read" | "write" | "sensitive" | "audit" | "maintenance";
 
 type RateLimitPolicy = {
   windowMs: number;
@@ -14,7 +14,9 @@ const policies: Record<RateLimitScope, RateLimitPolicy> = {
   write: { windowMs: 60_000, userLimit: 36, ipLimit: 72 },
   sensitive: { windowMs: 10 * 60_000, userLimit: 8, ipLimit: 14 },
   audit: { windowMs: 60_000, userLimit: 90, ipLimit: 150 },
+  maintenance: { windowMs: 10 * 60_000, userLimit: 60, ipLimit: 80 },
 };
+let lastCleanupAt = 0;
 
 function toBase64Url(bytes: Uint8Array) {
   let binary = "";
@@ -35,6 +37,11 @@ function clientAddress(request: Request) {
 async function consume(key: string, policy: RateLimitPolicy) {
   const d1 = getD1();
   const now = Date.now();
+  if (now - lastCleanupAt > 15 * 60_000) {
+    lastCleanupAt = now;
+    // 仅保留近期窗口。延迟清理不会改变限流结果，且避免不同 IP 长期累积占用 D1。
+    await d1.prepare("DELETE FROM request_rate_limits WHERE expires_at < ?").bind(now - 60 * 60_000).run();
+  }
   const windowStartedAt = Math.floor(now / policy.windowMs) * policy.windowMs;
   const expiresAt = windowStartedAt + policy.windowMs;
   const hash = await opaqueKey(key);

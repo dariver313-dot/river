@@ -729,7 +729,12 @@ export async function exportVaultData(email: string, approvalId: string) {
   const d1 = getD1();
   const publicVault = await findSharedPublicVault();
   if (!publicVault) throw new Error("公共密码库尚未初始化。");
-  const data = await listVaultData(email);
+  const recentExportCount = await d1.prepare(
+    `SELECT COUNT(*) AS count FROM audit_events
+     WHERE vault_id = ? AND actor_email = ? AND action = 'vault_exported'
+       AND julianday(created_at) >= julianday(?)`,
+  ).bind(publicVault.id, email, new Date(Date.now() - 60 * 60_000).toISOString()).first<{ count: number }>();
+  if ((recentExportCount?.count ?? 0) >= 3) throw new Error("导出次数已达到每小时安全上限。");
   const consumed = await d1.prepare(
     `UPDATE approval_requests
      SET status = 'expired', resolved_at = CURRENT_TIMESTAMP
@@ -739,6 +744,7 @@ export async function exportVaultData(email: string, approvalId: string) {
     throw new Error("该导出请求尚未获得另一位用户的有效批准。");
   }
 
+  const data = await listVaultData(email);
   await writeAudit(publicVault.id, email, "vault_exported");
   return { exportedAt: new Date().toISOString(), items: data.items };
 }

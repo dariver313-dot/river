@@ -12,7 +12,7 @@ export async function POST(request: Request) {
   const actor = await requireVaultActor(request);
   if (!actor) return actorRequiredResponse();
   if (actor.role !== "admin") return adminRequiredResponse();
-  const rateLimited = await rateLimitResponse(request, actor.email, "sensitive");
+  const rateLimited = await rateLimitResponse(request, actor.email, "maintenance");
   if (rateLimited) return rateLimited;
 
   try {

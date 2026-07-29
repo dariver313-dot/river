@@ -1,5 +1,4 @@
-import { getAuthenticatedUser } from "../../../selfhost-session";
-import { getActiveApplicationActor } from "../../../lib/user-store";
+import { actorRequiredResponse, requireApplicationActor } from "../../../lib/api-response";
 import { changeSelfHostedPassword, endAuthSession } from "../../../lib/selfhost-auth";
 import { readLimitedJsonObject } from "../../../lib/request-validation";
 import { rateLimitResponse } from "../../../lib/rate-limit";
@@ -11,10 +10,8 @@ export async function POST(request: Request) {
   const crossOriginResponse = crossOriginRequestResponse(request);
   if (crossOriginResponse) return crossOriginResponse;
 
-  const viewer = await getAuthenticatedUser();
-  if (!viewer || !await getActiveApplicationActor(viewer.email)) {
-    return secureJson({ error: "登录会话已结束或该账户不可用，请重新登录。" }, { status: 401 });
-  }
+  const viewer = await requireApplicationActor();
+  if (!viewer) return actorRequiredResponse();
   const rateLimited = await rateLimitResponse(request, viewer.email, "sensitive");
   if (rateLimited) return rateLimited;
 

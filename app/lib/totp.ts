@@ -10,6 +10,26 @@ export type TotpConfig = {
 };
 
 const MIN_SECRET_LENGTH = 16;
+const base32Alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+
+/** Generates an opaque base32 secret suitable for a six-digit TOTP app. */
+export function generateTotpSecret(byteLength = 20) {
+  const safeLength = Math.max(16, Math.min(64, Math.floor(byteLength)));
+  const bytes = crypto.getRandomValues(new Uint8Array(safeLength));
+  let buffer = 0;
+  let bits = 0;
+  let output = "";
+  for (const byte of bytes) {
+    buffer = (buffer << 8) | byte;
+    bits += 8;
+    while (bits >= 5) {
+      output += base32Alphabet[(buffer >>> (bits - 5)) & 31];
+      bits -= 5;
+    }
+  }
+  if (bits > 0) output += base32Alphabet[(buffer << (5 - bits)) & 31];
+  return output;
+}
 
 function cleanDisplayValue(value: string | null | undefined) {
   const cleaned = value?.trim().slice(0, 120);

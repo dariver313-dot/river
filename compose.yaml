@@ -2,28 +2,16 @@ services:
   djmima:
     build:
       context: .
-      dockerfile: Dockerfile
-    container_name: djmima
-    restart: unless-stopped
     env_file:
       - .env
+    init: true
+    restart: unless-stopped
     ports:
       - "127.0.0.1:3101:3001"
     volumes:
-      - djmima_data:/app/data
+      - ./data:/app/data
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    read_only: true
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,size=64m,mode=1777
-    deploy:
-      resources:
-        limits:
-          cpus: "1.00"
-          memory: 1G
-
-volumes:
-  djmima_data:
-    name: djmima_data
+    stop_grace_period: 30s

@@ -1,5 +1,5 @@
 {
-  "name": "site-creator-vinext-starter",
+  "name": "djmima",
   "version": "0.1.0",
   "private": true,
   "engines": {
@@ -14,42 +14,38 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "test": "npm run build && node --experimental-strip-types --test tests/*.test.ts",
+    "generate:totp-secret": "node ./scripts/generate-totp-secret.mjs",
+    "test": "npm run build -- --webpack && node --experimental-strip-types --test tests/*.test.ts && node ./scripts/production-smoke.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
-    "security:check": "npm audit --audit-level=high && node ./scripts/security-check.mjs"
+    "security:check": "npm audit --omit=dev --audit-level=high && node ./scripts/security-check.mjs"
   },
   "dependencies": {
     "better-sqlite3": "^12.6.2",
-    "drizzle-orm": "0.45.2",
+    "clsx": "^2.1.1",
     "jsqr": "^1.4.0",
     "lucide-react": "^1.25.0",
-    "next": "16.2.6",
+    "maxmind": "^5.0.6",
+    "next": "16.2.11",
+    "nodemailer": "^9.0.3",
     "react": "19.2.6",
-    "react-dom": "19.2.6"
+    "react-dom": "19.2.6",
+    "tailwind-merge": "^3.6.0"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.13",
-    "@cloudflare/vite-plugin": "1.45.1",
-    "@cloudflare/workers-types": "5.20260719.1",
     "@tailwindcss/postcss": "4.2.1",
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "22.19.19",
+    "@types/nodemailer": "^8.0.1",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
-    "@vitejs/plugin-react": "6.0.2",
-    "@vitejs/plugin-rsc": "0.5.26",
     "eslint": "9.39.4",
-    "eslint-config-next": "16.2.6",
-    "react-server-dom-webpack": "19.2.6",
+    "eslint-config-next": "16.2.11",
     "tailwindcss": "4.2.1",
-    "typescript": "5.9.3",
-    "vinext": "0.0.50",
-    "vite": "8.1.5",
-    "wrangler": "4.112.0"
+    "typescript": "5.9.3"
   },
   "overrides": {
-    "next": {
-      "postcss": "8.5.10"
-    }
+    "sharp": "0.35.3",
+    "postcss": "8.5.19"
   },
   "type": "module"
 }

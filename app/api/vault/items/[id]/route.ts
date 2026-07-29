@@ -2,11 +2,17 @@ import { actorRequiredResponse, apiError, readJsonObject, requireVaultActor } fr
 import { crossOriginRequestResponse, secureEmpty, secureJson } from "../../../../lib/response-security";
 import { rateLimitResponse } from "../../../../lib/rate-limit";
 import { requireRecentSecurityConfirmation } from "../../../../lib/security-session";
-import { deleteVaultItem, getVaultItem, updateVaultItem } from "../../../../lib/vault-store";
+import { deleteVaultItem, getVaultItem, getVaultItemScope, updateVaultItem } from "../../../../lib/vault-store";
+import { verifySelfHostedTotp } from "../../../../lib/selfhost-auth";
 
 export const dynamic = "force-dynamic";
 
 type RouteContext = { params: Promise<{ id: string }> };
+
+async function requirePublicItemTotp(actor: { email: string; authSessionId: string }, request: Request, body: Record<string, unknown>) {
+  await requireRecentSecurityConfirmation(actor.email, actor.authSessionId, request);
+  return typeof body.userCode === "string" && await verifySelfHostedTotp(actor.email, body.userCode);
+}
 
 export async function GET(request: Request, context: RouteContext) {
   const actor = await requireVaultActor(request);
@@ -33,7 +39,10 @@ export async function PATCH(request: Request, context: RouteContext) {
   try {
     const { id } = await context.params;
     const body = await readJsonObject(request);
-    await requireRecentSecurityConfirmation(actor.email, request);
+    const scope = await getVaultItemScope(actor.email, id);
+    if ((scope.group === "公共" || body.group === "公共") && !await requirePublicItemTotp(actor, request, body)) {
+      return secureJson({ error: "Google 验证码不正确，请重试。" }, { status: 401 });
+    }
     const item = await updateVaultItem(actor.email, id, body);
     return secureJson({ item });
   } catch (error) {
@@ -50,8 +59,12 @@ export async function DELETE(request: Request, context: RouteContext) {
   if (rateLimited) return rateLimited;
 
   try {
-    await requireRecentSecurityConfirmation(actor.email, request);
+    const body = await readJsonObject(request);
     const { id } = await context.params;
+    const scope = await getVaultItemScope(actor.email, id);
+    if (scope.group === "公共" && !await requirePublicItemTotp(actor, request, body)) {
+      return secureJson({ error: "Google 验证码不正确，请重试。" }, { status: 401 });
+    }
     await deleteVaultItem(actor.email, id);
     return secureEmpty();
   } catch (error) {

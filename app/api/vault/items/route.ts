@@ -2,6 +2,7 @@ import { actorRequiredResponse, apiError, readJsonObject, requireVaultActor } fr
 import { crossOriginRequestResponse, secureJson } from "../../../lib/response-security";
 import { rateLimitResponse } from "../../../lib/rate-limit";
 import { requireRecentSecurityConfirmation } from "../../../lib/security-session";
+import { verifySelfHostedTotp } from "../../../lib/selfhost-auth";
 import { createVaultItem } from "../../../lib/vault-store";
 
 export const dynamic = "force-dynamic";
@@ -16,7 +17,12 @@ export async function POST(request: Request) {
 
   try {
     const body = await readJsonObject(request);
-    if (body.group === "公共") await requireRecentSecurityConfirmation(actor.email, request);
+    if (body.group === "公共") {
+      await requireRecentSecurityConfirmation(actor.email, actor.authSessionId, request);
+      if (typeof body.userCode !== "string" || !await verifySelfHostedTotp(actor.email, body.userCode)) {
+        return secureJson({ error: "Google 验证码不正确，请重试。" }, { status: 401 });
+      }
+    }
     const item = await createVaultItem(actor.email, body);
     return secureJson({ item }, { status: 201 });
   } catch (error) {

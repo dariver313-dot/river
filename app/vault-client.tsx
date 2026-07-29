@@ -2,11 +2,8 @@
 
 import {
   AlertTriangle,
-  Archive,
   ArrowUpRight,
   Check,
-  ChevronDown,
-  ChevronLeft,
   ChevronRight,
   Clipboard,
   Clock3,
@@ -18,11 +15,13 @@ import {
   FileKey2,
   ImageUp,
   KeyRound,
+  LayoutPanelLeft,
   LogOut,
   Menu,
   Plus,
   RefreshCw,
   Search,
+  Settings2,
   ShieldCheck,
   ShieldEllipsis,
   Smartphone,
@@ -33,11 +32,17 @@ import {
   WandSparkles,
   X,
 } from "lucide-react";
-import jsQR from "jsqr";
 import { ChangeEvent, FormEvent, KeyboardEvent as ReactKeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import { AdminTableLoading, AdminTableState } from "./components/admin-table-state";
+import { TablePagination } from "./components/table-pagination";
+import { Spotlight } from "./components/ui/spotlight";
+import { SurfaceSelect, type SurfaceSelectOption } from "./components/surface-select";
+import { EmbeddedPagesWorkspace } from "./embedded/embedded-pages-client";
+import { EmbeddedPageManagerContent } from "./embedded/manage/embedded-page-manager";
 import type { SecurityIssue } from "./lib/security-review";
 import { generateTotpCode, parseTotpInput, totpLabel, totpSecondsRemaining, type TotpConfig } from "./lib/totp";
 import { vaultRouteFromSearch, vaultRouteSearch, type AuditCategory, type SecurityFocus, type UserManagementTab, type VaultPage, type VaultRoute } from "./lib/vault-navigation";
+import { profileAvatarStyles, type ProfileAvatarStyle } from "./lib/profile";
 
 type Strength = "安全" | "一般" | "风险";
 type ItemType = "登录" | "卡片" | "安全笔记";
@@ -75,8 +80,10 @@ type VaultItemSummary = Omit<VaultItem, "password" | "note" | "totps"> & {
 
 type Viewer = {
   displayName: string;
+  avatarStyle: ProfileAvatarStyle;
   email: string;
   role: "admin" | "user";
+  isInitialAdmin: boolean;
 };
 
 type CredentialForm = Pick<VaultItem, "name" | "domain" | "username" | "password" | "category" | "group"> & {
@@ -84,38 +91,13 @@ type CredentialForm = Pick<VaultItem, "name" | "domain" | "username" | "password
 };
 type AuditIntegrity = "legacy" | "sealed" | "failed" | "unknown";
 type AuditEntry = { action: string; actorEmail: string; itemId: string | null; createdAt: string; integrity?: Exclude<AuditIntegrity, "unknown"> };
-type SystemUser = { email: string; role: "admin" | "user"; status: "active" | "suspended"; createdAt: string; isCurrent: boolean };
-type SystemUserProvisioning = { email: string; setupKey: string; temporaryPassword: string };
-type DeleteTarget = Pick<VaultItem, "id" | "name" | "username" | "type">;
-type ApprovalRequest = {
-  id: string;
-  action: "export_vault";
-  requestedBy: string;
-  status: "pending" | "approved" | "rejected" | "expired";
-  approverEmail: string | null;
-  expiresAt: string;
-  canDecide: boolean;
-  isRequester: boolean;
-};
+type SystemUser = { email: string; role: "admin" | "user"; status: "pending" | "active" | "suspended" | "frozen"; createdAt: string; lastLoginAt: string | null; isOnline: boolean; isCurrent: boolean };
+type EmbeddedNavigationPage = { id: string; name: string };
+type SystemUserProvisioning = { account: string; delivery: "email" | "manual"; expiresAt: string; code?: string };
+type AuthenticatorRecovery = { account: string; delivery: "email"; expiresAt: string };
+type DeleteTarget = Pick<VaultItem, "id" | "name" | "username" | "type" | "group">;
 type Pagination = { page: number; pageSize: number; total: number; pageCount: number };
 
-function generateLoginTotpSetupKey() {
-  const bytes = crypto.getRandomValues(new Uint8Array(20));
-  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
-  let output = "";
-  let buffer = 0;
-  let bits = 0;
-  for (const byte of bytes) {
-    buffer = (buffer << 8) | byte;
-    bits += 8;
-    while (bits >= 5) {
-      output += alphabet[(buffer >>> (bits - 5)) & 31];
-      bits -= 5;
-    }
-  }
-  if (bits > 0) output += alphabet[(buffer << (5 - bits)) & 31];
-  return output;
-}
 type VaultSecuritySummary = {
   totalItems: number;
   weakPasswordCount: number;
@@ -124,7 +106,7 @@ type VaultSecuritySummary = {
   securityIssueCount: number;
   score: number;
 };
-type SystemUserAction = { user: SystemUser; kind: "suspend" | "delete" };
+type SystemUserAction = { user: SystemUser; kind: "suspend" | "activate" | "delete" | "role" | "reset-authenticator" | "resend-activation"; role?: "admin" | "user" };
 type PendingPublicPublish = { item?: VaultItem; form: CredentialForm };
 
 const emptyPagination: Pagination = { page: 1, pageSize: 20, total: 0, pageCount: 1 };
@@ -137,12 +119,58 @@ const emptySecuritySummary: VaultSecuritySummary = {
   score: 0,
 };
 
+function parseStoredTime(value: string) {
+  return Date.parse(value.endsWith("Z") ? value : `${value.replace(" ", "T")}Z`);
+}
+
+function relativeTime(value: string | null) {
+  if (!value) return "从未登录";
+  const timestamp = parseStoredTime(value);
+  if (Number.isNaN(timestamp)) return value;
+  const elapsedMinutes = Math.max(0, Math.floor((Date.now() - timestamp) / 60_000));
+  if (elapsedMinutes < 1) return "刚刚";
+  if (elapsedMinutes < 60) return `${elapsedMinutes} 分钟前`;
+  if (elapsedMinutes < 1_440) return `${Math.floor(elapsedMinutes / 60)} 小时前`;
+  return `${Math.floor(elapsedMinutes / 1_440)} 天前`;
+}
+
+function exactTime(value: string | null) {
+  if (!value) return "从未登录";
+  const timestamp = parseStoredTime(value);
+  if (Number.isNaN(timestamp)) return value;
+  return new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short", hour12: false }).format(timestamp);
+}
+
+function systemUserStatusLabel(status: SystemUser["status"]) {
+  if (status === "pending") return "待激活";
+  if (status === "active") return "已启用";
+  if (status === "frozen") return "已冻结";
+  return "已停用";
+}
+
+function endCurrentSecuritySession(returnTo = "/login") {
+  void Promise.allSettled([
+    fetch("/api/security/session", {
+      method: "DELETE",
+      cache: "no-store",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+    }),
+    fetch("/api/auth/logout", {
+      method: "POST",
+      cache: "no-store",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+    }),
+  ]).finally(() => window.location.assign(returnTo));
+}
+
 const spaceFilters = ["全部", "个人", "公共"] as const;
 const auditCategoryOptions = [
   { value: "all", label: "全部操作" },
   { value: "project", label: "公共项目" },
   { value: "user", label: "系统用户" },
-  { value: "export", label: "数据导出" },
+  { value: "embedded", label: "内嵌页面" },
 ] as const satisfies readonly SurfaceSelectOption<AuditCategory>[];
 
 function auditIntegrityLabel(value: AuditIntegrity) {
@@ -192,9 +220,9 @@ function StrengthBadge({ strength }: { strength: Strength }) {
 }
 
 const securityIssueCopy: Record<SecurityIssue, { label: string; detail: string }> = {
-  weak_password: { label: "密码长度不足", detail: "建议使用至少 14 位的随机密码" },
-  reused_password: { label: "密码重复", detail: "同一密码正用于多个项目" },
-  missing_two_factor: { label: "未开启双重验证", detail: "建议在服务网站开启验证器保护" },
+  weak_password: { label: "密码长度不足", detail: "少于 14 位" },
+  reused_password: { label: "密码重复", detail: "用于多个项目" },
+  missing_two_factor: { label: "未开启双重验证", detail: "未配置验证器" },
 };
 
 function SecurityIssueBadges({ issues }: { issues: SecurityIssue[] }) {
@@ -220,115 +248,6 @@ async function readJsonResponse<T>(response: Response, fallback: string): Promis
   }
 }
 
-function pageNumbers(currentPage: number, pageCount: number) {
-  if (pageCount <= 7) return Array.from({ length: pageCount }, (_, index) => index + 1);
-  const candidates = [1, currentPage - 1, currentPage, currentPage + 1, pageCount]
-    .filter((page, index, values) => page >= 1 && page <= pageCount && values.indexOf(page) === index)
-    .sort((left, right) => left - right);
-  const values: Array<number | "ellipsis"> = [];
-  candidates.forEach((page, index) => {
-    const previous = candidates[index - 1];
-    if (previous && page - previous > 1) values.push("ellipsis");
-    values.push(page);
-  });
-  return values;
-}
-
-function PaginationControls({ pagination, onChange, label }: { pagination: Pagination; onChange: (page: number) => void; label: string }) {
-  if (pagination.total === 0) return null;
-  return <nav className="pagination" aria-label={`${label}分页`}>
-    <span className="pagination-summary">第 {pagination.page} / {pagination.pageCount} 页，共 {pagination.total} 项</span>
-    <div className="pagination-controls">
-      <button type="button" className="pagination-button pagination-step" onClick={() => onChange(pagination.page - 1)} disabled={pagination.page === 1}><ChevronLeft size={15} aria-hidden="true" /><span>上一页</span></button>
-      {pageNumbers(pagination.page, pagination.pageCount).map((page, index) => page === "ellipsis"
-        ? <span className="pagination-ellipsis" key={`ellipsis-${index}`} aria-hidden="true">…</span>
-        : <button type="button" className={`pagination-button ${page === pagination.page ? "is-current" : ""}`} key={page} onClick={() => onChange(page)} aria-current={page === pagination.page ? "page" : undefined}>{page}</button>)}
-      <button type="button" className="pagination-button pagination-step" onClick={() => onChange(pagination.page + 1)} disabled={pagination.page === pagination.pageCount}><span>下一页</span><ChevronRight size={15} aria-hidden="true" /></button>
-    </div>
-  </nav>;
-}
-
-type SurfaceSelectOption<T extends string> = { value: T; label: string };
-
-function SurfaceSelect<T extends string>({
-  id,
-  ariaLabel,
-  value,
-  options,
-  onChange,
-  disabled = false,
-  compact = false,
-}: {
-  id: string;
-  ariaLabel: string;
-  value: T;
-  options: readonly SurfaceSelectOption<T>[];
-  onChange: (value: T) => void;
-  disabled?: boolean;
-  compact?: boolean;
-}) {
-  const [isOpen, setIsOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
-  const selected = options.find((option) => option.value === value) ?? options[0];
-
-  useEffect(() => {
-    if (!isOpen) return;
-    const closeOnOutsidePress = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setIsOpen(false);
-    };
-    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
-      if (event.key === "Escape") setIsOpen(false);
-    };
-    document.addEventListener("pointerdown", closeOnOutsidePress);
-    document.addEventListener("keydown", closeOnEscape);
-    return () => {
-      document.removeEventListener("pointerdown", closeOnOutsidePress);
-      document.removeEventListener("keydown", closeOnEscape);
-    };
-  }, [isOpen]);
-
-  const moveSelection = (direction: 1 | -1) => {
-    const currentIndex = Math.max(0, options.findIndex((option) => option.value === value));
-    const nextIndex = (currentIndex + direction + options.length) % options.length;
-    onChange(options[nextIndex].value);
-  };
-
-  return (
-    <div className={`surface-select ${compact ? "is-compact" : ""} ${isOpen ? "is-open" : ""}`} ref={rootRef}>
-      <button
-        id={id}
-        type="button"
-        className="surface-select-trigger"
-        aria-label={ariaLabel}
-        aria-haspopup="listbox"
-        aria-expanded={isOpen}
-        aria-controls={`${id}-options`}
-        disabled={disabled}
-        onClick={() => setIsOpen((current) => !current)}
-        onKeyDown={(event) => {
-          if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-            event.preventDefault();
-            moveSelection(event.key === "ArrowDown" ? 1 : -1);
-            setIsOpen(true);
-          }
-          if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault();
-            setIsOpen((current) => !current);
-          }
-        }}
-      >
-        <span>{selected.label}</span>
-        <ChevronDown size={16} aria-hidden="true" />
-      </button>
-      {isOpen && <div id={`${id}-options`} className="surface-select-options" role="listbox" aria-label={ariaLabel}>
-        {options.map((option) => <button key={option.value} type="button" className={option.value === value ? "is-selected" : ""} role="option" aria-selected={option.value === value} onClick={() => { onChange(option.value); setIsOpen(false); }}>
-          <span>{option.label}</span>{option.value === value && <Check size={15} aria-hidden="true" />}
-        </button>)}
-      </div>}
-    </div>
-  );
-}
-
 function Skeleton({ className = "" }: { className?: string }) {
   return <span className={`skeleton ${className}`.trim()} aria-hidden="true" />;
 }
@@ -344,8 +263,8 @@ function SecurityStripLoading() {
 }
 
 function VaultListLoading() {
-  return <div className="vault-loading-rows" role="status" aria-label="正在读取密码库">
-    <span className="sr-only">正在读取密码库</span>
+  return <div className="vault-loading-rows" role="status" aria-label="正在读取项目">
+    <span className="sr-only">正在读取项目</span>
     {Array.from({ length: 4 }, (_, index) => <div className="vault-row vault-row-loading" key={index} aria-hidden="true">
       <div className="item-identity"><Skeleton className="skeleton-brand" /><span className="loading-item-copy"><Skeleton className="skeleton-line skeleton-line-title" /><Skeleton className="skeleton-line skeleton-line-copy" /></span></div>
       <Skeleton className="skeleton-status" />
@@ -366,11 +285,7 @@ function DetailPanelLoading() {
 }
 
 function UserTableLoading() {
-  return <div className="user-table-loading" role="status" aria-label="正在读取系统用户">
-    <span className="sr-only">正在读取系统用户</span>
-    <div className="user-table-loading-head" aria-hidden="true">{Array.from({ length: 5 }, (_, index) => <Skeleton className="skeleton-line skeleton-line-label" key={index} />)}</div>
-    {Array.from({ length: 3 }, (_, index) => <div className="user-table-loading-row" key={index} aria-hidden="true"><Skeleton className="skeleton-line skeleton-line-title" /><Skeleton className="skeleton-status" /><Skeleton className="skeleton-status" /><Skeleton className="skeleton-time" /><Skeleton className="skeleton-line skeleton-line-copy" /></div>)}
-  </div>;
+  return <AdminTableLoading label="正在读取系统用户" columns={7} />;
 }
 
 function AuditLogLoading() {
@@ -387,96 +302,42 @@ function ProfileOverview({
   isLoading,
   securityScore,
   securityIssueCount,
-  publicUserCount,
-  approvals,
   isSaving,
   onOpenSecurity,
-  onRequestExportApproval,
-  onDecideExportApproval,
-  onDownloadApprovedExport,
   onRestartSecuritySession,
-  keyRotationRemaining,
-  onRotateEncryption,
+  onOpenProfileEditor,
 }: {
   viewer: Viewer;
   viewerInitial: string;
   isLoading: boolean;
   securityScore: number;
   securityIssueCount: number;
-  publicUserCount: number;
-  approvals: ApprovalRequest[];
   isSaving: boolean;
   onOpenSecurity: () => void;
-  onRequestExportApproval: () => void;
-  onDecideExportApproval: (id: string, decision: "approved" | "rejected") => void;
-  onDownloadApprovedExport: (id: string) => void;
   onRestartSecuritySession: () => void;
-  keyRotationRemaining: number | null;
-  onRotateEncryption: () => void;
+  onOpenProfileEditor: () => void;
 }) {
   const isAdmin = viewer.role === "admin";
-  const hasOwnPendingExport = approvals.some((approval) => approval.isRequester && approval.status === "pending");
-  return (
-    <section className="profile-page" aria-labelledby="profile-page-title">
-      <div className="profile-hero">
-        <span className="profile-avatar" aria-hidden="true">{viewerInitial}</span>
-        <div className="profile-hero-copy"><span className="eyebrow">账户资料</span><h2 id="profile-page-title">{viewer.displayName}</h2><p title={viewer.email}>{viewer.email}</p></div>
-        <span className={`role-badge role-${viewer.role}`}>{isAdmin ? "管理员" : "普通用户"}</span>
+  const loginMethod = "登录密码 + Google 验证器";
+  const loginAccessScope = "登录地点变化时需邮箱确认";
+  const systemAccessScope = viewer.isInitialAdmin ? "可管理用户与公共项目" : isAdmin ? "可管理用户与公共项目" : "无系统管理权限";
+  return <section className="profile-page" aria-labelledby="profile-page-title">
+    <div className="profile-hero">
+      <div className="profile-identity">
+        <span className={`profile-avatar profile-avatar-${viewer.avatarStyle}`} aria-hidden="true">{viewerInitial}</span>
+        <div className="profile-hero-copy"><span className="eyebrow">个人资料</span><h2 id="profile-page-title">{viewer.displayName}</h2><div className="profile-account-line"><span title={viewer.email}>{viewer.email}</span><b className={`role-badge role-${viewer.role}`}>{isAdmin ? "管理员" : "普通用户"}</b></div></div>
       </div>
-
-      <div className="profile-layout">
-        <section className="profile-card" aria-labelledby="profile-account-title">
-          <div className="profile-card-heading"><span className="profile-card-icon"><UserRound size={18} /></span><div><h3 id="profile-account-title">基本信息</h3><p>账号信息由当前登录账户提供</p></div></div>
-          <dl className="profile-details">
-            <div><dt>账号名称</dt><dd>{viewer.displayName}</dd></div>
-            <div><dt>登录邮箱</dt><dd title={viewer.email}>{viewer.email}</dd></div>
-            <div><dt>登录方式</dt><dd>登录密码 + 本人 Google 验证器</dd></div>
-          </dl>
-          <a className="secondary-button" href="/account/password"><KeyRound size={17} />修改登录密码</a>
-        </section>
-
-        <section className="profile-card" aria-labelledby="profile-permission-title">
-          <div className="profile-card-heading"><span className="profile-card-icon"><UsersRound size={18} /></span><div><h3 id="profile-permission-title">项目权限</h3><p>权限随系统角色自动生效</p></div></div>
-          <div className="profile-permission-list">
-            <div><span>个人项目</span><strong>仅你可查看和管理</strong></div>
-            <div><span>公共项目</span><strong>{isAdmin ? "可查看并配置公共项目" : "可查看公共项目"}</strong></div>
-            <div><span>系统用户</span><strong>{isAdmin ? "可创建、调整与停用用户" : "由管理员统一维护"}</strong></div>
-          </div>
-        </section>
-
-        <section className="profile-card profile-security-card" aria-labelledby="profile-security-title">
-          <div className="profile-card-heading"><span className="profile-card-icon"><ShieldCheck size={18} /></span><div><h3 id="profile-security-title">账户安全</h3><p>基础安全与会话保护状态</p></div></div>
-          <div className="profile-security-summary"><div><strong>{isLoading ? <Skeleton className="skeleton-score" /> : securityScore}</strong><span>基础安全评分</span></div><p>{isLoading ? <Skeleton className="skeleton-line skeleton-line-profile" /> : securityIssueCount === 0 ? "未发现需要处理的基础风险" : `${securityIssueCount} 条基础风险待处理`}</p></div>
-          <div className="profile-security-footer"><span>服务端和当前设备均会在空闲 15 分钟后结束会话</span><button type="button" className="secondary-button" onClick={onOpenSecurity} disabled={isLoading}>{isLoading ? "正在读取安全状态" : "查看安全检查"}</button></div>
-        </section>
-
-        <section className="profile-card profile-data-security-card" aria-labelledby="profile-data-security-title">
-          <div className="profile-card-heading"><span className="profile-card-icon"><Archive size={18} /></span><div><h3 id="profile-data-security-title">数据与安全</h3><p>导出敏感数据前需要另一位已启用用户确认</p></div></div>
-          <aside className="data-security-note" role="note"><ShieldCheck size={17} aria-hidden="true" /><div><strong>双人确认导出</strong><span>导出文件包含你的个人项目和全部公共项目的明文信息；确认有效期为 10 分钟。</span></div></aside>
-          <div className="data-security-actions">
-            {isLoading ? <Skeleton className="skeleton-button" /> : <button type="button" className="secondary-button" onClick={onRestartSecuritySession} disabled={isSaving}><ShieldCheck size={17} />重新验证登录</button>}
-            {!isLoading && <p className="data-security-empty">敏感操作仅在重新验证后的 10 分钟内可用。</p>}
-            {isLoading ? null : publicUserCount > 1 && !hasOwnPendingExport ? <button type="button" className="secondary-button" onClick={onRequestExportApproval} disabled={isSaving}><Archive size={17} />发起导出确认</button> : publicUserCount <= 1 ? <p className="data-security-empty">请先由管理员创建并启用另一位系统用户，才能使用双人确认导出。</p> : <p className="data-security-empty">你的导出确认正在等待另一位已启用用户批准。</p>}
-            {isAdmin && <button type="button" className="secondary-button" onClick={onRotateEncryption} disabled={isSaving}><RefreshCw size={17} />{keyRotationRemaining && keyRotationRemaining > 0 ? `继续迁移（剩余 ${keyRotationRemaining}）` : "迁移加密密钥"}</button>}
-          </div>
-          {isAdmin && <p className="data-security-empty">密钥迁移每次最多处理 50 个项目；请先重新验证登录，再执行或继续迁移。</p>}
-          <div className="data-security-requests">
-            <div className="data-security-section-title"><h4>当前导出请求</h4><span>{isLoading ? "正在读取" : approvals.length > 0 ? `${approvals.length} 条` : "暂无"}</span></div>
-            {isLoading ? <div className="approval-list" aria-label="正在读取导出请求"><div className="approval-row" aria-hidden="true"><div><Skeleton className="skeleton-line skeleton-line-title" /><Skeleton className="skeleton-line skeleton-line-copy" /></div><Skeleton className="skeleton-button" /></div></div> : approvals.length > 0 ? <div className="approval-list">{approvals.map((approval) => (
-              <div className="approval-row" key={approval.id}>
-                <div><strong>{approval.isRequester ? "你的导出确认" : `${approval.requestedBy} 请求导出确认`}</strong><span>{approvalStatusLabel(approval)}</span></div>
-                <div className="approval-actions">
-                  {approval.canDecide && <><button type="button" className="secondary-button" onClick={() => onDecideExportApproval(approval.id, "rejected")} disabled={isSaving}>拒绝</button><button type="button" className="primary-button" onClick={() => onDecideExportApproval(approval.id, "approved")} disabled={isSaving}>批准</button></>}
-                  {approval.isRequester && approval.status === "approved" && <button type="button" className="primary-button" onClick={() => onDownloadApprovedExport(approval.id)} disabled={isSaving}><Archive size={17} />下载副本</button>}
-                  {approval.isRequester && approval.status === "pending" && <span className="approval-pending">等待另一位用户批准</span>}
-                </div>
-              </div>
-            ))}</div> : <p className="data-security-empty">当前没有需要处理的导出请求。</p>}
-          </div>
-        </section>
+      <div className="profile-hero-actions">
+        <button type="button" className="secondary-button profile-edit-button" onClick={onOpenProfileEditor}><Edit3 size={16} />编辑资料</button>
       </div>
-    </section>
-  );
+    </div>
+    <div className="profile-layout">
+      <section className="profile-card" aria-labelledby="profile-account-title"><div className="profile-card-heading"><span className="profile-card-icon"><UserRound size={18} /></span><div><h3 id="profile-account-title">基本信息</h3><p>当前登录账户</p></div></div><div className="profile-card-body"><dl className="profile-details"><div><dt>登录账号</dt><dd title={viewer.email}>{viewer.email}</dd></div><div><dt>登录方式</dt><dd>{loginMethod}</dd></div><div><dt>访问限制</dt><dd>{loginAccessScope}</dd></div></dl></div></section>
+      <section className="profile-card" aria-labelledby="profile-permission-title"><div className="profile-card-heading"><span className="profile-card-icon"><UsersRound size={18} /></span><div><h3 id="profile-permission-title">项目权限</h3><p>由系统角色决定</p></div></div><div className="profile-card-body"><div className="profile-permission-list"><div><span>个人项目</span><strong>仅自己管理</strong></div><div><span>公共项目</span><strong>{isAdmin ? "可查看和管理" : "仅查看"}</strong></div><div><span>系统范围</span><strong>{systemAccessScope}</strong></div></div></div></section>
+      <section className="profile-card profile-security-card" aria-labelledby="profile-security-title"><div className="profile-card-heading"><span className="profile-card-icon"><ShieldCheck size={18} /></span><div><h3 id="profile-security-title">账户安全</h3><p>安全检查与会话状态</p></div></div><div className="profile-security-summary"><div><strong>{isLoading ? <Skeleton className="skeleton-score" /> : securityScore}</strong><span>基础安全评分</span></div><p>{isLoading ? <Skeleton className="skeleton-line skeleton-line-profile" /> : securityIssueCount === 0 ? "暂无基础风险" : `${securityIssueCount} 条风险待处理`}</p></div><div className="profile-security-footer"><span>空闲 15 分钟或最长 8 小时后重新登录</span><button type="button" className="secondary-button" onClick={onOpenSecurity} disabled={isLoading}>{isLoading ? "读取中" : "安全检查"}</button></div></section>
+      <section className="profile-card profile-data-security-card" aria-labelledby="profile-data-security-title"><div className="profile-card-heading"><span className="profile-card-icon"><ShieldCheck size={18} /></span><div><h3 id="profile-data-security-title">敏感操作</h3><p>公共项目和系统管理</p></div></div><div className="profile-card-body profile-sensitive-body"><div className="profile-sensitive-actions"><button type="button" className="secondary-button" onClick={onRestartSecuritySession} disabled={isSaving}><ShieldCheck size={17} />重新验证</button></div><p className="profile-card-note">个人项目使用当前会话；公共项目与系统操作需 Google 验证码。</p></div></section>
+    </div>
+  </section>;
 }
 
 function AuthenticatorCode({ entry, itemId, onCopy, onReveal }: { entry: VaultTotp; itemId: string; onCopy: (value: string, label: string, itemId: string) => void; onReveal: () => void }) {
@@ -564,7 +425,7 @@ function TotpEntryFields({
   return (
     <fieldset className="totp-entry">
       <legend>验证器密钥 <span>（可选，最多 3 个）</span></legend>
-      <p className="totp-entry-intro">默认保留一个登录验证器。只有不同用途需要独立验证码时，再添加新的验证器。</p>
+      <p className="totp-entry-intro">最多保存 3 组验证器。</p>
       <div className="totp-entry-list">
         {entries.map((entry, index) => {
           const entryInputId = `${formId}-totp-${entry.id}`;
@@ -584,7 +445,7 @@ function TotpEntryFields({
         })}
       </div>
       {entries.length < 3 && <button type="button" className="secondary-button totp-add-button" onClick={onAdd}><Plus size={16} />添加验证器</button>}
-      <p>不使用摄像头。图片仅在当前浏览器解析，保存时只会加密写入验证器密钥。</p>
+      <p>图片仅在当前浏览器解析。</p>
     </fieldset>
   );
 }
@@ -611,6 +472,7 @@ async function decodeTotpImage(file: File) {
     if (!context) throw new Error("当前浏览器无法读取二维码图片。");
     context.drawImage(image, 0, 0, width, height);
     const imageData = context.getImageData(0, 0, width, height);
+    const { default: jsQR } = await import("jsqr");
     const result = jsQR(imageData.data, width, height, { inversionAttempts: "attemptBoth" });
     if (!result?.data) throw new Error("未在图片中识别到可用二维码。请尝试更清晰的原图，或手动粘贴 Setup Key。");
     parseTotpInput(result.data);
@@ -632,44 +494,55 @@ function auditLabel(action: string) {
     totp_revealed: "查看了验证器代码",
     credential_copied: "复制了账号信息",
     totp_copied: "复制了验证器代码",
-    export_approval_requested: "发起了导出确认",
-    export_approved: "批准了密码库导出",
-    export_rejected: "拒绝了密码库导出",
-    vault_exported: "导出了密码库",
     system_user_created: "创建了系统用户",
     system_user_role_changed: "调整了系统用户角色",
     system_user_status_changed: "调整了系统用户状态",
+    system_user_authenticator_reset: "重置了登录验证器",
     system_user_deleted: "删除了系统用户",
+    account_password_changed: "更新了登录密码",
+    embedded_page_created: "添加了内嵌页面",
+    embedded_page_updated: "更新了内嵌页面",
+    embedded_page_deleted: "删除了内嵌页面",
+    embedded_origin_added: "添加了可信来源",
+    embedded_origin_deleted: "移除了可信来源",
   };
   return labels[action] ?? "执行了安全操作";
 }
 
 function auditScopeLabel(action: string) {
-  if (action.startsWith("system_user_")) return "系统用户";
-  if (action.startsWith("export_") || action === "vault_exported") return "数据导出";
+  if (action.startsWith("system_user_") || action === "account_password_changed") return "系统用户";
+  if (action.startsWith("embedded_page_") || action.startsWith("embedded_origin_")) return "内嵌页面";
   return "公共项目";
+}
+
+function embeddedAuditDetail(action: string, itemId: string | null) {
+  if (!itemId) return null;
+  if (action.startsWith("embedded_origin_")) return itemId;
+  try {
+    const subject = JSON.parse(itemId) as { name?: unknown; origin?: unknown };
+    if (typeof subject.name !== "string" || typeof subject.origin !== "string") return null;
+    return `${subject.name} · ${subject.origin}`;
+  } catch {
+    return null;
+  }
 }
 
 function AuditEventRow({ entry }: { entry: AuditEntry }) {
   const scope = auditScopeLabel(entry.action);
-  const Icon = scope === "系统用户" ? UserCog : scope === "数据导出" ? FileKey2 : KeyRound;
-  const tone = scope === "系统用户" ? "user" : scope === "数据导出" ? "export" : "project";
+  const Icon = scope === "系统用户" ? UserCog : scope === "内嵌页面" ? LayoutPanelLeft : KeyRound;
+  const tone = scope === "系统用户" ? "user" : scope === "内嵌页面" ? "embedded" : "project";
+  const detail = scope === "内嵌页面" ? embeddedAuditDetail(entry.action, entry.itemId) : null;
   return <li>
     <span className={`audit-event-icon is-${tone}`} aria-hidden="true"><Icon size={16} /></span>
-    <div className="audit-event-copy"><strong>{auditLabel(entry.action)}</strong><span>{scope}</span></div>
+    <div className="audit-event-copy"><strong>{auditLabel(entry.action)}</strong><span>{scope}</span>{detail && <small title={detail}>{detail}</small>}</div>
     <span className="audit-event-actor" title={entry.actorEmail}>{entry.actorEmail}</span>
     <time>{entry.createdAt}</time>
   </li>;
 }
 
-function approvalStatusLabel(approval: ApprovalRequest) {
-  if (approval.status === "approved") return `已由 ${approval.approverEmail ?? "另一位用户"} 批准`;
-  if (approval.status === "rejected") return "已被拒绝";
-  if (approval.status === "expired") return "已失效";
-  return `剩余有效期：${approval.expiresAt}`;
-}
 
-export default function VaultClient({ viewer }: { viewer: Viewer }) {
+export default function VaultClient({ viewer: initialViewer }: { viewer: Viewer }) {
+  const [viewer, setViewer] = useState<Viewer>(initialViewer);
   const [items, setItems] = useState<VaultItemSummary[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedDetail, setSelectedDetail] = useState<VaultItem | null>(null);
@@ -702,24 +575,23 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
   const [detailError, setDetailError] = useState<string | null>(null);
   const [detailAttempt, setDetailAttempt] = useState(0);
   const [isSaving, setIsSaving] = useState(false);
-  const [publicUserCount, setPublicUserCount] = useState(0);
   const [audit, setAudit] = useState<AuditEntry[]>([]);
   const [auditChainIntegrity, setAuditChainIntegrity] = useState<AuditIntegrity>("unknown");
-  const [keyRotationRemaining, setKeyRotationRemaining] = useState<number | null>(null);
   const [auditCategory, setAuditCategory] = useState<AuditCategory>("all");
   const [auditCurrentPage, setAuditCurrentPage] = useState(1);
   const [auditPagination, setAuditPagination] = useState<Pagination>(emptyPagination);
   const [isAuditLoading, setIsAuditLoading] = useState(false);
   const [auditLoadError, setAuditLoadError] = useState<string | null>(null);
   const [auditLoadAttempt, setAuditLoadAttempt] = useState(0);
-  const [approvals, setApprovals] = useState<ApprovalRequest[]>([]);
   const [systemUsers, setSystemUsers] = useState<SystemUser[]>([]);
   const [systemUserEmail, setSystemUserEmail] = useState("");
-  const [systemUserPassword, setSystemUserPassword] = useState("");
-  const [systemUserPasswordConfirmation, setSystemUserPasswordConfirmation] = useState("");
-  const [showSystemUserPassword, setShowSystemUserPassword] = useState(false);
+  const [systemUserSecurityEmail, setSystemUserSecurityEmail] = useState("");
   const [systemUserRole, setSystemUserRole] = useState<"admin" | "user">("user");
+  const [publicItemCode, setPublicItemCode] = useState("");
+  const [deleteItemCode, setDeleteItemCode] = useState("");
+  const [systemUserCode, setSystemUserCode] = useState("");
   const [systemUserProvisioning, setSystemUserProvisioning] = useState<SystemUserProvisioning | null>(null);
+  const [authenticatorRecovery, setAuthenticatorRecovery] = useState<AuthenticatorRecovery | null>(null);
   const [userManagementTab, setUserManagementTab] = useState<UserManagementTab>("users");
   const [userQuery, setUserQuery] = useState("");
   const [isUsersLoading, setIsUsersLoading] = useState(false);
@@ -727,6 +599,16 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
   const [userCurrentPage, setUserCurrentPage] = useState(1);
   const [userPagination, setUserPagination] = useState<Pagination>(emptyPagination);
   const [userLoadAttempt, setUserLoadAttempt] = useState(0);
+  const [embeddedPageId, setEmbeddedPageId] = useState<string | undefined>();
+  const [embeddedNavigationPages, setEmbeddedNavigationPages] = useState<EmbeddedNavigationPage[]>([]);
+  const [embeddedNavigationAttempt, setEmbeddedNavigationAttempt] = useState(0);
+  const [embeddedPageDialogOpen, setEmbeddedPageDialogOpen] = useState(false);
+  const [showProfileEditor, setShowProfileEditor] = useState(false);
+  const [profileDisplayNameInput, setProfileDisplayNameInput] = useState(initialViewer.displayName);
+  const [profileAvatarStyleInput, setProfileAvatarStyleInput] = useState<ProfileAvatarStyle>(initialViewer.avatarStyle);
+  const [showSecurityReverify, setShowSecurityReverify] = useState(false);
+  const [securityReverifyCode, setSecurityReverifyCode] = useState("");
+  const [securityReverifyError, setSecurityReverifyError] = useState("");
   const dialogOriginRef = useRef<HTMLElement | null>(null);
   const [isReadingTotp, setIsReadingTotp] = useState(false);
   const [showNewPassword, setShowNewPassword] = useState(false);
@@ -749,8 +631,9 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
       : space === "全部" ? "全部项目" : `${space}项目`;
   const viewerInitial = viewer.displayName.trim().slice(0, 1).toLocaleUpperCase() || "你";
   const isAdmin = viewer.role === "admin";
-  const activeDialogKey = pendingPublicPublish ? "publish" : deleteTarget ? "delete" : systemUserAction ? "system-user-action" : showUserCreateDialog ? "user-create" : editingItem ? "edit" : showAdd ? "add" : null;
+  const activeDialogKey = embeddedPageDialogOpen ? "embedded-page" : showSecurityReverify ? "security-reverify" : showProfileEditor ? "profile-editor" : authenticatorRecovery ? "authenticator-recovery" : systemUserProvisioning ? "user-provisioning" : pendingPublicPublish ? "publish" : deleteTarget ? "delete" : systemUserAction ? "system-user-action" : showUserCreateDialog ? "user-create" : editingItem ? "edit" : showAdd ? "add" : null;
   const isModalOpen = activeDialogKey !== null;
+  const pageTransitionKey = page === "users" ? `${page}-${userManagementTab}` : page;
   const { totalItems, weakPasswordCount, reusedPasswordCount, missingTwoFactorCount, securityIssueCount, score: securityScore } = securitySummary;
 
   useEffect(() => {
@@ -766,6 +649,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
       cache: "no-store",
       credentials: "same-origin",
       headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
     }).then(async (response) => {
       if (!response.ok) throw new Error("安全会话已结束。");
       if (!cancelled) {
@@ -776,10 +660,23 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
         setServerSessionReady(true);
       }
     }).catch(() => {
-      if (!cancelled) window.location.assign("/signout?return_to=%2Flogin");
+      if (!cancelled) window.location.assign("/login");
     });
     return () => { cancelled = true; };
   }, []);
+
+  useEffect(() => {
+    if (!serverSessionReady) return;
+    let cancelled = false;
+    void fetch("/api/embedded-pages", { cache: "no-store", credentials: "same-origin" })
+      .then(async (response) => {
+        const payload = await response.json().catch(() => ({})) as { pages?: EmbeddedNavigationPage[] };
+        if (!response.ok) throw new Error("无法读取内嵌页面。");
+        if (!cancelled) setEmbeddedNavigationPages(payload.pages ?? []);
+      })
+      .catch(() => { if (!cancelled) setEmbeddedNavigationPages([]); });
+    return () => { cancelled = true; };
+  }, [embeddedNavigationAttempt, serverSessionReady]);
 
   useEffect(() => {
     const syncFromAddress = (moveFocus = false) => {
@@ -793,6 +690,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
       setSecurityFocus(route.securityFocus);
       setUserManagementTab(route.userManagementTab);
       setAuditCategory(route.auditCategory);
+      setEmbeddedPageId(route.embeddedPageId);
       if (moveFocus) focusMainContent();
     };
 
@@ -806,6 +704,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
     const closeOnEscape = (event: globalThis.KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
+        if (isModalOpen) return;
         if (page !== "vault") {
           setPage("vault");
           setCollection("all");
@@ -826,14 +725,23 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
         setEditingItem(null);
         setPendingPublicPublish(null);
         setDeleteTarget(null);
+        setPublicItemCode("");
+        setDeleteItemCode("");
         setShowUserCreateDialog(false);
         setSystemUserAction(null);
+        setSystemUserCode("");
+        setSystemUserProvisioning(null);
+        setAuthenticatorRecovery(null);
+        setShowProfileEditor(false);
+        setShowSecurityReverify(false);
+        setSecurityReverifyCode("");
+        setSecurityReverifyError("");
         setMobileNav(false);
       }
     };
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [page]);
+  }, [isModalOpen, page]);
 
   useEffect(() => {
     if (!isModalOpen) return;
@@ -924,22 +832,18 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
         if (response.status === 401) endSession();
         const payload = await readJsonResponse<{
           items?: VaultItemSummary[];
-          publicUserCount?: number;
-          approvals?: ApprovalRequest[];
           categoryNames?: string[];
           spaceCounts?: Record<Space, number>;
           security?: VaultSecuritySummary;
           pagination?: Pagination;
           error?: string;
-        }>(response, "无法读取密码库。");
-        if (!response.ok) throw new Error(payload?.error ?? "无法读取密码库。");
-        if (!payload) throw new Error("服务器没有返回密码库数据，请重新加载。");
+        }>(response, "无法读取项目。");
+        if (!response.ok) throw new Error(payload?.error ?? "无法读取项目。");
+        if (!payload) throw new Error("服务器没有返回项目数据，请重新加载。");
         if (cancelled) return;
 
         const loadedItems = payload.items ?? [];
         setItems(loadedItems);
-        setPublicUserCount(payload.publicUserCount ?? 0);
-        setApprovals(payload.approvals ?? []);
         setCategoryNames(payload.categoryNames ?? []);
         setSpaceCounts(payload.spaceCounts ?? { 全部: 0, 个人: 0, 公共: 0 });
         setSecuritySummary(payload.security ?? emptySecuritySummary);
@@ -949,7 +853,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
         setSelectedId((current) => loadedItems.some((item) => item.id === current) ? current : loadedItems[0]?.id ?? null);
       } catch (error) {
         if (!cancelled) {
-          const message = error instanceof Error ? error.message : "无法读取密码库。";
+          const message = error instanceof Error ? error.message : "无法读取项目。";
           setLoadError(message);
           setToast(message);
         }
@@ -992,6 +896,12 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
     void loadUsers();
     return () => { cancelled = true; controller.abort(); };
   }, [debouncedUserQuery, isAdmin, page, serverSessionReady, userCurrentPage, userLoadAttempt, userManagementTab]);
+
+  useEffect(() => {
+    if (!serverSessionReady || page !== "users" || userManagementTab !== "users" || !isAdmin) return;
+    const timer = window.setInterval(() => setUserLoadAttempt((current) => current + 1), 60_000);
+    return () => window.clearInterval(timer);
+  }, [isAdmin, page, serverSessionReady, userManagementTab]);
 
   useEffect(() => {
     if (!serverSessionReady || page !== "users" || userManagementTab !== "audit" || !isAdmin) return;
@@ -1082,21 +992,46 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
   }, []);
 
   function endSession() {
-    void fetch("/api/security/session", {
-      method: "DELETE",
-      cache: "no-store",
-      credentials: "same-origin",
-      headers: { "Content-Type": "application/json" },
-    }).finally(() => window.location.assign("/signout?return_to=%2Flogin"));
+    endCurrentSecuritySession("/login");
   }
 
   function restartSecuritySession() {
-    void fetch("/api/security/session", {
-      method: "DELETE",
-      cache: "no-store",
-      credentials: "same-origin",
-      headers: { "Content-Type": "application/json" },
-    }).finally(() => window.location.assign("/signout?return_to=%2F%3Freauth%3D1"));
+    setSecurityReverifyCode("");
+    setSecurityReverifyError("");
+    setShowSecurityReverify(true);
+  }
+
+  async function renewSecuritySession(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (isSaving) return;
+    if (!/^\d{6}$/.test(securityReverifyCode)) {
+      setSecurityReverifyError("请输入 6 位 Google 验证码。");
+      return;
+    }
+    setIsSaving(true);
+    setSecurityReverifyError("");
+    try {
+      const response = await fetch("/api/security/session", {
+        method: "POST",
+        cache: "no-store",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userCode: securityReverifyCode }),
+      });
+      const payload = await response.json().catch(() => ({})) as { error?: string; code?: string };
+      if (response.status === 401 && payload.code === "SECURITY_SESSION_REQUIRED") {
+        endCurrentSecuritySession("/login");
+        return;
+      }
+      if (!response.ok) throw new Error(payload.error ?? "重新验证未完成，请重试。");
+      setShowSecurityReverify(false);
+      setSecurityReverifyCode("");
+      setToast("已重新验证；敏感操作可在 10 分钟内进行");
+    } catch (error) {
+      setSecurityReverifyError(error instanceof Error ? error.message : "重新验证未完成，请重试。");
+    } finally {
+      setIsSaving(false);
+    }
   }
 
   async function requestVault<T>(path: string, init: RequestInit) {
@@ -1106,8 +1041,9 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
       credentials: "same-origin",
       headers: { "Content-Type": "application/json", ...(init.headers ?? {}) },
     });
-    const payload = response.status === 204 ? null : await readJsonResponse<T & { error?: string }>(response, "操作未完成，请稍后重试。");
-    if (response.status === 401 && path !== "/api/security/session") endSession();
+    const payload = response.status === 204 ? null : await readJsonResponse<T & { error?: string; code?: string }>(response, "操作未完成，请稍后重试。");
+    if (response.status === 401 && payload?.code === "SECURITY_SESSION_REQUIRED" && path !== "/api/security/session") endCurrentSecuritySession("/login");
+    if (payload?.code === "RECENT_SECURITY_CONFIRMATION_REQUIRED") restartSecuritySession();
     if (!response.ok) throw new Error(payload?.error ?? "操作未完成，请稍后重试。");
     return payload as T;
   }
@@ -1120,18 +1056,18 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
     try {
       await navigator.clipboard.writeText(value);
       if (itemId) recordAudit(label.includes("验证码") ? "totp_copied" : "credential_copied", itemId);
-      setToast(`${label}已复制，请在不需要时手动清理剪贴板`);
+      setToast(`${label}已复制`);
     } catch {
-      setToast("复制失败，请手动选择内容");
+      setToast("复制失败");
     }
   }
 
-  async function updateRemoteItem(item: VaultItem, changes: Record<string, unknown>) {
+  async function updateRemoteItem(item: VaultItem, changes: Record<string, unknown>, userCode?: string) {
     setIsSaving(true);
     try {
       const payload = await requestVault<{ item: VaultItem }>(`/api/vault/items/${item.id}`, {
         method: "PATCH",
-        body: JSON.stringify({ ...item, ...changes }),
+        body: JSON.stringify({ ...item, ...changes, ...(userCode ? { userCode } : {}) }),
       });
       setSelectedId(payload.item.id);
       setSelectedDetail(payload.item);
@@ -1145,18 +1081,19 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
   async function submitCredential(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (form.group === "公共") {
+      setPublicItemCode("");
       setPendingPublicPublish({ form });
       return;
     }
     await saveCredential(form);
   }
 
-  async function saveCredential(credential: CredentialForm) {
+  async function saveCredential(credential: CredentialForm, userCode?: string) {
     setIsSaving(true);
     try {
       const payload = await requestVault<{ item: VaultItem }>("/api/vault/items", {
         method: "POST",
-        body: JSON.stringify({ ...credential, type: "登录", twoFactor: false, favorite: false, brand: "new", note: "" }),
+        body: JSON.stringify({ ...credential, type: "登录", twoFactor: false, favorite: false, brand: "new", note: "", ...(userCode ? { userCode } : {}) }),
       });
       setVaultCurrentPage(1);
       setSelectedId(payload.item.id);
@@ -1166,6 +1103,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
       setShowNewPassword(false);
       setShowAdd(false);
       setPendingPublicPublish(null);
+      setPublicItemCode("");
       setToast(credential.group === "公共" ? "公共项目已加密保存" : "项目已加密保存");
     } catch (error) {
       setToast(error instanceof Error ? error.message : "项目未保存。");
@@ -1182,6 +1120,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
   function openEdit(item: VaultItem) {
     setEditForm({ name: item.name, domain: item.domain, username: item.username, password: item.password, category: item.category, group: item.group, totpEntries: item.totps.length > 0 ? item.totps.map((entry, index) => newTotpFormEntry(index, entry.config, entry.label)) : [newTotpFormEntry()] });
     setEditingItem(item);
+    setPublicItemCode("");
     setRevealed(false);
     setShowEditPassword(false);
   }
@@ -1196,18 +1135,22 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
     if (!editingItem) return;
 
     if (editingItem.group === "个人" && editForm.group === "公共") {
+      setPublicItemCode("");
       setPendingPublicPublish({ item: editingItem, form: editForm });
       return;
     }
 
-    await saveEditedCredential(editingItem, editForm);
+    await saveEditedCredential(editingItem, editForm, editingItem.group === "公共" ? publicItemCode : undefined);
   }
 
-  async function saveEditedCredential(item: VaultItem, changes: CredentialForm) {
+  async function saveEditedCredential(item: VaultItem, changes: CredentialForm, userCode?: string) {
     try {
-      await updateRemoteItem(item, changes);
+      const requiresTotp = item.group === "公共" || changes.group === "公共";
+    if (requiresTotp && !/^\d{6}$/.test(userCode ?? "")) throw new Error("请输入 6 位 Google 验证码。");
+      await updateRemoteItem(item, changes, userCode);
       setEditingItem(null);
       setPendingPublicPublish(null);
+      setPublicItemCode("");
       setShowEditPassword(false);
       setToast("项目已加密更新");
     } catch (error) {
@@ -1219,10 +1162,13 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
     if (!deleteTarget) return;
     setIsSaving(true);
     try {
-      await requestVault(`/api/vault/items/${deleteTarget.id}`, { method: "DELETE" });
+      const requiresTotp = deleteTarget.group === "公共";
+    if (requiresTotp && !/^\d{6}$/.test(deleteItemCode)) throw new Error("请输入 6 位 Google 验证码。");
+      await requestVault(`/api/vault/items/${deleteTarget.id}`, { method: "DELETE", body: JSON.stringify(requiresTotp ? { userCode: deleteItemCode } : {}) });
       setSelectedId(null);
       setSelectedDetail(null);
       setDeleteTarget(null);
+      setDeleteItemCode("");
       setRevealed(false);
       setLoadAttempt((current) => current + 1);
       setToast(`已删除“${deleteTarget.name}”`);
@@ -1291,6 +1237,54 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
     focusMainContent();
   }
 
+  function openProfileEditor() {
+    setProfileDisplayNameInput(viewer.displayName);
+    setProfileAvatarStyleInput(viewer.avatarStyle);
+    setShowProfileEditor(true);
+  }
+
+  async function saveProfile(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setIsSaving(true);
+    try {
+      const payload = await requestVault<{ profile: Pick<Viewer, "displayName" | "avatarStyle"> }>("/api/account/profile", {
+        method: "PATCH",
+        body: JSON.stringify({ displayName: profileDisplayNameInput, avatarStyle: profileAvatarStyleInput }),
+      });
+      setViewer((current) => ({ ...current, ...payload.profile }));
+      setShowProfileEditor(false);
+      setToast("个人资料已保存");
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "个人资料未保存。");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  function selectEmbeddedPage(pageId: string) {
+    setPage("embedded");
+    setEmbeddedPageId(pageId);
+    writeRoute({ page: "embedded", collection: "all", securityFocus: "all", userManagementTab: "users", auditCategory: "all", embeddedPageId: pageId }, true);
+  }
+
+  function openEmbeddedPage(pageId: string) {
+    selectEmbeddedPage(pageId);
+    setMobileNav(false);
+    focusMainContent();
+  }
+
+  function refreshEmbeddedNavigation() {
+    setEmbeddedNavigationAttempt((current) => current + 1);
+  }
+
+  function openEmbeddedPageManagement() {
+    if (!isAdmin) return;
+    setPage("embedded-manage");
+    setMobileNav(false);
+    writeRoute({ page: "embedded-manage", collection: "all", securityFocus: "all", userManagementTab: "users", auditCategory: "all" });
+    focusMainContent();
+  }
+
   function openSecurityReview(focus: SecurityFocus = "all") {
     setPage("vault");
     setCollection("security");
@@ -1316,30 +1310,27 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
 
   async function createSystemUser(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (systemUserPassword !== systemUserPasswordConfirmation) {
-      setToast("两次输入的初始登录密码不一致。");
+    if (!/^\d{6}$/.test(systemUserCode)) {
+      setToast("请输入 6 位 Google 验证码。");
       return;
     }
     setIsSaving(true);
     try {
-      const setupKey = generateLoginTotpSetupKey();
-      await requestVault<{ user: SystemUser }>("/api/users", {
+      const created = await requestVault<{ user: SystemUser; activation: Omit<SystemUserProvisioning, "account"> }>("/api/users", {
         method: "POST",
-        body: JSON.stringify({ email: systemUserEmail, password: systemUserPassword, role: systemUserRole, authTotpSecret: setupKey }),
+        body: JSON.stringify({ email: systemUserEmail, securityEmail: systemUserSecurityEmail, role: systemUserRole, userCode: systemUserCode }),
       });
-      setPublicUserCount((current) => current + 1);
-      setSystemUserProvisioning({ email: systemUserEmail.trim().toLowerCase(), setupKey, temporaryPassword: systemUserPassword });
+      setSystemUserProvisioning({ account: created.user.email, ...created.activation });
       setSystemUserEmail("");
-      setSystemUserPassword("");
-      setSystemUserPasswordConfirmation("");
-      setShowSystemUserPassword(false);
+      setSystemUserSecurityEmail("");
+      setSystemUserCode("");
       setSystemUserRole("user");
       setShowUserCreateDialog(false);
       setUserQuery("");
       setUserCurrentPage(1);
       setUserLoadAttempt((current) => current + 1);
       setLoadAttempt((current) => current + 1);
-      setToast("系统用户已创建，请安全交付初始密码和登录验证器");
+      setToast("用户已创建，等待完成激活。");
     } catch (error) {
       setToast(error instanceof Error ? error.message : "无法创建系统用户。");
     } finally {
@@ -1348,15 +1339,13 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
   }
 
   async function updateSystemUser(user: SystemUser, changes: Partial<Pick<SystemUser, "role" | "status">>) {
+    if (!/^\d{6}$/.test(systemUserCode)) { setToast("请输入 6 位 Google 验证码。"); return false; }
     setIsSaving(true);
     try {
       await requestVault<{ user: SystemUser }>("/api/users", {
         method: "PATCH",
-        body: JSON.stringify({ email: user.email, ...changes }),
+        body: JSON.stringify({ email: user.email, ...changes, userCode: systemUserCode }),
       });
-      if (changes.status && changes.status !== user.status) {
-        setPublicUserCount((current) => Math.max(0, current + (changes.status === "active" ? 1 : -1)));
-      }
       setUserLoadAttempt((current) => current + 1);
       setLoadAttempt((current) => current + 1);
       setToast(changes.status ? (changes.status === "suspended" ? "用户已停用" : "用户已重新启用") : "用户角色已更新");
@@ -1370,11 +1359,11 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
   }
 
   async function deleteSystemUser(user: SystemUser) {
-    if (user.isCurrent) return;
+    if (user.isCurrent) return false;
+    if (!/^\d{6}$/.test(systemUserCode)) { setToast("请输入 6 位 Google 验证码。"); return false; }
     setIsSaving(true);
     try {
-      await requestVault("/api/users", { method: "DELETE", body: JSON.stringify({ email: user.email }) });
-      if (user.status === "active") setPublicUserCount((current) => Math.max(0, current - 1));
+      await requestVault("/api/users", { method: "DELETE", body: JSON.stringify({ email: user.email, userCode: systemUserCode }) });
       setUserLoadAttempt((current) => current + 1);
       setLoadAttempt((current) => current + 1);
       setToast("系统用户已删除");
@@ -1387,12 +1376,63 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
     }
   }
 
+  async function resetSystemUserAuthenticator(user: SystemUser) {
+    if (!/^\d{6}$/.test(systemUserCode)) { setToast("请输入 6 位 Google 验证码。"); return false; }
+    setIsSaving(true);
+    try {
+      const reset = await requestVault<AuthenticatorRecovery>("/api/users", {
+        method: "POST",
+        body: JSON.stringify({ action: "reset_authenticator", email: user.email, userCode: systemUserCode }),
+      });
+      setAuthenticatorRecovery(reset);
+      setUserLoadAttempt((current) => current + 1);
+      setLoadAttempt((current) => current + 1);
+      setToast("登录验证器已重置，旧会话已失效。");
+      return true;
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "无法重置该用户的登录验证器。");
+      return false;
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function resendSystemUserActivation(user: SystemUser) {
+    if (!/^\d{6}$/.test(systemUserCode)) { setToast("请输入 6 位 Google 验证码。"); return false; }
+    setIsSaving(true);
+    try {
+      const resent = await requestVault<{ user: SystemUser; activation: Omit<SystemUserProvisioning, "account"> }>("/api/users", {
+        method: "POST",
+        body: JSON.stringify({ action: "resend_activation", email: user.email, userCode: systemUserCode }),
+      });
+      setSystemUserProvisioning({ account: resent.user.email, ...resent.activation });
+      setUserLoadAttempt((current) => current + 1);
+      setToast("已重新发送激活码。");
+      return true;
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "无法重新发送激活码。");
+      return false;
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
   async function confirmSystemUserAction() {
     if (!systemUserAction) return;
-    const completed = systemUserAction.kind === "suspend"
-      ? await updateSystemUser(systemUserAction.user, { status: "suspended" })
-      : await deleteSystemUser(systemUserAction.user);
-    if (completed) setSystemUserAction(null);
+    const completed = systemUserAction.kind === "delete"
+      ? await deleteSystemUser(systemUserAction.user)
+      : systemUserAction.kind === "suspend"
+        ? await updateSystemUser(systemUserAction.user, { status: "suspended" })
+          : systemUserAction.kind === "activate"
+          ? await updateSystemUser(systemUserAction.user, { status: "active" })
+          : systemUserAction.kind === "resend-activation"
+            ? await resendSystemUserActivation(systemUserAction.user)
+          : systemUserAction.kind === "reset-authenticator"
+            ? await resetSystemUserAuthenticator(systemUserAction.user)
+          : systemUserAction.role
+            ? await updateSystemUser(systemUserAction.user, { role: systemUserAction.role })
+            : false;
+    if (completed) { setSystemUserAction(null); setSystemUserCode(""); }
   }
 
   function updateTotpEntry(target: "add" | "edit", id: string, changes: Pick<TotpFormEntry, "label"> | Pick<TotpFormEntry, "value">) {
@@ -1433,99 +1473,28 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
     }
   }
 
-  async function requestExportApproval() {
-    setIsSaving(true);
-    try {
-      const payload = await requestVault<{ approval: ApprovalRequest }>("/api/vault/approvals", { method: "POST" });
-      setApprovals((current) => [payload.approval, ...current.filter((approval) => approval.id !== payload.approval.id)]);
-      setLoadAttempt((current) => current + 1);
-      setToast("已发起导出确认，有效期 10 分钟");
-    } catch (error) {
-      setToast(error instanceof Error ? error.message : "无法发起导出确认。");
-    } finally {
-      setIsSaving(false);
-    }
-  }
-
-  async function rotateEncryption() {
-    setIsSaving(true);
-    try {
-      const payload = await requestVault<{ rotated: number; remaining: number; complete: boolean; activeKeyId: string }>("/api/vault/crypto-rotation", {
-        method: "POST",
-        body: JSON.stringify({ batchSize: 50 }),
-      });
-      setKeyRotationRemaining(payload.remaining);
-      setToast(payload.complete ? "加密密钥迁移已完成" : `已迁移 ${payload.rotated} 个项目，剩余 ${payload.remaining} 个`);
-    } catch (error) {
-      setToast(error instanceof Error ? error.message : "加密密钥迁移未完成。");
-    } finally {
-      setIsSaving(false);
-    }
-  }
-
-  async function decideExportApproval(id: string, decision: "approved" | "rejected") {
-    setIsSaving(true);
-    try {
-      await requestVault("/api/vault/approvals", { method: "PATCH", body: JSON.stringify({ id, decision }) });
-      setApprovals((current) => current.filter((approval) => approval.id !== id));
-      setLoadAttempt((current) => current + 1);
-      setToast(decision === "approved" ? "已批准导出确认" : "已拒绝导出确认");
-    } catch (error) {
-      setToast(error instanceof Error ? error.message : "无法处理该请求。");
-    } finally {
-      setIsSaving(false);
-    }
-  }
-
-  async function downloadApprovedExport(approvalId: string) {
-    setIsSaving(true);
-    try {
-      const response = await fetch("/api/vault/export", {
-        method: "POST",
-        cache: "no-store",
-        credentials: "same-origin",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ approvalId }),
-      });
-      if (!response.ok) {
-        const payload = await readJsonResponse<{ error?: string }>(response, "无法导出密码库。");
-        throw new Error(payload?.error ?? "无法导出密码库。");
-      }
-      const url = URL.createObjectURL(await response.blob());
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = "djmima-vault-export.json";
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      window.setTimeout(() => URL.revokeObjectURL(url), 0);
-      setApprovals((current) => current.filter((approval) => approval.id !== approvalId));
-      setLoadAttempt((current) => current + 1);
-      setToast("已下载明文副本，请安全保管并及时删除");
-    } catch (error) {
-      setToast(error instanceof Error ? error.message : "密码库未导出。");
-    } finally {
-      setIsSaving(false);
-    }
-  }
-
   return (
     <div className="vault-app">
-      <a className="skip-link" href="#main-content">跳到主要内容</a>
+      <div className="vault-ambient" aria-hidden="true">
+        <Spotlight className="vault-spotlight" fill="#d9eed9" />
+        <Spotlight className="vault-spotlight-secondary" fill="#f3d7e2" />
+      </div>
 
       <div className={`sidebar-backdrop ${mobileNav ? "is-visible" : ""}`} onClick={() => setMobileNav(false)} aria-hidden="true" />
       <aside className={`sidebar ${mobileNav ? "is-open" : ""}`} aria-label="主导航">
         <div className="brand-lockup">
           <span className="brand-icon" aria-hidden="true"><ShieldCheck size={22} strokeWidth={2.2} /></span>
-          <div><strong>djmima</strong><span>账号与密码管理</span></div>
+          <div><strong>djmima</strong><span>安全工作台</span></div>
           <button className="icon-button sidebar-close" onClick={() => setMobileNav(false)} aria-label="关闭导航"><X size={20} /></button>
         </div>
 
         <nav className="main-nav">
-          <p className="nav-label">密码库</p>
-          <button className={`nav-item ${page === "vault" ? "is-active" : ""}`} aria-current={page === "vault" ? "page" : undefined} onClick={openAccountManagement}><KeyRound size={18} /><span>账户管理</span><span className="nav-count">{totalItems}</span></button>
+          <p className="nav-label">工作台</p>
+          <button className={`nav-item ${page === "vault" ? "is-active" : ""}`} aria-current={page === "vault" ? "page" : undefined} onClick={openAccountManagement}><KeyRound size={18} /><span>账户管理</span></button>
 
-          {isAdmin && <><p className="nav-label nav-label-spaced">系统</p><button className={`nav-item ${page === "users" ? "is-active" : ""}`} aria-current={page === "users" ? "page" : undefined} onClick={() => { setMobileNav(false); openUserManagement(); }}><UserCog size={18} /><span>用户管理</span></button></>}
+          {isAdmin && <><p className="nav-label nav-label-spaced">系统</p><button className={`nav-item ${page === "users" ? "is-active" : ""}`} aria-current={page === "users" ? "page" : undefined} onClick={() => { setMobileNav(false); openUserManagement(); }}><UserCog size={18} /><span>用户管理</span></button><button className={`nav-item ${page === "embedded-manage" ? "is-active" : ""}`} aria-current={page === "embedded-manage" ? "page" : undefined} onClick={openEmbeddedPageManagement}><Settings2 size={18} /><span>内嵌管理</span></button></>}
+
+          {embeddedNavigationPages.length > 0 && <><p className="nav-label nav-label-spaced">工作台</p><div className="embedded-workbench-nav" role="group" aria-label="已发布内嵌页面">{embeddedNavigationPages.map((embeddedPage) => <button key={embeddedPage.id} className={`nav-item ${page === "embedded" && embeddedPageId === embeddedPage.id ? "is-active" : ""}`} aria-current={page === "embedded" && embeddedPageId === embeddedPage.id ? "page" : undefined} onClick={() => openEmbeddedPage(embeddedPage.id)}><LayoutPanelLeft size={18} /><span title={embeddedPage.name}>{embeddedPage.name}</span></button>)}</div></>}
 
           <p className="nav-label nav-label-spaced">个人</p>
           <button className={`nav-item ${page === "profile" ? "is-active" : ""}`} aria-current={page === "profile" ? "page" : undefined} onClick={openProfile}><UserRound size={18} /><span>个人信息</span></button>
@@ -1533,36 +1502,30 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
 
         <div className="sidebar-tip">
           <ShieldCheck size={18} aria-hidden="true" />
-          <div><strong>安全会话已开启</strong><span>密码记录会加密保存</span></div>
+          <div><strong>安全会话</strong><span>已开启</span></div>
         </div>
-
-        <button type="button" className={`account-menu ${page === "profile" ? "is-active" : ""}`} onClick={openProfile} aria-current={page === "profile" ? "page" : undefined} aria-label="打开个人信息">
-          <span className="avatar" aria-hidden="true">{viewerInitial}</span>
-          <span className="account-menu-copy"><strong title={viewer.displayName}>{viewer.displayName}</strong><span title={viewer.email}>{viewer.role === "admin" ? "管理员 · " : "普通用户 · "}{viewer.email}</span></span>
-          <ChevronRight className="account-menu-chevron" size={16} aria-hidden="true" />
-        </button>
       </aside>
 
       <main ref={mainContentRef} id="main-content" className="main-shell" tabIndex={-1}>
-        <header className={`topbar ${page === "profile" || (page === "users" && userManagementTab === "audit") ? "is-compact" : ""}`}>
+        <header className={`topbar ${page === "profile" || page === "embedded" || page === "embedded-manage" || (page === "users" && userManagementTab === "audit") ? "is-compact" : ""}`}>
           <button className="icon-button mobile-menu" onClick={() => setMobileNav(true)} aria-label="打开导航"><Menu size={21} /></button>
-          <div className="page-title"><h1>{page === "profile" ? "个人信息" : page === "users" ? "用户管理" : "账户管理"}</h1><p>{page === "profile" ? "查看账户资料、系统角色、项目权限与数据安全" : page === "users" ? userManagementTab === "audit" ? "审查公共项目、系统用户与数据导出的管理操作" : "创建、调整、停用或删除系统用户" : "集中管理账号、密码与验证器代码；按风险筛选需处理账户"}</p></div>
+          <div className="page-title"><h1>{page === "profile" ? "个人信息" : page === "users" ? "用户管理" : page === "embedded-manage" ? "内嵌页面管理" : page === "embedded" ? "内嵌页面" : "账户管理"}</h1><p>{page === "profile" ? "账户、权限与安全状态" : page === "users" ? userManagementTab === "audit" ? "管理操作记录" : "系统用户与角色" : page === "embedded-manage" ? "可信来源与页面发布" : page === "embedded" ? "已发布页面" : "登录信息与验证器"}</p></div>
           {page === "vault" && <div className="topbar-search">
             <Search size={18} aria-hidden="true" />
-            <label className="sr-only" htmlFor="vault-search">搜索密码库</label>
+            <label className="sr-only" htmlFor="vault-search">搜索项目</label>
             <input ref={searchInputRef} id="vault-search" value={query} onChange={(event) => { setQuery(event.target.value); setVaultCurrentPage(1); }} placeholder="搜索账号、网址或分类" />
-            <kbd>⌘ K</kbd>
           </div>}
           {page === "users" && userManagementTab === "users" && <div className="topbar-search topbar-search-simple">
             <Search size={18} aria-hidden="true" />
             <label className="sr-only" htmlFor="user-search">搜索系统用户</label>
             <input id="user-search" value={userQuery} onChange={(event) => { setUserQuery(event.target.value); setUserCurrentPage(1); }} placeholder="搜索用户邮箱" />
           </div>}
-          <button className="secondary-button lock-button" onClick={endSession} aria-label="结束会话" title="结束会话"><LogOut size={17} /></button>
+          {page === "profile" || page === "embedded" || page === "embedded-manage" ? <div className="topbar-page-actions">{page === "profile" && <>{viewer.isInitialAdmin && <a className="secondary-button profile-password-action" href="/account/admin-recovery-codes" aria-label="轮换管理员恢复码" title="轮换管理员恢复码"><KeyRound size={16} />恢复码</a>}<a className="secondary-button profile-password-action" href="/account/security-email" aria-label="管理安全邮箱" title="管理安全邮箱"><ShieldCheck size={16} />安全邮箱</a><a className="secondary-button profile-password-action" href="/account/password" aria-label="修改登录密码" title="修改登录密码"><KeyRound size={16} />修改登录密码</a></>}<button className="secondary-button lock-button" onClick={endSession} aria-label="结束会话" title="结束会话"><LogOut size={17} /></button></div> : <button className="secondary-button lock-button" onClick={endSession} aria-label="结束会话" title="结束会话"><LogOut size={17} /></button>}
           {page === "vault" && <button className="primary-button" onClick={() => setShowAdd(true)} disabled={isLoading || isSaving}><Plus size={18} />新建项目</button>}
-          {page === "users" && userManagementTab === "users" && <button className="primary-button user-add-button" onClick={() => setShowUserCreateDialog(true)} disabled={isSaving}><Plus size={18} />添加用户</button>}
+          {page === "users" && userManagementTab === "users" && <button className="primary-button user-add-button" onClick={() => { setSystemUserCode(""); setShowUserCreateDialog(true); }} disabled={isSaving}><Plus size={18} />添加用户</button>}
         </header>
 
+        <div className="page-view-transition" key={pageTransitionKey}>
         {page === "users" ? <section className="users-page" aria-labelledby="users-page-title">
           <section className="users-panel" aria-labelledby="users-page-title" aria-busy={userManagementTab === "users" ? isUsersLoading : isAuditLoading}>
             <div className="users-toolbar">
@@ -1570,13 +1533,13 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
               <div className="users-toolbar-actions"><div className="users-tabs" role="tablist" aria-label="用户管理内容"><button id="users-tab" type="button" role="tab" aria-selected={userManagementTab === "users"} aria-controls="users-tabpanel" tabIndex={userManagementTab === "users" ? 0 : -1} className={userManagementTab === "users" ? "is-active" : ""} onClick={() => selectUserManagementTab("users")} onKeyDown={handleUserManagementTabKeyDown}>系统用户</button><button id="audit-tab" type="button" role="tab" aria-selected={userManagementTab === "audit"} aria-controls="audit-tabpanel" tabIndex={userManagementTab === "audit" ? 0 : -1} className={userManagementTab === "audit" ? "is-active" : ""} onClick={() => selectUserManagementTab("audit")} onKeyDown={handleUserManagementTabKeyDown}>操作审计</button></div></div>
             </div>
             {userManagementTab === "users" ? <div role="tabpanel" id="users-tabpanel" aria-labelledby="users-tab">
-              {isUsersLoading ? <UserTableLoading /> : userLoadError ? <div className="users-empty users-load-error" role="alert"><AlertTriangle size={18} aria-hidden="true" /><span>{userLoadError}</span><button type="button" className="secondary-button" onClick={() => setUserLoadAttempt((current) => current + 1)}>重新加载</button></div> : systemUsers.length > 0 ? <div className="system-user-table-wrap"><table className="system-user-table"><thead><tr><th scope="col">用户</th><th scope="col">角色</th><th scope="col">状态</th><th scope="col">创建时间</th><th scope="col">管理</th></tr></thead><tbody>{systemUsers.map((user) => <tr key={user.email}><td data-label="用户"><div className="system-user-identity"><strong title={user.email}>{user.email}</strong>{user.isCurrent && <span className="current-user">当前账户</span>}</div></td><td data-label="角色"><b className={`role-badge role-${user.role}`}>{user.role === "admin" ? "管理员" : "普通用户"}</b></td><td data-label="状态"><b className={`status-badge status-${user.status}`}>{user.status === "active" ? "已启用" : "已停用"}</b></td><td data-label="创建时间"><span className="system-user-created">{user.createdAt}</span></td><td data-label="管理">{user.isCurrent ? <span className="current-user">当前账户不可调整</span> : <div className="system-user-actions"><SurfaceSelect id={`role-${user.email}`} ariaLabel={`调整${user.email}的系统角色`} value={user.role} onChange={(role) => void updateSystemUser(user, { role })} options={[{ value: "user", label: "普通用户" }, { value: "admin", label: "管理员" }]} disabled={isSaving} compact /><button type="button" className="secondary-button" onClick={() => user.status === "active" ? setSystemUserAction({ user, kind: "suspend" }) : void updateSystemUser(user, { status: "active" })} disabled={isSaving}>{user.status === "active" ? "停用" : "启用"}</button><button type="button" className="secondary-button user-delete-button" onClick={() => setSystemUserAction({ user, kind: "delete" })} disabled={isSaving}>删除</button></div>}</td></tr>)}</tbody></table></div> : <p className="users-empty">没有找到匹配的系统用户。</p>}
-              {!isUsersLoading && <PaginationControls pagination={userPagination} onChange={setUserCurrentPage} label="系统用户" />}
+              {isUsersLoading ? <UserTableLoading /> : userLoadError ? <AdminTableState tone="error" icon={AlertTriangle} title="无法读取系统用户" description={userLoadError} action={<button type="button" className="secondary-button" onClick={() => setUserLoadAttempt((current) => current + 1)}><RefreshCw size={15} />重新加载</button>} /> : systemUsers.length > 0 ? <div className="system-user-table-wrap"><table className="system-user-table system-user-list-table"><thead><tr><th scope="col">用户</th><th scope="col">角色</th><th scope="col">状态</th><th scope="col">在线</th><th scope="col">最近登录</th><th scope="col">创建时间</th><th scope="col">管理</th></tr></thead><tbody>{systemUsers.map((user) => <tr key={user.email}><td data-label="用户"><div className="system-user-identity"><strong title={user.email}>{user.email}</strong>{user.isCurrent && <span className="current-user">当前账户</span>}</div></td><td data-label="角色"><b className={`role-badge role-${user.role}`}>{user.role === "admin" ? "管理员" : "普通用户"}</b></td><td data-label="状态"><b className={`status-badge status-${user.status}`}>{systemUserStatusLabel(user.status)}</b></td><td data-label="在线"><span className={`presence-badge is-${user.isOnline ? "online" : "offline"}`}><i aria-hidden="true" />{user.isOnline ? "在线" : "离线"}</span></td><td data-label="最近登录"><span className="system-user-created" title={exactTime(user.lastLoginAt)}>{relativeTime(user.lastLoginAt)}</span></td><td data-label="创建时间"><span className="system-user-created">{user.createdAt}</span></td><td data-label="管理">{user.isCurrent ? <span className="current-user">当前账户不可调整</span> : <div className="system-user-actions"><SurfaceSelect id={`role-${user.email}`} ariaLabel={`调整${user.email}的系统角色`} value={user.role} onChange={(role) => { setSystemUserCode(""); setSystemUserAction({ user, kind: "role", role }); }} options={[{ value: "user", label: "普通用户" }, { value: "admin", label: "管理员" }]} disabled={isSaving} compact />{user.status === "pending" ? <button type="button" className="secondary-button" onClick={() => { setSystemUserCode(""); setSystemUserAction({ user, kind: "resend-activation" }); }} disabled={isSaving}>重新发送</button> : <button type="button" className="secondary-button" onClick={() => { setSystemUserCode(""); setSystemUserAction({ user, kind: user.status === "active" ? "suspend" : "activate" }); }} disabled={isSaving}>{user.status === "active" ? "停用" : "启用"}</button>}<button type="button" className="secondary-button" onClick={() => { setSystemUserCode(""); setSystemUserAction({ user, kind: "reset-authenticator" }); }} disabled={isSaving || user.status === "pending"}>重置验证器</button><button type="button" className="secondary-button user-delete-button" onClick={() => { setSystemUserCode(""); setSystemUserAction({ user, kind: "delete" }); }} disabled={isSaving}>删除</button></div>}</td></tr>)}</tbody></table></div> : <AdminTableState icon={UsersRound} title={userQuery ? "无匹配用户" : "暂无数据"} />}
+              {!isUsersLoading && <TablePagination pagination={userPagination} onChange={setUserCurrentPage} label="系统用户" />}
             </div> : <section className="audit-panel" role="tabpanel" id="audit-tabpanel" aria-labelledby="audit-tab">
               <div className="audit-panel-header">
                 <div className="audit-panel-heading">
                   <span className="audit-panel-icon" aria-hidden="true"><ShieldCheck size={18} /></span>
-                  <div><h3 id="audit-panel-title">管理操作记录</h3><p>仅保留公共项目、系统用户和数据导出的管理行为；密码与验证码的查看、复制不会在此处显示。</p><p className={`audit-integrity is-${auditChainIntegrity}`} role={auditChainIntegrity === "failed" ? "alert" : "status"}>{auditIntegrityLabel(auditChainIntegrity)}</p></div>
+                  <div><h3 id="audit-panel-title">管理操作记录</h3><p>公共项目、系统用户和内嵌页面操作。</p><p className={`audit-integrity is-${auditChainIntegrity}`} role={auditChainIntegrity === "failed" ? "alert" : "status"}>{auditIntegrityLabel(auditChainIntegrity)}</p></div>
                 </div>
                 <div className="audit-panel-actions">
                   <SurfaceSelect id="audit-category" ariaLabel="筛选操作类型" value={auditCategory} onChange={(nextCategory) => {
@@ -1587,27 +1550,27 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
                   <button type="button" className="secondary-button audit-refresh-button" onClick={() => setAuditLoadAttempt((current) => current + 1)} disabled={isAuditLoading}><RefreshCw size={15} aria-hidden="true" />{isAuditLoading ? "刷新中" : "刷新"}</button>
                 </div>
               </div>
-              {isAuditLoading ? <AuditLogLoading /> : auditLoadError ? <div className="users-empty users-load-error" role="alert"><AlertTriangle size={18} aria-hidden="true" /><span>{auditLoadError}</span><button type="button" className="secondary-button" onClick={() => setAuditLoadAttempt((current) => current + 1)}>重新加载</button></div> : audit.length > 0 ? <>
+              {isAuditLoading ? <AuditLogLoading /> : auditLoadError ? <AdminTableState tone="error" icon={AlertTriangle} title="无法读取操作审计" description={auditLoadError} action={<button type="button" className="secondary-button" onClick={() => setAuditLoadAttempt((current) => current + 1)}><RefreshCw size={15} />重新加载</button>} /> : audit.length > 0 ? <>
                 <div className="audit-list-head" aria-hidden="true"><span>操作</span><span>操作者</span><span>时间</span></div>
                 <ul className="audit-list audit-list-panel">{audit.map((entry, index) => <AuditEventRow entry={entry} key={`${entry.action}-${entry.actorEmail}-${entry.createdAt}-${entry.itemId ?? ""}-${index}`} />)}</ul>
-                <PaginationControls pagination={auditPagination} onChange={setAuditCurrentPage} label="操作审计" />
-              </> : <p className="users-empty">当前筛选下没有管理记录。</p>}
+                <TablePagination pagination={auditPagination} onChange={setAuditCurrentPage} label="操作审计" />
+              </> : <AdminTableState icon={ShieldCheck} title="暂无数据" />}
             </section>}
           </section>
-        </section> : page === "profile" ? <ProfileOverview viewer={viewer} viewerInitial={viewerInitial} isLoading={isLoading} securityScore={securityScore} securityIssueCount={securityIssueCount} publicUserCount={publicUserCount} approvals={approvals} isSaving={isSaving} onOpenSecurity={openSecurityReview} onRequestExportApproval={() => void requestExportApproval()} onDecideExportApproval={(id, decision) => void decideExportApproval(id, decision)} onDownloadApprovedExport={(id) => void downloadApprovedExport(id)} onRestartSecuritySession={restartSecuritySession} keyRotationRemaining={keyRotationRemaining} onRotateEncryption={() => void rotateEncryption()} /> : <>
+        </section> : page === "embedded-manage" ? <EmbeddedPageManagerContent onDialogStateChange={setEmbeddedPageDialogOpen} serverSessionReady={serverSessionReady} onPagesChanged={refreshEmbeddedNavigation} /> : page === "embedded" ? <EmbeddedPagesWorkspace selectedPageId={embeddedPageId} isAdmin={isAdmin} onPageSelect={selectEmbeddedPage} onOpenManagement={isAdmin ? openEmbeddedPageManagement : undefined} /> : page === "profile" ? <ProfileOverview viewer={viewer} viewerInitial={viewerInitial} isLoading={isLoading} securityScore={securityScore} securityIssueCount={securityIssueCount} isSaving={isSaving} onOpenSecurity={openSecurityReview} onRestartSecuritySession={restartSecuritySession} onOpenProfileEditor={openProfileEditor} /> : <>
         <section className="security-strip" aria-label="账户安全概览" aria-busy={isLoading}>
           {isLoading ? <SecurityStripLoading /> : securityIssueCount > 0 ? <button type="button" className="risk-item" onClick={() => openSecurityReview()} aria-label="查看全部账户安全检查结果">
-            <span className="risk-icon risk-danger"><AlertTriangle size={17} /></span><span><strong id="security-heading">基础安全评分 {securityScore}/100</strong><small>{securityIssueCount} 条基础风险待处理</small></span><ChevronRight size={18} aria-hidden="true" />
-          </button> : <div className="risk-item risk-item-static"><span className="risk-icon risk-safe">{totalItems === 0 ? <ShieldCheck size={17} aria-hidden="true" /> : <Check size={17} aria-hidden="true" />}</span><span><strong id="security-heading">基础安全评分 {totalItems === 0 ? "—/100" : `${securityScore}/100`}</strong><small>{totalItems === 0 ? "添加账户后自动检查" : "基础检查已通过"}</small></span></div>}
-          {weakPasswordCount > 0 ? <button className="risk-item" onClick={() => openSecurityReview("weak_password")}><span className="risk-icon risk-danger"><AlertTriangle size={17} /></span><span><strong>{weakPasswordCount} 个密码长度不足</strong><small>建议使用至少 14 位随机密码</small></span><ChevronRight size={18} /></button> : <div className="risk-item risk-item-static"><span className="risk-icon risk-safe"><Check size={17} /></span><span><strong>{totalItems === 0 ? "尚无账户" : "密码长度符合建议"}</strong><small>{totalItems === 0 ? "添加账户后自动检查" : "未发现少于 14 位的密码"}</small></span></div>}
-          {reusedPasswordCount > 0 ? <button className="risk-item" onClick={() => openSecurityReview("reused_password")}><span className="risk-icon risk-warning"><ShieldEllipsis size={17} /></span><span><strong>{reusedPasswordCount} 个重复密码</strong><small>避免一个泄露影响多个账号</small></span><ChevronRight size={18} /></button> : <div className="risk-item risk-item-static"><span className="risk-icon risk-safe"><Check size={17} /></span><span><strong>{totalItems === 0 ? "尚无账户" : "未发现重复密码"}</strong><small>{totalItems === 0 ? "添加账户后自动检查" : "每个已保存密码均不重复"}</small></span></div>}
-          {missingTwoFactorCount > 0 ? <button className="risk-item" onClick={() => openSecurityReview("missing_two_factor")}><span className="risk-icon risk-info"><Smartphone size={17} /></span><span><strong>{missingTwoFactorCount} 个未启用双重验证</strong><small>查看需处理账户</small></span><ChevronRight size={18} /></button> : <div className="risk-item risk-item-static"><span className="risk-icon risk-safe"><Check size={17} /></span><span><strong>{totalItems === 0 ? "尚无账户" : "双重验证状态正常"}</strong><small>{totalItems === 0 ? "添加账户后自动检查" : "全部账户均已开启保护"}</small></span></div>}
+            <span className="risk-icon risk-danger"><AlertTriangle size={17} /></span><span><strong id="security-heading">基础安全评分 {securityScore}/100</strong><small>{securityIssueCount} 条风险待处理</small></span><ChevronRight size={18} aria-hidden="true" />
+          </button> : <div className="risk-item risk-item-static"><span className="risk-icon risk-safe">{totalItems === 0 ? <ShieldCheck size={17} aria-hidden="true" /> : <Check size={17} aria-hidden="true" />}</span><span><strong id="security-heading">基础安全评分 {totalItems === 0 ? "—/100" : `${securityScore}/100`}</strong><small>{totalItems === 0 ? "暂无数据" : "基础检查已通过"}</small></span></div>}
+          {weakPasswordCount > 0 ? <button className="risk-item" onClick={() => openSecurityReview("weak_password")}><span className="risk-icon risk-danger"><AlertTriangle size={17} /></span><span><strong>{weakPasswordCount} 个密码长度不足</strong><small>少于 14 位</small></span><ChevronRight size={18} /></button> : <div className="risk-item risk-item-static"><span className="risk-icon risk-safe"><Check size={17} /></span><span><strong>{totalItems === 0 ? "暂无账户" : "密码长度正常"}</strong><small>{totalItems === 0 ? "等待数据" : "未发现短密码"}</small></span></div>}
+          {reusedPasswordCount > 0 ? <button className="risk-item" onClick={() => openSecurityReview("reused_password")}><span className="risk-icon risk-warning"><ShieldEllipsis size={17} /></span><span><strong>{reusedPasswordCount} 个重复密码</strong><small>用于多个项目</small></span><ChevronRight size={18} /></button> : <div className="risk-item risk-item-static"><span className="risk-icon risk-safe"><Check size={17} /></span><span><strong>{totalItems === 0 ? "暂无账户" : "无重复密码"}</strong><small>{totalItems === 0 ? "等待数据" : "已保存密码不重复"}</small></span></div>}
+          {missingTwoFactorCount > 0 ? <button className="risk-item" onClick={() => openSecurityReview("missing_two_factor")}><span className="risk-icon risk-info"><Smartphone size={17} /></span><span><strong>{missingTwoFactorCount} 个未启用双重验证</strong><small>需配置验证器</small></span><ChevronRight size={18} /></button> : <div className="risk-item risk-item-static"><span className="risk-icon risk-safe"><Check size={17} /></span><span><strong>{totalItems === 0 ? "暂无账户" : "双重验证正常"}</strong><small>{totalItems === 0 ? "等待数据" : "全部账户已开启"}</small></span></div>}
         </section>
 
         <div className="content-grid">
           <section className="vault-panel" aria-labelledby="vault-list-title" aria-busy={isLoading}>
             {collection === "security" && <div className="security-review" role="region" aria-labelledby="security-review-title">
-              <div className="security-review-head"><div><span className="eyebrow">账户安全检查</span><h2 id="security-review-title">{totalItems === 0 ? "还没有可检查的账户" : securityIssueCount > 0 ? `${securityIssueCount} 条基础风险待处理` : "基础检查已通过"}</h2><p>{totalItems === 0 ? "新建账户后会自动检查密码长度、重复使用与双重验证状态。" : "检查密码长度、重复使用情况和双重验证状态。"}</p></div><button type="button" className="secondary-button" onClick={openAccountManagement}>查看全部账户</button></div>
+              <div className="security-review-head"><div><span className="eyebrow">账户安全检查</span><h2 id="security-review-title">{totalItems === 0 ? "暂无可检查账户" : securityIssueCount > 0 ? `${securityIssueCount} 条风险待处理` : "基础检查已通过"}</h2><p>{totalItems === 0 ? "暂无数据。" : "密码长度、重复使用与双重验证。"}</p></div><button type="button" className="secondary-button" onClick={openAccountManagement}>全部账户</button></div>
               <div className="security-focuses" role="group" aria-label="安全风险筛选">
                 <button className={securityFocus === "all" ? "is-selected" : ""} aria-pressed={securityFocus === "all"} onClick={() => { setSecurityFocus("all"); setVaultCurrentPage(1); }}>全部 {securityIssueCount}</button>
                 <button className={securityFocus === "weak_password" ? "is-selected" : ""} aria-pressed={securityFocus === "weak_password"} onClick={() => { setSecurityFocus("weak_password"); setVaultCurrentPage(1); }} disabled={weakPasswordCount === 0}>密码长度不足 {weakPasswordCount}</button>
@@ -1632,7 +1595,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
               {isLoading ? (
                 <VaultListLoading />
               ) : loadError ? (
-                <div className="empty-state empty-state-error" role="alert"><AlertTriangle size={24} /><h3>无法读取密码库</h3><p>{loadError}</p><button className="secondary-button" onClick={() => setLoadAttempt((current) => current + 1)}>重新加载</button></div>
+                <div className="empty-state empty-state-error" role="alert"><AlertTriangle size={24} /><h3>无法读取项目</h3><p>{loadError}</p><button className="secondary-button" onClick={() => setLoadAttempt((current) => current + 1)}>重新加载</button></div>
               ) : items.length > 0 ? items.map((item) => (
                 <button key={item.id} className={`vault-row ${activeSelectedId === item.id ? "is-selected" : ""}`} onClick={() => { setSelectedId(item.id); setRevealed(false); }} aria-pressed={activeSelectedId === item.id}>
                   <div className="item-identity"><BrandMark item={item} /><span><span className="item-name-line"><strong>{item.name}</strong><b className={`space-badge ${item.group === "公共" ? "is-public" : "is-personal"}`}>{item.group}</b>{item.category && <b className="category-badge">{item.category}</b>}</span><small>{item.username}</small></span></div>
@@ -1641,10 +1604,10 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
                   <span className="row-chevron"><ChevronRight size={18} /></span>
                 </button>
               )) : (
-                collection === "security" && totalItems > 0 && securityIssueCount === 0 ? <div className="empty-state empty-state-success"><ShieldCheck size={24} /><h3>基础检查已通过</h3><p>当前账户没有密码长度、重复使用或双重验证方面的基础风险。</p><button className="secondary-button" onClick={openAccountManagement}>查看全部账户</button></div> : <div className="empty-state"><Search size={24} /><h3>{totalItems === 0 ? "密码库尚未添加项目" : collection === "security" ? "没有符合当前风险条件的账户" : "没有找到匹配项目"}</h3><p>{totalItems === 0 ? "从第一个账号开始，建立加密保存的密码库。" : collection === "security" ? "可调整范围、分类或风险条件继续查看。" : "可调整搜索、范围或分类继续查看。"}</p><button className="secondary-button" onClick={() => { if (totalItems === 0) setShowAdd(true); else clearVaultFilters(); }}>{totalItems === 0 ? "新建项目" : "清除筛选"}</button></div>
+                collection === "security" && totalItems > 0 && securityIssueCount === 0 ? <div className="empty-state empty-state-success"><ShieldCheck size={24} /><h3>基础检查已通过</h3><p>未发现基础风险。</p><button className="secondary-button" onClick={openAccountManagement}>全部账户</button></div> : <div className="empty-state"><Search size={24} /><h3>{totalItems === 0 ? "暂无数据" : collection === "security" ? "无匹配风险" : "无匹配项目"}</h3>{totalItems > 0 && <p>调整筛选条件后重试。</p>}{totalItems > 0 && <button className="secondary-button" onClick={clearVaultFilters}>清除筛选</button>}</div>
               )}
             </div>
-            {!isLoading && !loadError && <PaginationControls pagination={vaultPagination} onChange={setVaultCurrentPage} label="账户" />}
+            {!isLoading && !loadError && <TablePagination pagination={vaultPagination} onChange={setVaultCurrentPage} label="账户" />}
           </section>
 
           {isLoading || isDetailLoading ? <DetailPanelLoading /> : selected ? (
@@ -1656,7 +1619,7 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
               </div>
             </div>
 
-            {selected.group === "公共" && <div className="public-access-note"><UsersRound size={17} aria-hidden="true" /><div><strong>所有已启用用户可查看</strong><span>{selected.canEdit ? "你是管理员，可管理该公共项目。" : "仅管理员可编辑或删除该公共项目。"}</span></div></div>}
+            {selected.group === "公共" && <div className="public-access-note"><UsersRound size={17} aria-hidden="true" /><div><strong>全体启用用户可查看</strong><span>{selected.canEdit ? "你可管理该项目。" : "仅管理员可修改。"}</span></div></div>}
 
             <div className="detail-section">
               <div className="field-label"><span>用户名</span></div>
@@ -1683,39 +1646,68 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
 
             <div className="detail-footer">
               <div><Clock3 size={15} /><span>上次修改：{selected.updated}</span></div>
-              {selected.canEdit && <button className="secondary-button detail-delete-button" onClick={() => setDeleteTarget(selected)} disabled={isSaving}><Trash2 size={16} />删除项目</button>}
+              {selected.canEdit && <button className="secondary-button detail-delete-button" onClick={() => { setDeleteItemCode(""); setDeleteTarget(selected); }} disabled={isSaving}><Trash2 size={16} />删除项目</button>}
             </div>
           </aside>
           ) : totalItems > 0 ? (
             <aside className="detail-panel detail-empty" aria-live="polite">
-              {items.length === 0 ? <><Search size={25} aria-hidden="true" /><h2>没有符合条件的项目</h2><p>调整搜索、范围、分类或风险条件后继续查看。</p><button className="secondary-button" onClick={clearVaultFilters}>清除筛选</button></> : <><AlertTriangle size={25} aria-hidden="true" /><h2>无法读取项目详情</h2><p>{detailError ?? "请重新选择该项目。"}</p><button className="secondary-button" onClick={() => setDetailAttempt((current) => current + 1)}>重新读取</button></>}
+              {items.length === 0 ? <><Search size={25} aria-hidden="true" /><h2>无匹配项目</h2><p>调整筛选条件后重试。</p><button className="secondary-button" onClick={clearVaultFilters}>清除筛选</button></> : <><AlertTriangle size={25} aria-hidden="true" /><h2>无法读取项目详情</h2><p>{detailError ?? "请重新选择项目。"}</p><button className="secondary-button" onClick={() => setDetailAttempt((current) => current + 1)}>重新读取</button></>}
             </aside>
           ) : (
-            <aside className="detail-panel detail-empty" aria-label="空密码库">
-              <Archive size={25} aria-hidden="true" />
-              <h2>密码库为空</h2>
-              <p>新建一个项目，开始整理你的登录信息。</p>
-              <div className="onboarding-note" role="note"><ShieldCheck size={17} aria-hidden="true" /><div><strong>首次配置</strong><span>填写账号密码；如网站开启 Google Authenticator，可粘贴 Setup Key 或读取配置二维码图片。</span></div></div>
-              <button className="primary-button" onClick={() => setShowAdd(true)}><Plus size={18} />新建项目</button>
+            <aside className="detail-panel detail-empty" aria-label="项目暂无数据">
+              <KeyRound size={25} aria-hidden="true" />
+              <h2>暂无数据</h2>
             </aside>
           )}
         </div>
         </>}
+        </div>
       </main>
+
+      {showSecurityReverify && (
+        <div className="modal-layer" role="presentation">
+          <section className="modal user-create-modal" role="dialog" aria-modal="true" aria-labelledby="security-reverify-title">
+            <header><div><span className="modal-icon"><ShieldCheck size={20} /></span><div><h2 id="security-reverify-title">重新验证</h2><p>输入当前 Google 验证码以继续敏感操作。</p></div></div><button className="icon-button" type="button" onClick={() => { setShowSecurityReverify(false); setSecurityReverifyCode(""); setSecurityReverifyError(""); }} aria-label="关闭重新验证"><X size={20} /></button></header>
+            <form className="modal-form" onSubmit={renewSecuritySession}>
+              <div className="modal-body"><label>Google 验证码<input required autoFocus value={securityReverifyCode} onChange={(event) => setSecurityReverifyCode(event.target.value.replace(/\D/g, "").slice(0, 6))} inputMode="numeric" autoComplete="one-time-code" placeholder="000000" /></label>{securityReverifyError && <p className="login-error" role="status">{securityReverifyError}</p>}</div>
+              <footer className="modal-footer"><button type="button" className="secondary-button" onClick={() => { setShowSecurityReverify(false); setSecurityReverifyCode(""); setSecurityReverifyError(""); }} disabled={isSaving}>取消</button><button type="submit" className="primary-button" disabled={isSaving}><ShieldCheck size={17} />{isSaving ? "正在验证" : "确认验证"}</button></footer>
+            </form>
+          </section>
+        </div>
+      )}
+
+      {showProfileEditor && page === "profile" && (
+        <div className="modal-layer" role="presentation">
+          <section className="modal profile-editor-modal" role="dialog" aria-modal="true" aria-labelledby="profile-editor-title">
+            <header><div><span className="modal-icon"><UserRound size={20} /></span><div><h2 id="profile-editor-title">编辑个人资料</h2><p>昵称与头像样式仅用于当前账户展示。</p></div></div><button className="icon-button" type="button" onClick={() => setShowProfileEditor(false)} aria-label="关闭编辑个人资料"><X size={20} /></button></header>
+            <form className="modal-form" onSubmit={saveProfile}>
+              <div className="modal-body profile-editor-body">
+                <div className="profile-editor-preview">
+                  <span className={`profile-avatar profile-avatar-${profileAvatarStyleInput}`} aria-hidden="true">{profileDisplayNameInput.trim().slice(0, 1).toLocaleUpperCase() || "你"}</span>
+                  <div><strong>{profileDisplayNameInput.trim() || "未设置昵称"}</strong><span>{viewer.email}</span></div>
+                </div>
+                <label>昵称<input required autoFocus maxLength={32} value={profileDisplayNameInput} onChange={(event) => setProfileDisplayNameInput(event.target.value)} placeholder="请输入昵称" autoComplete="nickname" /><small>最多 32 个字符。</small></label>
+                <div className="profile-avatar-picker"><span>头像样式</span><div role="radiogroup" aria-label="选择头像样式">{profileAvatarStyles.map((style) => <button key={style} type="button" role="radio" aria-checked={profileAvatarStyleInput === style} className={`profile-avatar-choice profile-avatar-${style} ${profileAvatarStyleInput === style ? "is-selected" : ""}`} onClick={() => setProfileAvatarStyleInput(style)}><span aria-hidden="true">{profileDisplayNameInput.trim().slice(0, 1).toLocaleUpperCase() || "你"}</span><i className="sr-only">{style}</i></button>)}</div></div>
+              </div>
+              <footer className="modal-footer"><button type="button" className="secondary-button" onClick={() => setShowProfileEditor(false)} disabled={isSaving}>取消</button><button type="submit" className="primary-button" disabled={isSaving}><Check size={17} />{isSaving ? "正在保存" : "保存资料"}</button></footer>
+            </form>
+          </section>
+        </div>
+      )}
 
       {showAdd && (
         <div className="modal-layer" role="presentation">
           <section className="modal credential-modal" role="dialog" aria-modal="true" aria-labelledby="add-title">
-            <header><div><span className="modal-icon"><KeyRound size={20} /></span><div><h2 id="add-title">添加登录信息</h2><p>保存后以加密形式写入你的密码库</p></div></div><button className="icon-button" onClick={() => setShowAdd(false)} aria-label="关闭"><X size={20} /></button></header>
+            <header><div><span className="modal-icon"><KeyRound size={20} /></span><div><h2 id="add-title">添加登录信息</h2><p>加密保存到工作台</p></div></div><button className="icon-button" onClick={() => setShowAdd(false)} aria-label="关闭"><X size={20} /></button></header>
             <form className="modal-form" onSubmit={submitCredential}>
               <div className="modal-body credential-modal-body">
               <div className="credential-form-pair"><label>名称<input required value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="例如：公司邮箱" autoFocus /></label><label>网站地址<input required value={form.domain} onChange={(event) => setForm({ ...form, domain: event.target.value })} placeholder="example.com" inputMode="url" /></label></div>
-              <label>分类（可选）<input list="credential-category-options" value={form.category} onChange={(event) => setForm({ ...form, category: event.target.value })} placeholder="例如：部门一" maxLength={60} /><small>可输入新名称；分类会随加密项目保存，用于搜索和筛选。</small></label>
+              <label>分类（可选）<input list="credential-category-options" value={form.category} onChange={(event) => setForm({ ...form, category: event.target.value })} placeholder="例如：部门一" maxLength={60} /></label>
               <datalist id="credential-category-options">{categoryNames.map((name) => <option value={name} key={name} />)}</datalist>
               <label>用户名<input required value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} placeholder="name@example.com" autoComplete="username" /></label>
-              <label>密码<div className="form-password"><input required type={showNewPassword ? "text" : "password"} value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} placeholder="输入或生成强密码" autoComplete="new-password" /><button type="button" className="password-visibility" onClick={() => setShowNewPassword((current) => !current)} aria-label={showNewPassword ? "隐藏输入的密码" : "显示输入的密码"}>{showNewPassword ? <EyeOff size={16} /> : <Eye size={16} />}</button><button type="button" onClick={generatePassword}><WandSparkles size={16} />生成</button></div><small>建议至少 14 位，并混合字母、数字和符号。</small></label>
+              <label>密码<div className="form-password"><input required type={showNewPassword ? "text" : "password"} value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} placeholder="输入或生成强密码" autoComplete="new-password" /><button type="button" className="password-visibility" onClick={() => setShowNewPassword((current) => !current)} aria-label={showNewPassword ? "隐藏输入的密码" : "显示输入的密码"}>{showNewPassword ? <EyeOff size={16} /> : <Eye size={16} />}</button><button type="button" onClick={generatePassword}><WandSparkles size={16} />生成</button></div><small>至少 14 位。</small></label>
+              <div className="field-control"><span>可见范围</span><SurfaceSelect id="add-space" ariaLabel="可见范围" value={form.group} onChange={(group) => setForm({ ...form, group })} options={[{ value: "个人", label: "个人项目" }, ...(isAdmin ? [{ value: "公共", label: "公共项目" }] : [])]} />{form.group === "公共" && <p className="inline-access-note"><UsersRound size={16} aria-hidden="true" /><span>全体启用用户可查看，仅管理员可修改。</span></p>}</div>
               <TotpEntryFields entries={form.totpEntries} formId="add" isReading={isReadingTotp} onChange={(id, changes) => updateTotpEntry("add", id, changes)} onAdd={() => addTotpEntry("add")} onRemove={(id) => removeTotpEntry("add", id)} onReadImage={(event, id) => void importTotpFromImage(event, "add", id)} />
-              <div className="field-control"><span>可见范围</span><SurfaceSelect id="add-space" ariaLabel="可见范围" value={form.group} onChange={(group) => setForm({ ...form, group })} options={[{ value: "个人", label: "个人项目" }, ...(isAdmin ? [{ value: "公共", label: "公共项目" }] : [])]} />{form.group === "公共" && <p className="inline-access-note"><UsersRound size={16} aria-hidden="true" /><span>所有已启用用户都可查看账号、密码和验证码；保存前会再次确认发布。</span></p>}</div>
               </div>
               <footer className="modal-footer"><button type="button" className="secondary-button" onClick={() => setShowAdd(false)} disabled={isSaving}>取消</button><button type="submit" className="primary-button" disabled={isSaving}><Plus size={17} />{isSaving ? "正在保存" : "添加项目"}</button></footer>
             </form>
@@ -1726,18 +1718,20 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
       {editingItem && (
         <div className="modal-layer" role="presentation">
           <section className="modal credential-modal" role="dialog" aria-modal="true" aria-labelledby="edit-title">
-            <header><div><span className="modal-icon"><Edit3 size={20} /></span><div><h2 id="edit-title">编辑项目</h2><p>变更会重新加密后保存</p></div></div><button className="icon-button" onClick={() => setEditingItem(null)} aria-label="关闭编辑"><X size={20} /></button></header>
+            <header><div><span className="modal-icon"><Edit3 size={20} /></span><div><h2 id="edit-title">编辑项目</h2><p>变更会加密保存</p></div></div><button className="icon-button" onClick={() => { setPublicItemCode(""); setEditingItem(null); }} aria-label="关闭编辑"><X size={20} /></button></header>
             <form className="modal-form" onSubmit={submitEditCredential}>
               <div className="modal-body credential-modal-body">
               <div className="credential-form-pair"><label>名称<input required value={editForm.name} onChange={(event) => setEditForm({ ...editForm, name: event.target.value })} autoFocus /></label><label>网站地址<input required value={editForm.domain} onChange={(event) => setEditForm({ ...editForm, domain: event.target.value })} inputMode="url" /></label></div>
-              <label>分类（可选）<input list="credential-category-options" value={editForm.category} onChange={(event) => setEditForm({ ...editForm, category: event.target.value })} placeholder="例如：部门一" maxLength={60} /><small>可输入新名称；分类会随加密项目保存，用于搜索和筛选。</small></label>
+              <label>分类（可选）<input list="credential-category-options" value={editForm.category} onChange={(event) => setEditForm({ ...editForm, category: event.target.value })} placeholder="例如：部门一" maxLength={60} /></label>
               <datalist id="credential-category-options">{categoryNames.map((name) => <option value={name} key={name} />)}</datalist>
               <label>用户名<input required value={editForm.username} onChange={(event) => setEditForm({ ...editForm, username: event.target.value })} autoComplete="username" /></label>
-              <label>密码<div className="form-password"><input required type={showEditPassword ? "text" : "password"} value={editForm.password} onChange={(event) => setEditForm({ ...editForm, password: event.target.value })} autoComplete="new-password" /><button type="button" className="password-visibility" onClick={() => setShowEditPassword((current) => !current)} aria-label={showEditPassword ? "隐藏输入的密码" : "显示输入的密码"}>{showEditPassword ? <EyeOff size={16} /> : <Eye size={16} />}</button><button type="button" onClick={generateEditPassword}><WandSparkles size={16} />生成</button></div><small>建议至少 14 位，并混合字母、数字和符号。</small></label>
+              <div className="field-control"><span>可见范围</span><SurfaceSelect id="edit-space" ariaLabel="可见范围" value={editForm.group} onChange={(group) => setEditForm({ ...editForm, group })} options={[{ value: "个人", label: "个人项目" }, ...(isAdmin ? [{ value: "公共", label: "公共项目" }] : [])]} disabled={editingItem.group === "公共"} />{editingItem.group === "公共" ? <p className="inline-access-note"><UsersRound size={16} aria-hidden="true" /><span>全体启用用户可查看，仅管理员可维护。</span></p> : null}</div>
+              <label>密码<div className="form-password"><input required type={showEditPassword ? "text" : "password"} value={editForm.password} onChange={(event) => setEditForm({ ...editForm, password: event.target.value })} autoComplete="new-password" /><button type="button" className="password-visibility" onClick={() => setShowEditPassword((current) => !current)} aria-label={showEditPassword ? "隐藏输入的密码" : "显示输入的密码"}>{showEditPassword ? <EyeOff size={16} /> : <Eye size={16} />}</button><button type="button" onClick={generateEditPassword}><WandSparkles size={16} />生成</button></div><small>至少 14 位。</small></label>
+              <div className="field-control"><span>可见范围</span><SurfaceSelect id="edit-space" ariaLabel="可见范围" value={editForm.group} onChange={(group) => setEditForm({ ...editForm, group })} options={[{ value: "个人", label: "个人项目" }, ...(isAdmin ? [{ value: "公共", label: "公共项目" }] : [])]} disabled={editingItem.group === "公共"} />{editingItem.group === "公共" ? <p className="inline-access-note"><UsersRound size={16} aria-hidden="true" /><span>全体启用用户可查看，仅管理员可维护。</span></p> : null}</div>
               <TotpEntryFields entries={editForm.totpEntries} formId="edit" isReading={isReadingTotp} onChange={(id, changes) => updateTotpEntry("edit", id, changes)} onAdd={() => addTotpEntry("edit")} onRemove={(id) => removeTotpEntry("edit", id)} onReadImage={(event, id) => void importTotpFromImage(event, "edit", id)} />
-              <div className="field-control"><span>可见范围</span><SurfaceSelect id="edit-space" ariaLabel="可见范围" value={editForm.group} onChange={(group) => setEditForm({ ...editForm, group })} options={[{ value: "个人", label: "个人项目" }, ...(isAdmin ? [{ value: "公共", label: "公共项目" }] : [])]} disabled={editingItem.group === "公共"} />{editingItem.group === "公共" ? <p className="inline-access-note"><UsersRound size={16} aria-hidden="true" /><span>所有已启用用户都可查看该项目；公共范围由管理员维护。</span></p> : null}</div>
+              {editingItem.group === "公共" && <label>Google 验证码<input required value={publicItemCode} onChange={(event) => setPublicItemCode(event.target.value.replace(/\D/g, "").slice(0, 6))} inputMode="numeric" autoComplete="one-time-code" placeholder="000000" /></label>}
               </div>
-              <footer className="modal-footer"><button type="button" className="secondary-button" onClick={() => setEditingItem(null)} disabled={isSaving}>取消</button><button type="submit" className="primary-button" disabled={isSaving}><Check size={17} />{isSaving ? "正在保存" : "保存变更"}</button></footer>
+              <footer className="modal-footer"><button type="button" className="secondary-button" onClick={() => { setPublicItemCode(""); setEditingItem(null); }} disabled={isSaving}>取消</button><button type="submit" className="primary-button" disabled={isSaving}><Check size={17} />{isSaving ? "正在保存" : "保存变更"}</button></footer>
             </form>
           </section>
         </div>
@@ -1746,13 +1740,14 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
       {pendingPublicPublish && (
         <div className="modal-layer" role="presentation">
           <section className="modal user-create-modal" role="dialog" aria-modal="true" aria-labelledby="publish-public-title">
-            <header><div><span className="modal-icon"><UsersRound size={20} /></span><div><h2 id="publish-public-title">{pendingPublicPublish.item ? "发布为公共项目？" : "新建公共项目？"}</h2><p>保存后将由所有已启用用户查看</p></div></div><button className="icon-button" type="button" onClick={() => setPendingPublicPublish(null)} aria-label="关闭公共发布确认"><X size={20} /></button></header>
-            <form className="modal-form" onSubmit={(event) => { event.preventDefault(); if (pendingPublicPublish.item) void saveEditedCredential(pendingPublicPublish.item, pendingPublicPublish.form); else void saveCredential(pendingPublicPublish.form); }}>
+            <header><div><span className="modal-icon"><UsersRound size={20} /></span><div><h2 id="publish-public-title">{pendingPublicPublish.item ? "发布为公共项目？" : "新建公共项目？"}</h2><p>全体启用用户可查看。</p></div></div><button className="icon-button" type="button" onClick={() => { setPublicItemCode(""); setPendingPublicPublish(null); }} aria-label="关闭公共发布确认"><X size={20} /></button></header>
+            <form className="modal-form" onSubmit={(event) => { event.preventDefault(); if (!/^\d{6}$/.test(publicItemCode)) { setToast("请输入 6 位 Google 验证码。"); return; } if (pendingPublicPublish.item) void saveEditedCredential(pendingPublicPublish.item, pendingPublicPublish.form, publicItemCode); else void saveCredential(pendingPublicPublish.form, publicItemCode); }}>
               <div className="modal-body">
                 <div className="delete-summary publish-summary"><strong>{pendingPublicPublish.form.name}</strong><span>{pendingPublicPublish.form.username} · 公共项目</span></div>
-                <p className="delete-description">所有已启用的系统用户都能查看这条项目的账号、密码和验证器代码；只有管理员可以继续编辑或删除。</p>
+                <p className="delete-description">仅管理员可继续编辑或删除。</p>
+                <label>Google 验证码<input required autoFocus value={publicItemCode} onChange={(event) => setPublicItemCode(event.target.value.replace(/\D/g, "").slice(0, 6))} inputMode="numeric" autoComplete="one-time-code" placeholder="000000" /></label>
               </div>
-              <footer className="modal-footer"><button type="button" className="secondary-button" onClick={() => setPendingPublicPublish(null)} disabled={isSaving}>返回编辑</button><button type="submit" className="primary-button" disabled={isSaving}><UsersRound size={17} />{isSaving ? "正在发布" : "确认发布"}</button></footer>
+              <footer className="modal-footer"><button type="button" className="secondary-button" onClick={() => { setPublicItemCode(""); setPendingPublicPublish(null); }} disabled={isSaving}>返回编辑</button><button type="submit" className="primary-button" disabled={isSaving}><UsersRound size={17} />{isSaving ? "正在发布" : "确认发布"}</button></footer>
             </form>
           </section>
         </div>
@@ -1761,13 +1756,14 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
       {deleteTarget && (
         <div className="modal-layer" role="presentation">
           <section className="modal danger-modal" role="dialog" aria-modal="true" aria-labelledby="delete-title">
-            <header><div><span className="modal-icon danger-icon"><AlertTriangle size={20} /></span><div><h2 id="delete-title">删除项目？</h2><p>请确认你不再需要这条登录信息</p></div></div><button className="icon-button" onClick={() => setDeleteTarget(null)} aria-label="关闭删除确认"><X size={20} /></button></header>
+            <header><div><span className="modal-icon danger-icon"><AlertTriangle size={20} /></span><div><h2 id="delete-title">删除项目？</h2><p>此操作不可恢复。</p></div></div><button className="icon-button" onClick={() => { setDeleteItemCode(""); setDeleteTarget(null); }} aria-label="关闭删除确认"><X size={20} /></button></header>
             <form className="modal-form" onSubmit={(event) => { event.preventDefault(); deleteCredential(); }}>
               <div className="modal-body">
               <div className="delete-summary"><strong>{deleteTarget.name}</strong><span>{deleteTarget.username} · {deleteTarget.type}</span></div>
-              <p className="delete-description">删除后会从加密密码库中移除，操作记录会保留在审计日志中。</p>
+              <p className="delete-description">{deleteTarget.group === "公共" ? "公共项目会对所有可查看用户失效。" : "项目将被移除。"}</p>
+              {deleteTarget.group === "公共" && <label>Google 验证码<input required autoFocus value={deleteItemCode} onChange={(event) => setDeleteItemCode(event.target.value.replace(/\D/g, "").slice(0, 6))} inputMode="numeric" autoComplete="one-time-code" placeholder="000000" /></label>}
               </div>
-              <footer className="modal-footer"><button type="button" className="secondary-button" onClick={() => setDeleteTarget(null)} disabled={isSaving}>取消</button><button type="submit" className="danger-button" disabled={isSaving}><Trash2 size={17} />{isSaving ? "正在删除" : "删除项目"}</button></footer>
+              <footer className="modal-footer"><button type="button" className="secondary-button" onClick={() => { setDeleteItemCode(""); setDeleteTarget(null); }} disabled={isSaving}>取消</button><button type="submit" className="danger-button" disabled={isSaving}><Trash2 size={17} />{isSaving ? "正在删除" : "删除项目"}</button></footer>
             </form>
           </section>
         </div>
@@ -1776,16 +1772,16 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
       {showUserCreateDialog && page === "users" && isAdmin && (
         <div className="modal-layer" role="presentation">
           <section className="modal user-create-modal" role="dialog" aria-modal="true" aria-labelledby="create-system-user-title">
-            <header><div><span className="modal-icon"><UserCog size={20} /></span><div><h2 id="create-system-user-title">添加系统用户</h2><p>创建后可在用户管理页继续调整角色与状态</p></div></div><button className="icon-button" type="button" onClick={() => setShowUserCreateDialog(false)} aria-label="关闭添加用户"><X size={20} /></button></header>
+            <header><div><span className="modal-icon"><UserCog size={20} /></span><div><h2 id="create-system-user-title">添加系统用户</h2><p>用户自行设置密码和 Google 验证器。</p></div></div><button className="icon-button" type="button" onClick={() => { setSystemUserCode(""); setShowUserCreateDialog(false); }} aria-label="关闭添加用户"><X size={20} /></button></header>
             <form className="modal-form" onSubmit={createSystemUser}>
               <div className="modal-body">
-              <label>登录邮箱（必须）<input required type="email" value={systemUserEmail} onChange={(event) => setSystemUserEmail(event.target.value)} placeholder="name@example.com" autoComplete="email" autoFocus /><small>邮箱是登录账户名；用户还需输入自己的登录密码和本人 Google 验证码。</small></label>
-              <label>一次性初始密码（至少 14 位）<div className="form-password"><input required type={showSystemUserPassword ? "text" : "password"} value={systemUserPassword} onChange={(event) => setSystemUserPassword(event.target.value)} minLength={14} maxLength={512} placeholder="为用户设置一次性初始密码" autoComplete="new-password" /><button type="button" className="password-visibility" onClick={() => setShowSystemUserPassword((value) => !value)} aria-label={showSystemUserPassword ? "隐藏初始登录密码" : "显示初始登录密码"}>{showSystemUserPassword ? <EyeOff size={16} /> : <Eye size={16} />}</button></div><small>只保存不可逆哈希。用户首次登录验证后必须立即更换；请用受信任渠道交付。</small></label>
-              <label>确认初始登录密码<input required type={showSystemUserPassword ? "text" : "password"} value={systemUserPasswordConfirmation} onChange={(event) => setSystemUserPasswordConfirmation(event.target.value)} minLength={14} maxLength={512} autoComplete="new-password" /></label>
+              <label>登录账号（必须）<input required type="text" value={systemUserEmail} onChange={(event) => setSystemUserEmail(event.target.value)} placeholder="name@example.com 或 dajiang01" autoComplete="username" autoFocus /><small>邮箱，或 4–32 位英文数字组合。</small></label>
+              <label>安全邮箱（必须）<input required type="email" value={systemUserSecurityEmail} onChange={(event) => setSystemUserSecurityEmail(event.target.value)} placeholder="用于接收激活码和登录确认" autoComplete="email" /><small>可与登录账号不同；仅用于安全确认和恢复。</small></label>
               <div className="field-control"><span>系统角色</span><SurfaceSelect id="new-user-role" ariaLabel="系统角色" value={systemUserRole} onChange={setSystemUserRole} options={[{ value: "user", label: "普通用户" }, { value: "admin", label: "管理员" }]} /></div>
-              <aside className="access-setup-note" role="note"><ShieldCheck size={17} aria-hidden="true" /><div><strong>系统会为该用户生成独立验证器</strong><p>创建后仅显示一次 Setup Key。请通过受信任的线下或端到端加密渠道交给本人，不能发在普通群聊中。</p></div></aside>
+              <label>Google 验证码<input required value={systemUserCode} onChange={(event) => setSystemUserCode(event.target.value.replace(/\D/g, "").slice(0, 6))} inputMode="numeric" autoComplete="one-time-code" placeholder="000000" /></label>
+              <aside className="access-setup-note" role="note"><ShieldCheck size={17} aria-hidden="true" /><div><strong>激活方式</strong><p>系统会发送一次性激活码，用户自行设置密码和验证器。</p></div></aside>
               </div>
-              <footer className="modal-footer"><button type="button" className="secondary-button" onClick={() => setShowUserCreateDialog(false)} disabled={isSaving}>取消</button><button type="submit" className="primary-button" disabled={isSaving}><UserCog size={17} />{isSaving ? "正在创建" : "创建用户"}</button></footer>
+              <footer className="modal-footer"><button type="button" className="secondary-button" onClick={() => { setSystemUserCode(""); setShowUserCreateDialog(false); }} disabled={isSaving}>取消</button><button type="submit" className="primary-button" disabled={isSaving}><UserCog size={17} />{isSaving ? "正在创建" : "创建用户"}</button></footer>
             </form>
           </section>
         </div>
@@ -1794,18 +1790,28 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
       {systemUserProvisioning && isAdmin && (
         <div className="modal-layer" role="presentation">
           <section className="modal user-create-modal" role="dialog" aria-modal="true" aria-labelledby="user-provisioning-title">
-            <header><div><span className="modal-icon"><KeyRound size={20} /></span><div><h2 id="user-provisioning-title">交付首次登录凭据</h2><p>初始密码和 Setup Key 均只在当前窗口显示一次</p></div></div><button className="icon-button" type="button" onClick={() => setSystemUserProvisioning(null)} aria-label="关闭登录验证器交付"><X size={20} /></button></header>
+            <header><div><span className="modal-icon"><KeyRound size={20} /></span><div><h2 id="user-provisioning-title">用户激活</h2><p>激活码不会与密码或验证器密钥混用。</p></div></div><button className="icon-button" type="button" onClick={() => setSystemUserProvisioning(null)} aria-label="关闭用户激活提示"><X size={20} /></button></header>
             <div className="modal-body provisioning-body">
-              <aside className="access-setup-note" role="note"><ShieldCheck size={17} aria-hidden="true" /><div><strong>{systemUserProvisioning.email}</strong><p>请在 Google Authenticator 中选择“输入设置密钥”，账号名称使用该邮箱，密钥类型选择“基于时间”。首次登录后，用户必须用自己的 6 位验证码确认并更换初始密码。</p></div></aside>
-              <label className="provisioning-key">一次性初始密码
-                <span><code>{systemUserProvisioning.temporaryPassword}</code><button type="button" className="icon-button" onClick={() => copyValue(systemUserProvisioning.temporaryPassword, "一次性初始密码")} aria-label="复制一次性初始密码" title="复制一次性初始密码"><Copy size={17} /></button></span>
-              </label>
-              <label className="provisioning-key">一次性 Setup Key
-                <span><code>{systemUserProvisioning.setupKey}</code><button type="button" className="icon-button" onClick={() => copyValue(systemUserProvisioning.setupKey, "登录验证器 Setup Key")} aria-label="复制登录验证器 Setup Key" title="复制 Setup Key"><Copy size={17} /></button></span>
-              </label>
-              <p className="form-hint">请将密码与 Setup Key 分两个受信任渠道交付；关闭窗口后不会在系统中再次显示明文密钥。</p>
+              <aside className="access-setup-note" role="note"><ShieldCheck size={17} aria-hidden="true" /><div><strong>{systemUserProvisioning.account}</strong><p>{systemUserProvisioning.delivery === "email" ? "激活码已发送至该用户的安全邮箱。" : "本地预览未配置邮件服务；请通过安全渠道交付下方激活码。"}</p></div></aside>
+              {systemUserProvisioning.delivery === "manual" && systemUserProvisioning.code && <label className="provisioning-key">一次性激活码
+                <span><code>{systemUserProvisioning.code}</code><button type="button" className="icon-button" onClick={() => copyValue(systemUserProvisioning.code!, "一次性激活码")} aria-label="复制一次性激活码" title="复制激活码"><Copy size={17} /></button></span>
+              </label>}
+              <p className="form-hint">请在激活页输入安全码；激活码将在 {exactTime(systemUserProvisioning.expiresAt)} 失效。</p>
             </div>
-            <footer className="modal-footer"><button type="button" className="primary-button" onClick={() => setSystemUserProvisioning(null)}><Check size={17} />已安全交付</button></footer>
+            <footer className="modal-footer"><button type="button" className="primary-button" onClick={() => setSystemUserProvisioning(null)}><Check size={17} />已处理</button></footer>
+          </section>
+        </div>
+      )}
+
+      {authenticatorRecovery && isAdmin && (
+        <div className="modal-layer" role="presentation">
+          <section className="modal user-create-modal" role="dialog" aria-modal="true" aria-labelledby="authenticator-recovery-title">
+            <header><div><span className="modal-icon"><KeyRound size={20} /></span><div><h2 id="authenticator-recovery-title">验证器恢复已发起</h2><p>恢复码仅发送到该用户已验证的安全邮箱。</p></div></div><button className="icon-button" type="button" onClick={() => setAuthenticatorRecovery(null)} aria-label="关闭验证器恢复提示"><X size={20} /></button></header>
+            <div className="modal-body provisioning-body">
+              <aside className="access-setup-note" role="note"><ShieldCheck size={17} aria-hidden="true" /><div><strong>{authenticatorRecovery.account}</strong><p>旧验证器和全部会话已失效；用户需在 15 分钟内完成邮箱确认并重新绑定 Google 验证器。</p></div></aside>
+              <p className="form-hint">恢复码不会在管理端显示，也无需人工转交。</p>
+            </div>
+            <footer className="modal-footer"><button type="button" className="primary-button" onClick={() => setAuthenticatorRecovery(null)}><Check size={17} />知道了</button></footer>
           </section>
         </div>
       )}
@@ -1813,13 +1819,14 @@ export default function VaultClient({ viewer }: { viewer: Viewer }) {
       {systemUserAction && isAdmin && (
         <div className="modal-layer" role="presentation">
           <section className="modal user-create-modal" role="dialog" aria-modal="true" aria-labelledby="system-user-action-title">
-            <header><div><span className="modal-icon danger-icon"><AlertTriangle size={20} /></span><div><h2 id="system-user-action-title">{systemUserAction.kind === "delete" ? "删除系统用户？" : "停用系统用户？"}</h2><p>{systemUserAction.kind === "delete" ? "此操作会移除该用户及其个人密码库" : "用户可在之后由管理员重新启用"}</p></div></div><button className="icon-button" type="button" onClick={() => setSystemUserAction(null)} aria-label="关闭用户操作确认"><X size={20} /></button></header>
+            <header><div><span className="modal-icon danger-icon"><AlertTriangle size={20} /></span><div><h2 id="system-user-action-title">{systemUserAction.kind === "delete" ? "删除系统用户？" : systemUserAction.kind === "suspend" ? "停用系统用户？" : systemUserAction.kind === "activate" ? "启用系统用户？" : systemUserAction.kind === "resend-activation" ? "重新发送激活码？" : systemUserAction.kind === "reset-authenticator" ? "重置登录验证器？" : "调整系统角色？"}</h2><p>{systemUserAction.kind === "delete" ? "个人项目将一并删除。" : systemUserAction.kind === "suspend" ? "用户将无法登录。" : systemUserAction.kind === "activate" ? "用户可重新登录。" : systemUserAction.kind === "resend-activation" ? "旧激活码会立即失效，新激活码将发送至该用户的安全邮箱。" : systemUserAction.kind === "reset-authenticator" ? "旧验证器和会话将失效。" : `调整为${systemUserAction.role === "admin" ? "管理员" : "普通用户"}。`}</p></div></div><button className="icon-button" type="button" onClick={() => { setSystemUserCode(""); setSystemUserAction(null); }} aria-label="关闭用户操作确认"><X size={20} /></button></header>
             <form className="modal-form" onSubmit={(event) => { event.preventDefault(); void confirmSystemUserAction(); }}>
               <div className="modal-body">
                 <div className="delete-summary"><strong>{systemUserAction.user.email}</strong><span>{systemUserAction.user.role === "admin" ? "管理员" : "普通用户"} · {systemUserAction.user.status === "active" ? "已启用" : "已停用"}</span></div>
-                <p className="delete-description">{systemUserAction.kind === "delete" ? "删除后将移除其系统访问和个人密码库数据，且无法恢复。公共项目与既有审计记录不会受到影响。" : "停用后该用户将不能再访问密码库；其个人项目和公共项目数据会保留，之后可以重新启用。"}</p>
+                <p className="delete-description">{systemUserAction.kind === "delete" ? "删除后无法恢复。" : systemUserAction.kind === "suspend" ? "项目数据会保留。" : systemUserAction.kind === "activate" ? "按现有登录规则访问。" : systemUserAction.kind === "resend-activation" ? "用户完成密码和验证器设置后才可登录。" : systemUserAction.kind === "reset-authenticator" ? "恢复码将发送到该用户已验证的安全邮箱。" : "权限立即生效。"}</p>
+                <label>Google 验证码<input required autoFocus value={systemUserCode} onChange={(event) => setSystemUserCode(event.target.value.replace(/\D/g, "").slice(0, 6))} inputMode="numeric" autoComplete="one-time-code" placeholder="000000" /></label>
               </div>
-              <footer className="modal-footer"><button type="button" className="secondary-button" onClick={() => setSystemUserAction(null)} disabled={isSaving}>取消</button><button type="submit" className="danger-button" disabled={isSaving}>{systemUserAction.kind === "delete" ? <Trash2 size={17} /> : <UserCog size={17} />}{isSaving ? "正在处理" : systemUserAction.kind === "delete" ? "删除用户" : "确认停用"}</button></footer>
+              <footer className="modal-footer"><button type="button" className="secondary-button" onClick={() => { setSystemUserCode(""); setSystemUserAction(null); }} disabled={isSaving}>取消</button><button type="submit" className="danger-button" disabled={isSaving}>{systemUserAction.kind === "delete" ? <Trash2 size={17} /> : <UserCog size={17} />}{isSaving ? "正在处理" : systemUserAction.kind === "delete" ? "删除用户" : systemUserAction.kind === "suspend" ? "确认停用" : systemUserAction.kind === "activate" ? "确认启用" : systemUserAction.kind === "resend-activation" ? "确认发送" : systemUserAction.kind === "reset-authenticator" ? "确认重置" : "确认调整"}</button></footer>
             </form>
           </section>
         </div>

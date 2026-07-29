@@ -1,7 +1,7 @@
 export type ManagedUserPolicyState = {
   email: string;
   role: "admin" | "user";
-  status: "active" | "suspended";
+  status: "pending" | "active" | "suspended" | "frozen";
 };
 
 export function assertSystemUserChangeAllowed(input: {

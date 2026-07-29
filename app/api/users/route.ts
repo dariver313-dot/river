@@ -2,13 +2,19 @@ import { actorRequiredResponse, adminRequiredResponse, apiError, readJsonObject,
 import { crossOriginRequestResponse, secureEmpty, secureJson } from "../../lib/response-security";
 import { rateLimitResponse } from "../../lib/rate-limit";
 import { requireRecentSecurityConfirmation } from "../../lib/security-session";
-import { createManagedUser, deleteManagedUser, listManagedUsers, updateManagedUser } from "../../lib/user-store";
+import { createManagedUser, deleteManagedUser, listManagedUsers, resendManagedUserActivation, resetManagedUserAuthenticator, updateManagedUser } from "../../lib/user-store";
+import { verifySelfHostedTotp } from "../../lib/selfhost-auth";
 
 export const dynamic = "force-dynamic";
 
 function positiveInteger(value: string | null) {
   const parsed = Number.parseInt(value ?? "", 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+}
+
+function pageSize(value: string | null) {
+  const parsed = Number.parseInt(value ?? "", 10);
+  return Number.isFinite(parsed) ? Math.max(1, Math.min(100, parsed)) : 20;
 }
 
 export async function GET(request: Request) {
@@ -20,11 +26,12 @@ export async function GET(request: Request) {
 
   try {
     const search = new URL(request.url).searchParams;
-    return secureJson(await listManagedUsers(actor.email, {
+    const users = await listManagedUsers(actor.email, {
       page: positiveInteger(search.get("page")),
-      pageSize: 20,
+      pageSize: pageSize(search.get("pageSize")),
       query: search.get("query") ?? "",
-    }));
+    });
+    return secureJson(users);
   } catch (error) {
     return apiError(error, 500, request);
   }
@@ -40,9 +47,21 @@ export async function POST(request: Request) {
   if (rateLimited) return rateLimited;
 
   try {
-    await requireRecentSecurityConfirmation(actor.email, request);
-    const user = await createManagedUser(actor.email, await readJsonObject(request));
-    return secureJson({ user }, { status: 201 });
+    await requireRecentSecurityConfirmation(actor.email, actor.authSessionId, request);
+    const body = await readJsonObject(request);
+    if (typeof body.userCode !== "string" || !await verifySelfHostedTotp(actor.email, body.userCode)) {
+      return secureJson({ error: "Google 验证码不正确，请重试。" }, { status: 401 });
+    }
+    if (body.action === "reset_authenticator") {
+      const reset = await resetManagedUserAuthenticator(actor.email, body);
+      return secureJson({ account: reset.user.email, delivery: reset.delivery, expiresAt: reset.expiresAt });
+    }
+    if (body.action === "resend_activation") {
+      const resent = await resendManagedUserActivation(actor.email, body);
+      return secureJson(resent);
+    }
+    const created = await createManagedUser(actor.email, body);
+    return secureJson(created, { status: 201 });
   } catch (error) {
     return apiError(error, 400, request);
   }
@@ -58,8 +77,12 @@ export async function PATCH(request: Request) {
   if (rateLimited) return rateLimited;
 
   try {
-    await requireRecentSecurityConfirmation(actor.email, request);
-    const user = await updateManagedUser(actor.email, await readJsonObject(request));
+    await requireRecentSecurityConfirmation(actor.email, actor.authSessionId, request);
+    const body = await readJsonObject(request);
+    if (typeof body.userCode !== "string" || !await verifySelfHostedTotp(actor.email, body.userCode)) {
+      return secureJson({ error: "Google 验证码不正确，请重试。" }, { status: 401 });
+    }
+    const user = await updateManagedUser(actor.email, body);
     return secureJson({ user });
   } catch (error) {
     return apiError(error, 400, request);
@@ -76,8 +99,12 @@ export async function DELETE(request: Request) {
   if (rateLimited) return rateLimited;
 
   try {
-    await requireRecentSecurityConfirmation(actor.email, request);
-    await deleteManagedUser(actor.email, await readJsonObject(request));
+    await requireRecentSecurityConfirmation(actor.email, actor.authSessionId, request);
+    const body = await readJsonObject(request);
+    if (typeof body.userCode !== "string" || !await verifySelfHostedTotp(actor.email, body.userCode)) {
+      return secureJson({ error: "Google 验证码不正确，请重试。" }, { status: 401 });
+    }
+    await deleteManagedUser(actor.email, body);
     return secureEmpty();
   } catch (error) {
     return apiError(error, 400, request);

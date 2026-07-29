@@ -1,12 +1,17 @@
-import { getD1 } from "../../db";
-import { assertAuthTotpEncryptionReady, encryptAuthTotpSecret } from "./auth-totp-crypto";
-import { hashLoginPassword } from "./auth-password";
+import { getDatabase } from "../../db";
 import { assertSystemUserChangeAllowed, assertSystemUserDeletionAllowed } from "./system-user-policy";
-import { writeAuditEvent } from "./audit-log";
-import { parseTotpInput } from "./totp";
+import { writeAuditedMutation } from "./audit-log";
+import { sharedAuditVaultId } from "./embedded-audit";
+import { accountDisplayName, isValidLoginAccount, normalizeLoginAccount } from "./identity";
+import { initialAdminAccount } from "./initial-admin";
+import { isAuthSessionOnline } from "./user-presence";
+import { issueAccountToken } from "./one-time-tokens";
+import { securityEmailConfigured, securityEmailReady, sendAccountActivation, sendAuthenticatorResetCode } from "./security-email";
+import { normalizeProfileDisplayName, profileAvatarStyle, profileDisplayName, type AccountProfile } from "./profile";
+import { ClientSafeError } from "./security-errors";
 
 export type AppRole = "admin" | "user";
-export type AppUserStatus = "active" | "suspended";
+export type AppUserStatus = "pending" | "active" | "suspended" | "frozen";
 
 export type AppActor = {
   email: string;
@@ -16,6 +21,8 @@ export type AppActor = {
 export type ManagedAppUser = AppActor & {
   status: AppUserStatus;
   createdAt: string;
+  lastLoginAt: string | null;
+  isOnline: boolean;
   isCurrent: boolean;
 };
 
@@ -24,33 +31,38 @@ export type ManagedUsersPage = {
   pagination: { page: number; pageSize: number; total: number; pageCount: number };
 };
 
+export type ManagedAuthenticatorReset = {
+  user: ManagedAppUser;
+  delivery: "email";
+  expiresAt: string;
+};
+
 type AppUserRow = {
   email: string;
   role: AppRole;
   status: AppUserStatus;
   must_change_password: number;
+  security_email: string | null;
+  security_email_verified_at: string | null;
+  display_name: string | null;
+  avatar_style: string | null;
   created_at: string;
-};
-
-type UserRuntimeEnv = {
-  PRIMARY_ADMIN_EMAIL?: string;
+  last_login_at: string | null;
 };
 
 const maxSystemUsers = 100;
 let primaryAdminInitialization: Promise<void> | null = null;
 
 function normalizedEmail(value: string) {
-  return value.trim().toLowerCase();
+  return normalizeLoginAccount(value);
 }
 
 function isValidEmail(value: string) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+  return isValidLoginAccount(value);
 }
 
 function configuredPrimaryAdminEmail() {
-  const email = (process.env as UserRuntimeEnv).PRIMARY_ADMIN_EMAIL;
-  const normalized = email ? normalizedEmail(email) : "";
-  return isValidEmail(normalized) ? normalized : null;
+  return initialAdminAccount();
 }
 
 function timeLabel(value: string) {
@@ -64,22 +76,29 @@ function timeLabel(value: string) {
 }
 
 async function findUser(email: string) {
-  return getD1().prepare(
-    "SELECT email, role, status, must_change_password, created_at FROM app_users WHERE email = ? LIMIT 1",
+  return getDatabase().prepare(
+    "SELECT email, role, status, must_change_password, security_email, security_email_verified_at, display_name, avatar_style, created_at, last_login_at FROM app_users WHERE email = ? LIMIT 1",
   ).bind(normalizedEmail(email)).first<AppUserRow>();
+}
+
+function accountProfile(row: Pick<AppUserRow, "email" | "display_name" | "avatar_style">): AccountProfile {
+  return {
+    displayName: profileDisplayName(row.display_name, accountDisplayName(row.email)),
+    avatarStyle: profileAvatarStyle(row.avatar_style),
+  };
 }
 
 async function configurePrimaryAdmin() {
   const email = configuredPrimaryAdminEmail();
   if (!email) return;
 
-  const d1 = getD1();
-  await d1.prepare(
+  const database = getDatabase();
+  await database.prepare(
     `INSERT INTO app_users (email, role, status, created_by)
      VALUES (?, 'admin', 'active', ?)
      ON CONFLICT(email) DO UPDATE SET role = 'admin', status = 'active', updated_at = CURRENT_TIMESTAMP`,
   ).bind(email, email).run();
-  await d1.prepare(
+  await database.prepare(
     `INSERT INTO app_settings (key, value) VALUES ('initial_admin', ?)
      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP`,
   ).bind(email).run();
@@ -102,7 +121,9 @@ export async function ensureApplicationUser(email: string): Promise<AppActor | n
 
   await ensureConfiguredPrimaryAdmin();
   const existing = await findUser(normalized);
-  return existing?.status === "active" ? { email: existing.email, role: existing.role } : null;
+  return existing?.status === "active" && Boolean(existing.security_email_verified_at)
+    ? { email: existing.email, role: existing.role }
+    : null;
 }
 
 export async function isActiveApplicationUser(email: string) {
@@ -110,9 +131,46 @@ export async function isActiveApplicationUser(email: string) {
   return Boolean(user && user.status === "active");
 }
 
+export async function hasVerifiedSecurityEmail(email: string) {
+  const user = await findUser(email);
+  return Boolean(user && user.status === "active" && user.security_email && user.security_email_verified_at);
+}
+
 export async function getActiveApplicationActor(email: string): Promise<AppActor | null> {
   const user = await findUser(email);
   return user?.status === "active" ? { email: user.email, role: user.role } : null;
+}
+
+export async function getApplicationProfile(email: string): Promise<AccountProfile | null> {
+  const user = await findUser(email);
+  return user?.status === "active" ? accountProfile(user) : null;
+}
+
+export async function updateApplicationProfile(email: string, input: { displayName: unknown; avatarStyle: unknown }): Promise<AccountProfile | null> {
+  const account = normalizedEmail(email);
+  const displayName = normalizeProfileDisplayName(input.displayName);
+  if (!displayName) throw new ClientSafeError("昵称需为 1–32 个字符，且不能包含控制字符。");
+  const avatarStyle = profileAvatarStyle(input.avatarStyle);
+  const current = await findUser(account);
+  if (!current || current.status !== "active") return null;
+
+  const database = getDatabase();
+  await writeAuditedMutation(await sharedAuditVaultId(account), account, "profile_updated", account, {
+    auditOrder: "before",
+    auditPrerequisite: { sql: "SELECT 1 FROM app_users WHERE email = ? AND status = 'active'", values: [account] },
+    commitPrerequisite: {
+      sql: "SELECT 1 FROM app_users WHERE email = ? AND status = 'active' AND display_name = ? AND avatar_style = ?",
+      values: [account, displayName, avatarStyle],
+    },
+    expectedChanges: 1,
+    statements: (guard) => [database.prepare(
+      `UPDATE app_users SET display_name = ?, avatar_style = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE email = ? AND status = 'active' AND ${guard.conditionSql}
+         AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`,
+    ).bind(displayName, avatarStyle, account, ...guard.values, guard.auditEventId)],
+  });
+
+  return { displayName, avatarStyle };
 }
 
 /** A provisioned user cannot read vault data until they replace the one-time password. */
@@ -122,7 +180,7 @@ export async function isPasswordChangeRequired(email: string) {
 }
 
 export async function countActiveApplicationUsers() {
-  const result = await getD1().prepare(
+  const result = await getDatabase().prepare(
     "SELECT COUNT(*) AS count FROM app_users WHERE status = 'active'",
   ).first<{ count: number }>();
   return result?.count ?? 0;
@@ -135,20 +193,28 @@ function boundedPage(value: number | undefined) {
 
 export async function listManagedUsers(actorEmail: string, options: { page?: number; pageSize?: number; query?: string } = {}): Promise<ManagedUsersPage> {
   const current = normalizedEmail(actorEmail);
-  const pageSize = 20;
+  const pageSize = Math.max(1, Math.min(100, Math.floor(options.pageSize ?? 20)));
   const query = typeof options.query === "string" ? options.query.trim().toLowerCase().slice(0, 120) : "";
   const where = query ? "WHERE LOWER(email) LIKE ?" : "";
   const parameters = query ? [`%${query}%`] : [];
-  const d1 = getD1();
-  const count = await d1.prepare(`SELECT COUNT(*) AS count FROM app_users ${where}`).bind(...parameters).first<{ count: number }>();
+  const database = getDatabase();
+  const count = await database.prepare(`SELECT COUNT(*) AS count FROM app_users ${where}`).bind(...parameters).first<{ count: number }>();
   const total = count?.count ?? 0;
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
   const page = Math.min(boundedPage(options.page), pageCount);
   const offset = (page - 1) * pageSize;
-  const result = await d1.prepare(
-    `SELECT email, role, status, must_change_password, created_at FROM app_users ${where}
+  const result = await database.prepare(
+    `SELECT email, role, status, must_change_password, security_email, security_email_verified_at, created_at, last_login_at FROM app_users ${where}
      ORDER BY CASE role WHEN 'admin' THEN 0 ELSE 1 END, created_at ASC, email ASC LIMIT ? OFFSET ?`,
   ).bind(...parameters, pageSize, offset).all<AppUserRow>();
+  const onlineSessions = await database.prepare(
+    "SELECT email, expires_at, last_active_at, revoked_at FROM auth_sessions WHERE revoked_at IS NULL",
+  ).all<{ email: string; expires_at: string; last_active_at: string; revoked_at: string | null }>();
+  const onlineEmails = new Set(onlineSessions.results.filter((session) => isAuthSessionOnline({
+    expiresAt: session.expires_at,
+    lastActiveAt: session.last_active_at,
+    revokedAt: session.revoked_at,
+  })).map((session) => session.email));
 
   return {
     users: result.results.map((user) => ({
@@ -156,6 +222,8 @@ export async function listManagedUsers(actorEmail: string, options: { page?: num
       role: user.role,
       status: user.status,
       createdAt: timeLabel(user.created_at),
+      lastLoginAt: user.last_login_at,
+      isOnline: user.status === "active" && onlineEmails.has(user.email),
       isCurrent: user.email === current,
     })),
     pagination: { page, pageSize, total, pageCount },
@@ -170,23 +238,13 @@ async function requireAdmin(actorEmail: string) {
   return actor;
 }
 
-async function writeSystemAudit(actorEmail: string, action: string, subjectEmail: string) {
-  const d1 = getD1();
-  const sharedVault = await d1.prepare(
-    "SELECT value FROM app_settings WHERE key = 'shared_public_vault' LIMIT 1",
-  ).first<{ value: string }>();
-  if (!sharedVault?.value) return;
-
-  await writeAuditEvent(sharedVault.value, actorEmail, action, subjectEmail);
-}
-
 function inputRole(value: unknown): AppRole {
   if (value === "admin" || value === "user") return value;
   throw new Error("系统角色无效。");
 }
 
 function inputStatus(value: unknown): AppUserStatus {
-  if (value === "active" || value === "suspended") return value;
+  if (value === "pending" || value === "active" || value === "suspended" || value === "frozen") return value;
   throw new Error("账户状态无效。");
 }
 
@@ -196,6 +254,8 @@ function toManagedUser(row: AppUserRow, actorEmail: string): ManagedAppUser {
     role: row.role,
     status: row.status,
     createdAt: timeLabel(row.created_at),
+    lastLoginAt: row.last_login_at,
+    isOnline: false,
     isCurrent: row.email === normalizedEmail(actorEmail),
   };
 }
@@ -203,32 +263,92 @@ function toManagedUser(row: AppUserRow, actorEmail: string): ManagedAppUser {
 export async function createManagedUser(actorEmail: string, input: Record<string, unknown>) {
   const actor = await requireAdmin(actorEmail);
   const email = typeof input.email === "string" ? normalizedEmail(input.email) : "";
-  if (!isValidEmail(email)) throw new Error("请输入有效的用户邮箱。");
+  if (!isValidEmail(email)) throw new Error("请输入有效的登录账号（邮箱或英文数字组合）。");
   const role = inputRole(input.role);
-  const password = typeof input.password === "string" ? input.password : "";
-  const passwordHash = await hashLoginPassword(password);
-  const authTotpSecret = typeof input.authTotpSecret === "string" ? input.authTotpSecret.trim() : "";
-  if (!authTotpSecret) throw new Error("请为该用户生成登录验证器。");
-  const authTotp = parseTotpInput(authTotpSecret);
-  if (authTotp.digits !== 6) throw new Error("系统登录仅支持 6 位 Google 验证器代码。");
-  await assertAuthTotpEncryptionReady();
-  const encryptedTotpSecret = await encryptAuthTotpSecret(email, authTotp.secret);
-  const d1 = getD1();
-  const inserted = await d1.prepare(
-    `INSERT INTO app_users (email, role, status, password_hash, auth_totp_secret, must_change_password, created_by)
-     SELECT ?, ?, 'active', ?, ?, 1, ?
-     WHERE (SELECT COUNT(*) FROM app_users) < ?
-       AND NOT EXISTS (SELECT 1 FROM app_users WHERE email = ?)`,
-  ).bind(email, role, passwordHash, encryptedTotpSecret, actor.email, maxSystemUsers, email).run();
-  if ((inserted.meta.changes ?? 0) !== 1) {
+  const securityEmail = typeof input.securityEmail === "string" ? input.securityEmail.trim().toLowerCase() : "";
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(securityEmail)) throw new Error("请填写接收安全确认码的邮箱。");
+  const allowManualActivation = process.env.NODE_ENV !== "production" || process.env.DJMIMA_ALLOW_MANUAL_ACTIVATION_CODES === "1";
+  if (!allowManualActivation && !securityEmailConfigured()) {
+    throw new Error("创建用户前请先配置安全邮箱通知服务。");
+  }
+  const database = getDatabase();
+  try {
+    await writeAuditedMutation(await sharedAuditVaultId(actor.email), actor.email, "system_user_created", email, {
+      auditOrder: "before",
+      auditPrerequisite: { sql: "SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM app_users WHERE email = ?)", values: [email] },
+      commitPrerequisite: {
+        sql: "SELECT 1 FROM app_users WHERE email = ? AND status = 'pending' AND security_email = ? AND security_email_verified_at IS NULL",
+        values: [email, securityEmail],
+      },
+      expectedChanges: 1,
+      statements: (guard) => [database.prepare(
+        `INSERT INTO app_users (email, role, status, security_email, security_email_verified_at, must_change_password, created_by)
+         SELECT ?, ?, 'pending', ?, 0, ?
+         WHERE (SELECT COUNT(*) FROM app_users) < ?
+           AND NOT EXISTS (SELECT 1 FROM app_users WHERE email = ?)
+           AND ${guard.conditionSql}
+           AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`,
+      ).bind(email, role, securityEmail, actor.email, maxSystemUsers, email, ...guard.values, guard.auditEventId)],
+    });
+  } catch (error) {
     const existing = await findUser(email);
-    throw new Error(existing ? "该用户已存在，可直接调整其角色或状态。" : "系统用户数量已达到安全上限。");
+    if (existing) throw new Error("该用户已存在，可直接调整其角色或状态。");
+    throw error;
   }
 
   const created = await findUser(email);
   if (!created) throw new Error("用户创建失败，请重试。");
-  await writeSystemAudit(actor.email, "system_user_created", email);
-  return toManagedUser(created, actor.email);
+  const activation = await issueAccountToken({
+    email,
+    purpose: "activation",
+    createdBy: actor.email,
+    lifetimeMs: 24 * 60 * 60_000,
+  });
+  if (securityEmailConfigured()) {
+    await sendAccountActivation({ to: securityEmail, code: activation.code, expiresAt: activation.expiresAt });
+    return { user: toManagedUser(created, actor.email), activation: { delivery: "email" as const, expiresAt: activation.expiresAt } };
+  }
+  // This is for local preview or an explicit, controlled break-glass deployment
+  // setting only; production otherwise requires the configured mail transport.
+  return { user: toManagedUser(created, actor.email), activation: { delivery: "manual" as const, code: activation.code, expiresAt: activation.expiresAt } };
+}
+
+/** Replaces an expired or undelivered activation code without activating the account. */
+export async function resendManagedUserActivation(actorEmail: string, input: Record<string, unknown>) {
+  const actor = await requireAdmin(actorEmail);
+  const email = typeof input.email === "string" ? normalizedEmail(input.email) : "";
+  if (!email) throw new Error("缺少用户账号。");
+  const current = await findUser(email);
+  if (!current || current.status !== "pending") throw new Error("只有待激活用户可以重新发送激活码。");
+  const target = current.security_email?.trim().toLowerCase() ?? "";
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(target)) throw new Error("该用户未配置有效的安全邮箱。");
+  const allowManualActivation = process.env.NODE_ENV !== "production" || process.env.DJMIMA_ALLOW_MANUAL_ACTIVATION_CODES === "1";
+  if (!allowManualActivation && !securityEmailConfigured()) {
+    throw new Error("请先配置安全邮箱通知服务。");
+  }
+  const database = getDatabase();
+  await writeAuditedMutation(await sharedAuditVaultId(actor.email), actor.email, "system_user_activation_resent", current.email, {
+    auditOrder: "before",
+    auditPrerequisite: { sql: "SELECT 1 FROM app_users WHERE email = ? AND status = 'pending'", values: [current.email] },
+    commitPrerequisite: { sql: "SELECT 1 FROM app_users WHERE email = ? AND status = 'pending'", values: [current.email] },
+    expectedChanges: 1,
+    statements: (guard) => [database.prepare(
+      `UPDATE app_users SET updated_at = CURRENT_TIMESTAMP
+       WHERE email = ? AND status = 'pending' AND ${guard.conditionSql}
+         AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`,
+    ).bind(current.email, ...guard.values, guard.auditEventId)],
+  });
+  const activation = await issueAccountToken({
+    email: current.email,
+    purpose: "activation",
+    createdBy: actor.email,
+    lifetimeMs: 24 * 60 * 60_000,
+  });
+  if (securityEmailConfigured()) {
+    await sendAccountActivation({ to: target, code: activation.code, expiresAt: activation.expiresAt });
+    return { user: toManagedUser(current, actor.email), activation: { delivery: "email" as const, expiresAt: activation.expiresAt } };
+  }
+  return { user: toManagedUser(current, actor.email), activation: { delivery: "manual" as const, code: activation.code, expiresAt: activation.expiresAt } };
 }
 
 export async function updateManagedUser(actorEmail: string, input: Record<string, unknown>) {
@@ -240,11 +360,14 @@ export async function updateManagedUser(actorEmail: string, input: Record<string
   if (!current) throw new Error("未找到该用户。");
   const nextRole = input.role === undefined ? current.role : inputRole(input.role);
   const nextStatus = input.status === undefined ? current.status : inputStatus(input.status);
+  if (current.status === "pending" && nextStatus === "active") {
+    throw new Error("待激活用户必须先完成自己的密码和 Google 验证器配置。");
+  }
   const removesActiveAdmin = current.role === "admin" && current.status === "active"
     && (nextRole !== "admin" || nextStatus !== "active");
-  const d1 = getD1();
+  const database = getDatabase();
   const activeAdmins = removesActiveAdmin
-    ? await d1.prepare(
+    ? await database.prepare(
       "SELECT COUNT(*) AS count FROM app_users WHERE role = 'admin' AND status = 'active'",
     ).first<{ count: number }>()
     : null;
@@ -256,30 +379,125 @@ export async function updateManagedUser(actorEmail: string, input: Record<string
     nextStatus,
     activeAdminCount: activeAdmins?.count ?? Number.MAX_SAFE_INTEGER,
   });
-  const updatedResult = removesActiveAdmin
-    ? await d1.prepare(
-      `UPDATE app_users
-       SET role = ?, status = ?, updated_at = CURRENT_TIMESTAMP
-       WHERE email = ?
-         AND (SELECT COUNT(*) FROM app_users WHERE role = 'admin' AND status = 'active') > 1`,
-    ).bind(nextRole, nextStatus, current.email).run()
-    : await d1.prepare(
-      "UPDATE app_users SET role = ?, status = ?, updated_at = CURRENT_TIMESTAMP WHERE email = ?",
-    ).bind(nextRole, nextStatus, current.email).run();
-  if ((updatedResult.meta.changes ?? 0) !== 1) {
-    throw new Error(removesActiveAdmin ? "系统至少需要保留一位有效管理员。" : "用户更新失败，请重试。");
+  if (nextRole === current.role && nextStatus === current.status) return toManagedUser(current, actor.email);
+  const action = nextStatus !== current.status ? "system_user_status_changed" : "system_user_role_changed";
+  const now = new Date().toISOString();
+  try {
+    await writeAuditedMutation(await sharedAuditVaultId(actor.email), actor.email, action, current.email, {
+      auditOrder: "before",
+      auditPrerequisite: {
+        sql: "SELECT 1 FROM app_users WHERE email = ? AND role = ? AND status = ?",
+        values: [current.email, current.role, current.status],
+      },
+      commitPrerequisite: {
+        sql: "SELECT 1 FROM app_users WHERE email = ? AND role = ? AND status = ?",
+        values: [current.email, nextRole, nextStatus],
+      },
+      expectedChanges: (results) => (results[0]?.meta.changes ?? 0) === 1,
+      statements: (guard) => [
+        database.prepare(
+          `UPDATE app_users
+           SET role = ?, status = ?, updated_at = CURRENT_TIMESTAMP
+           WHERE email = ? AND role = ? AND status = ?
+             AND (? = 0 OR (SELECT COUNT(*) FROM app_users WHERE role = 'admin' AND status = 'active') > 1)
+             AND ${guard.conditionSql}
+             AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`,
+        ).bind(nextRole, nextStatus, current.email, current.role, current.status, removesActiveAdmin ? 1 : 0, ...guard.values, guard.auditEventId),
+        database.prepare(
+          `UPDATE auth_sessions SET revoked_at = ? WHERE email = ? AND revoked_at IS NULL
+           AND ? = 1 AND ${guard.conditionSql}
+           AND EXISTS (SELECT 1 FROM app_users WHERE email = ? AND role = ? AND status = ?)
+           AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`,
+        ).bind(now, current.email, current.status === "active" && nextStatus !== "active" ? 1 : 0, ...guard.values, current.email, nextRole, nextStatus, guard.auditEventId),
+        database.prepare(
+          `UPDATE security_sessions SET revoked_at = ? WHERE email = ? AND revoked_at IS NULL
+           AND ? = 1 AND ${guard.conditionSql}
+           AND EXISTS (SELECT 1 FROM app_users WHERE email = ? AND role = ? AND status = ?)
+           AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`,
+        ).bind(now, current.email, current.status === "active" && nextStatus !== "active" ? 1 : 0, ...guard.values, current.email, nextRole, nextStatus, guard.auditEventId),
+      ],
+    });
+  } catch (error) {
+    if (removesActiveAdmin) throw new Error("系统至少需要保留一位有效管理员。");
+    throw error;
   }
-  if (current.status === "active" && nextStatus === "suspended") {
-    await d1.batch([
-      d1.prepare("UPDATE auth_sessions SET revoked_at = ? WHERE email = ? AND revoked_at IS NULL").bind(new Date().toISOString(), current.email),
-      d1.prepare("UPDATE security_sessions SET revoked_at = ? WHERE email = ? AND revoked_at IS NULL").bind(new Date().toISOString(), current.email),
-    ]);
-  }
-  if (nextRole !== current.role) await writeSystemAudit(actor.email, "system_user_role_changed", current.email);
-  if (nextStatus !== current.status) await writeSystemAudit(actor.email, "system_user_status_changed", current.email);
   const updated = await findUser(current.email);
   if (!updated) throw new Error("用户更新失败，请重试。");
   return toManagedUser(updated, actor.email);
+}
+
+export async function resetManagedUserAuthenticator(actorEmail: string, input: Record<string, unknown>): Promise<ManagedAuthenticatorReset> {
+  const actor = await requireAdmin(actorEmail);
+  const email = typeof input.email === "string" ? normalizedEmail(input.email) : "";
+  if (!email) throw new Error("缺少用户邮箱。");
+  if (email === actor.email) throw new Error("不能在当前会话中重置自己的登录验证器。");
+  if (email === configuredPrimaryAdminEmail()) throw new Error("初始管理员验证器由部署配置保护，请按运维恢复流程处理。");
+
+  const current = await findUser(email);
+  if (!current) throw new Error("未找到该用户。");
+  const securityEmail = current.security_email?.trim().toLowerCase() ?? "";
+  if (!current.security_email_verified_at || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(securityEmail)) {
+    throw new Error("该用户尚未验证安全邮箱，不能重置登录验证器。");
+  }
+  if (!securityEmailConfigured() || !await securityEmailReady()) throw new Error("安全邮箱服务不可用，暂不能重置登录验证器。");
+  const now = new Date().toISOString();
+  const database = getDatabase();
+
+  // Deliver the opaque recovery factor before invalidating the only working
+  // authenticator. If delivery fails, the account remains exactly as it was.
+  const reset = await issueAccountToken({ email: current.email, purpose: "authenticator_reset", createdBy: actor.email, lifetimeMs: 15 * 60_000 });
+  try {
+    await sendAuthenticatorResetCode({ to: securityEmail, code: reset.code, expiresAt: reset.expiresAt });
+  } catch {
+    throw new Error("验证器恢复邮件发送失败；请检查邮件服务后重新发起重置。");
+  }
+
+  await writeAuditedMutation(await sharedAuditVaultId(actor.email), actor.email, "system_user_authenticator_reset", current.email, {
+    auditOrder: "before",
+    auditPrerequisite: {
+      sql: "SELECT 1 FROM app_users WHERE email = ? AND role = ? AND status = ?",
+      values: [current.email, current.role, current.status],
+    },
+    commitPrerequisite: {
+      sql: "SELECT 1 FROM app_users WHERE email = ? AND auth_totp_secret IS NULL",
+      values: [current.email],
+    },
+    expectedChanges: (results) => (results[0]?.meta.changes ?? 0) === 1,
+    statements: (guard) => [
+      database.prepare(
+        `UPDATE app_users
+         SET auth_totp_secret = NULL, updated_at = CURRENT_TIMESTAMP
+         WHERE email = ? AND role = ? AND status = ?
+           AND ${guard.conditionSql}
+           AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`,
+      ).bind(current.email, current.role, current.status, ...guard.values, guard.auditEventId),
+      database.prepare(
+        `UPDATE auth_sessions SET revoked_at = ? WHERE email = ? AND revoked_at IS NULL
+         AND ${guard.conditionSql}
+         AND EXISTS (SELECT 1 FROM app_users WHERE email = ? AND auth_totp_secret IS NULL)
+         AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`,
+      ).bind(now, current.email, ...guard.values, current.email, guard.auditEventId),
+      database.prepare(
+        `UPDATE security_sessions SET revoked_at = ? WHERE email = ? AND revoked_at IS NULL
+         AND ${guard.conditionSql}
+         AND EXISTS (SELECT 1 FROM app_users WHERE email = ? AND auth_totp_secret IS NULL)
+         AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`,
+      ).bind(now, current.email, ...guard.values, current.email, guard.auditEventId),
+      database.prepare(
+        `UPDATE account_tokens SET revoked_at = ?
+         WHERE email = ? AND purpose = 'authenticator_reset_confirm' AND used_at IS NULL AND revoked_at IS NULL
+           AND ${guard.conditionSql} AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`,
+      ).bind(now, current.email, ...guard.values, guard.auditEventId),
+      database.prepare(
+        `UPDATE authenticator_reset_stages SET used_at = ?
+         WHERE email = ? AND used_at IS NULL
+           AND ${guard.conditionSql} AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`,
+      ).bind(now, current.email, ...guard.values, guard.auditEventId),
+    ],
+  });
+  const updated = await findUser(current.email);
+  if (!updated) throw new Error("用户验证器重置失败，请重试。");
+  return { user: toManagedUser(updated, actor.email), delivery: "email", expiresAt: reset.expiresAt };
 }
 
 export async function deleteManagedUser(actorEmail: string, input: Record<string, unknown>) {
@@ -290,7 +508,7 @@ export async function deleteManagedUser(actorEmail: string, input: Record<string
   const current = await findUser(email);
   if (!current) throw new Error("未找到该用户。");
   const admins = current.role === "admin" && current.status === "active"
-    ? await getD1().prepare(
+    ? await getDatabase().prepare(
       "SELECT COUNT(*) AS count FROM app_users WHERE role = 'admin' AND status = 'active'",
     ).first<{ count: number }>()
     : null;
@@ -301,23 +519,38 @@ export async function deleteManagedUser(actorEmail: string, input: Record<string
     activeAdminCount: admins?.count ?? Number.MAX_SAFE_INTEGER,
   });
 
-  const d1 = getD1();
-  const personalVaults = await d1.prepare(
+  const database = getDatabase();
+  const personalVaults = await database.prepare(
     "SELECT id FROM vaults WHERE owner_email = ? AND kind = 'personal'",
   ).bind(current.email).all<{ id: string }>();
-  const statements = personalVaults.results.flatMap((vault) => [
-    d1.prepare("DELETE FROM vault_items WHERE vault_id = ?").bind(vault.id),
-    d1.prepare("DELETE FROM vault_members WHERE vault_id = ?").bind(vault.id),
-    d1.prepare("DELETE FROM approval_requests WHERE vault_id = ?").bind(vault.id),
-    d1.prepare("DELETE FROM vaults WHERE id = ?").bind(vault.id),
-  ]);
-  statements.push(
-    d1.prepare("DELETE FROM vault_members WHERE email = ?").bind(current.email),
-    d1.prepare("DELETE FROM approval_requests WHERE requested_by = ? OR approver_email = ?").bind(current.email, current.email),
-    d1.prepare("DELETE FROM auth_sessions WHERE email = ?").bind(current.email),
-    d1.prepare("DELETE FROM security_sessions WHERE email = ?").bind(current.email),
-    d1.prepare("DELETE FROM app_users WHERE email = ?").bind(current.email),
-  );
-  await d1.batch(statements);
-  await writeSystemAudit(actor.email, "system_user_deleted", current.email);
+  const removingActiveAdmin = current.role === "admin" && current.status === "active";
+  const targetStillCurrent = `EXISTS (
+    SELECT 1 FROM app_users WHERE email = ? AND role = ? AND status = ?
+      AND (? = 0 OR (SELECT COUNT(*) FROM app_users WHERE role = 'admin' AND status = 'active') > 1)
+  )`;
+  const targetValues = [current.email, current.role, current.status, removingActiveAdmin ? 1 : 0];
+  await writeAuditedMutation(await sharedAuditVaultId(actor.email), actor.email, "system_user_deleted", current.email, {
+    auditOrder: "before",
+    auditPrerequisite: { sql: `SELECT 1 WHERE ${targetStillCurrent}`, values: targetValues },
+    commitPrerequisite: { sql: "SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM app_users WHERE email = ?)", values: [current.email] },
+    expectedChanges: (results) => (results[results.length - 1]?.meta.changes ?? 0) === 1,
+    statements: (guard) => [
+      ...personalVaults.results.flatMap((vault) => [
+        database.prepare(`DELETE FROM vault_items WHERE vault_id = ? AND ${targetStillCurrent} AND ${guard.conditionSql} AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`).bind(vault.id, ...targetValues, ...guard.values, guard.auditEventId),
+        database.prepare(`DELETE FROM vault_members WHERE vault_id = ? AND ${targetStillCurrent} AND ${guard.conditionSql} AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`).bind(vault.id, ...targetValues, ...guard.values, guard.auditEventId),
+        database.prepare(`DELETE FROM vaults WHERE id = ? AND ${targetStillCurrent} AND ${guard.conditionSql} AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`).bind(vault.id, ...targetValues, ...guard.values, guard.auditEventId),
+      ]),
+      database.prepare(`DELETE FROM vault_members WHERE email = ? AND ${targetStillCurrent} AND ${guard.conditionSql} AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`).bind(current.email, ...targetValues, ...guard.values, guard.auditEventId),
+      database.prepare(`DELETE FROM account_tokens WHERE email = ? AND ${targetStillCurrent} AND ${guard.conditionSql} AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`).bind(current.email, ...targetValues, ...guard.values, guard.auditEventId),
+      database.prepare(`DELETE FROM login_challenges WHERE email = ? AND ${targetStillCurrent} AND ${guard.conditionSql} AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`).bind(current.email, ...targetValues, ...guard.values, guard.auditEventId),
+      database.prepare(`DELETE FROM login_events WHERE email = ? AND ${targetStillCurrent} AND ${guard.conditionSql} AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`).bind(current.email, ...targetValues, ...guard.values, guard.auditEventId),
+      database.prepare(`DELETE FROM auth_sessions WHERE email = ? AND ${targetStillCurrent} AND ${guard.conditionSql} AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`).bind(current.email, ...targetValues, ...guard.values, guard.auditEventId),
+      database.prepare(`DELETE FROM security_sessions WHERE email = ? AND ${targetStillCurrent} AND ${guard.conditionSql} AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`).bind(current.email, ...targetValues, ...guard.values, guard.auditEventId),
+      database.prepare(
+        `DELETE FROM app_users WHERE email = ? AND role = ? AND status = ?
+         AND (? = 0 OR (SELECT COUNT(*) FROM app_users WHERE role = 'admin' AND status = 'active') > 1)
+         AND ${guard.conditionSql} AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`,
+      ).bind(current.email, current.role, current.status, removingActiveAdmin ? 1 : 0, ...guard.values, guard.auditEventId),
+    ],
+  });
 }

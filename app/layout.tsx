@@ -19,8 +19,8 @@ export async function generateMetadata(): Promise<Metadata> {
   const configuredOrigin = process.env.DJMIMA_PUBLIC_ORIGIN?.trim();
   const protocol = host.startsWith("localhost") || host.startsWith("127.0.0.1") ? "http" : "https";
   const origin = configuredOrigin && /^https?:\/\//.test(configuredOrigin) ? configuredOrigin.replace(/\/$/, "") : `${protocol}://${host}`;
-  const title = "djmima｜个人账号与密码安全中心";
-  const description = "集中管理账号、密码与验证器代码，并通过权限与审计记录保护敏感信息。";
+  const title = "djmima｜安全工作台";
+  const description = "集中管理登录信息、验证器与访问权限，并通过审计记录保护敏感操作。";
 
   return {
     title,
@@ -34,7 +34,7 @@ export async function generateMetadata(): Promise<Metadata> {
       description,
       type: "website",
       locale: "zh_CN",
-      images: [{ url: `${origin}/og-djmima.png`, width: 1200, height: 630, alt: "djmima 密码管理平台界面预览" }],
+      images: [{ url: `${origin}/og-djmima.png`, width: 1200, height: 630, alt: "djmima 安全工作台界面预览" }],
     },
     twitter: {
       card: "summary_large_image",

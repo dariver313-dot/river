@@ -1,4 +1,4 @@
-import { getAuthenticatedUser } from "../selfhost-session";
+import { getAuthenticatedSession } from "../selfhost-session";
 import { ensureApplicationUser, isPasswordChangeRequired } from "./user-store";
 import { readLimitedJsonObject } from "./request-validation";
 import { secureJson } from "./response-security";
@@ -6,12 +6,12 @@ import { ClientSafeError } from "./security-errors";
 import { requireActiveSecuritySession } from "./security-session";
 
 export async function requireApplicationActor() {
-  const user = await getAuthenticatedUser();
-  if (!user) return null;
-  if (await isPasswordChangeRequired(user.email)) return null;
-  const account = await ensureApplicationUser(user.email);
+  const session = await getAuthenticatedSession();
+  if (!session) return null;
+  if (await isPasswordChangeRequired(session.email)) return null;
+  const account = await ensureApplicationUser(session.email);
   if (!account) return null;
-  return { ...account, displayName: user.displayName };
+  return { ...account, displayName: session.displayName, authSessionId: session.sessionId };
 }
 
 export async function requireVaultActor(request?: Request) {
@@ -19,7 +19,7 @@ export async function requireVaultActor(request?: Request) {
   if (!actor) return null;
   if (!request) return actor;
   try {
-    await requireActiveSecuritySession(actor.email, request);
+    await requireActiveSecuritySession(actor.email, actor.authSessionId, request);
     return actor;
   } catch {
     return null;

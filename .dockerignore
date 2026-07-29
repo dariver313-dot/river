@@ -1,12 +1,7 @@
 .git
 .github
 .next
-.vinext
-.wrangler
 node_modules
-dist
-build
-outputs
 coverage
 data
 .env

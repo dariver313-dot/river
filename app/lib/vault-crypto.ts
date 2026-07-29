@@ -172,12 +172,8 @@ export async function assertVaultEncryptionReady() {
     const audit = await auditKeyring();
     await getAuditKey(audit.activeKeyId);
   } catch {
-    throw new Error("密码库加密配置无效。请联系系统管理员检查密钥变量。");
+    throw new Error("加密配置无效。请联系系统管理员检查密钥变量。");
   }
-}
-
-export async function activeVaultEncryptionKeyId() {
-  return (await encryptionKeyring()).activeKeyId;
 }
 
 export async function encryptVaultPayload(payload: unknown, context: VaultEncryptionContext): Promise<Required<EncryptedPayload>> {

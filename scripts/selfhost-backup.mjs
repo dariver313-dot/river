@@ -1,6 +1,6 @@
 import Database from "better-sqlite3";
 import { mkdir, readdir, rename, rm } from "node:fs/promises";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 
 const databasePath = resolve(process.env.DJMIMA_DATABASE_PATH || "/app/data/djmima.sqlite");
 const backupDirectory = resolve(process.env.DJMIMA_BACKUP_DIR || "/app/data/backups");
@@ -15,7 +15,21 @@ try {
 } finally {
   database.close();
 }
-await rename(temporaryDestination, destination);
+
+let verified = false;
+try {
+  const backup = new Database(temporaryDestination, { readonly: true, fileMustExist: true });
+  try {
+    const integrity = backup.prepare("PRAGMA integrity_check").pluck().get();
+    if (integrity !== "ok") throw new Error(`SQLite backup integrity check failed: ${String(integrity)}`);
+  } finally {
+    backup.close();
+  }
+  await rename(temporaryDestination, destination);
+  verified = true;
+} finally {
+  if (!verified) await rm(temporaryDestination, { force: true });
+}
 
 const backups = (await readdir(backupDirectory, { withFileTypes: true }))
   .filter((entry) => entry.isFile() && /^djmima-[\dT-]+Z\.sqlite$/.test(entry.name))
@@ -23,4 +37,4 @@ const backups = (await readdir(backupDirectory, { withFileTypes: true }))
   .sort()
   .reverse();
 await Promise.all(backups.slice(14).map((entry) => rm(join(backupDirectory, basename(entry)))));
-console.log(`Created SQLite online backup: ${destination}`);
+console.log(`Created verified SQLite online backup: ${destination}`);

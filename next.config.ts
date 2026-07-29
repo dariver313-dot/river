@@ -1,5 +1,9 @@
 import type { NextConfig } from "next";
 
+// React and Turbopack use eval-backed development diagnostics. This exception
+// is intentionally local-only; the production CSP remains strict.
+const developmentScriptSource = process.env.NODE_ENV === "development" ? " 'unsafe-eval'" : "";
+
 const applicationSecurityPolicy = [
   "default-src 'self'",
   "base-uri 'self'",
@@ -7,9 +11,12 @@ const applicationSecurityPolicy = [
   "font-src 'self' data:",
   "form-action 'self'",
   "frame-ancestors 'none'",
+  // Exact source membership is enforced by the database-backed application
+  // rule. Next's build-time header configuration cannot query that rule.
+  "frame-src 'self' https:",
   "img-src 'self' blob: data:",
   "object-src 'none'",
-  "script-src 'self' 'unsafe-inline'",
+  "script-src 'self' 'unsafe-inline'" + developmentScriptSource,
   "style-src 'self' 'unsafe-inline'",
 ].join("; ");
 

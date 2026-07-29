@@ -1,11 +1,11 @@
-import { getD1 } from "../../db";
+import { getDatabase } from "../../db";
 import { parseTotpInput, toTotpConfig, type TotpConfig } from "./totp";
-import { countActiveApplicationUsers, getActiveApplicationActor } from "./user-store";
-import { activeVaultEncryptionKeyId, assertVaultEncryptionReady, decryptVaultPayload, encryptVaultPayload } from "./vault-crypto";
+import { getActiveApplicationActor } from "./user-store";
+import { assertVaultEncryptionReady, decryptVaultPayload, encryptVaultPayload } from "./vault-crypto";
 import { assertVaultMoveAllowed, boundedText, isVaultSpace, vaultItemLimit, type VaultSpace } from "./vault-policy";
 import { reviewCredentialSecurity, type SecurityIssue } from "./security-review";
 import { canonicalPublicVaultId, resolveSharedPublicVault } from "./shared-public-vault";
-import { auditIntegrity, verifyAuditChain, writeAuditEvent } from "./audit-log";
+import { auditIntegrity, verifyAuditChain, writeAuditedMutation, writeAuditEvent } from "./audit-log";
 
 export type VaultItemType = "登录" | "卡片" | "安全笔记";
 export type VaultStrength = "安全" | "一般" | "风险";
@@ -48,23 +48,12 @@ export type VaultListOptions = {
   sortOrder?: "updated" | "name";
 };
 
-export type ManagementAuditCategory = "all" | "project" | "user" | "export";
+export type ManagementAuditCategory = "all" | "project" | "user" | "embedded";
 
 export type ManagementAuditPage = {
   audit: Array<{ action: string; actorEmail: string; itemId: string | null; createdAt: string; integrity: "legacy" | "sealed" | "failed" }>;
   chainIntegrity: "legacy" | "sealed" | "failed";
   pagination: { page: number; pageSize: number; total: number; pageCount: number };
-};
-
-export type ApprovalRequest = {
-  id: string;
-  action: "export_vault";
-  requestedBy: string;
-  status: "pending" | "approved" | "rejected" | "expired";
-  approverEmail: string | null;
-  expiresAt: string;
-  canDecide: boolean;
-  isRequester: boolean;
 };
 
 type StoredCredential = Omit<VaultCredential, "id" | "group" | "updated" | "canEdit" | "sharedBy" | "category" | "totps"> & {
@@ -113,13 +102,23 @@ type AuditEventRow = {
 const managementAuditActions = {
   all: [
     "item_created", "item_updated", "item_published_to_public", "item_deleted",
-    "system_user_created", "system_user_role_changed", "system_user_status_changed", "system_user_deleted",
-    "export_approval_requested", "export_approved", "export_rejected", "vault_exported",
+    "system_user_created", "system_user_role_changed", "system_user_status_changed", "system_user_authenticator_reset", "system_user_deleted", "account_password_changed",
+    "initial_admin_initialized",
+    "embedded_origin_added", "embedded_origin_deleted", "embedded_page_created", "embedded_page_updated", "embedded_page_deleted",
   ],
   project: ["item_created", "item_updated", "item_published_to_public", "item_deleted"],
-  user: ["system_user_created", "system_user_role_changed", "system_user_status_changed", "system_user_deleted"],
-  export: ["export_approval_requested", "export_approved", "export_rejected", "vault_exported"],
+  user: ["system_user_created", "system_user_role_changed", "system_user_status_changed", "system_user_authenticator_reset", "system_user_deleted", "account_password_changed", "initial_admin_initialized"],
+  embedded: ["embedded_origin_added", "embedded_origin_deleted", "embedded_page_created", "embedded_page_updated", "embedded_page_deleted"],
 } as const satisfies Record<ManagementAuditCategory, readonly string[]>;
+
+const managementAuditIntegrityCache = new Map<string, { sequence: number; headHash: string; checkedAt: number; integrity: "legacy" | "sealed" | "failed" }>();
+const managementAuditIntegrityCacheTtlMs = 60_000;
+const vaultSummaryCache = new Map<string, { expiresAt: number; summaries: VaultItemSummary[] }>();
+const vaultSummaryCacheTtlMs = 30_000;
+
+function clearVaultSummaryCache() {
+  vaultSummaryCache.clear();
+}
 
 function isItemType(value: unknown): value is VaultItemType {
   return value === "登录" || value === "卡片" || value === "安全笔记";
@@ -219,53 +218,53 @@ function storedPayload(input: Record<string, unknown>): StoredCredential {
 }
 
 async function ensureOwnedVault(email: string, kind: VaultKind): Promise<AccessibleVault> {
-  const d1 = getD1();
-  const existing = await d1.prepare(
+  const database = getDatabase();
+  const existing = await database.prepare(
     "SELECT id, owner_email, kind FROM vaults WHERE owner_email = ? AND kind = ? LIMIT 1",
   ).bind(email, kind).first<{ id: string; owner_email: string; kind: VaultKind }>();
 
   if (existing) return { id: existing.id, ownerEmail: existing.owner_email, kind: existing.kind, role: "owner" };
 
   const id = crypto.randomUUID();
-  const name = kind === "personal" ? "个人密码库" : "公共密码库";
+  const name = kind === "personal" ? "个人工作区" : "公共工作区";
   try {
-    await d1.prepare(
+    await database.prepare(
       "INSERT INTO vaults (id, owner_email, kind, name) VALUES (?, ?, ?, ?)",
     ).bind(id, email, kind, name).run();
   } catch {
-    const createdByAnotherRequest = await d1.prepare(
+    const createdByAnotherRequest = await database.prepare(
       "SELECT id, owner_email, kind FROM vaults WHERE owner_email = ? AND kind = ? LIMIT 1",
     ).bind(email, kind).first<{ id: string; owner_email: string; kind: VaultKind }>();
     if (createdByAnotherRequest) {
       return { id: createdByAnotherRequest.id, ownerEmail: createdByAnotherRequest.owner_email, kind: createdByAnotherRequest.kind, role: "owner" };
     }
-    throw new Error("无法创建密码库。");
+    throw new Error("无法创建工作区。");
   }
 
   return { id, ownerEmail: email, kind, role: "owner" };
 }
 
 async function findSharedPublicVault(): Promise<AccessibleVault | null> {
-  const d1 = getD1();
-  const configured = await d1.prepare(
+  const database = getDatabase();
+  const configured = await database.prepare(
     "SELECT value FROM app_settings WHERE key = 'shared_public_vault' LIMIT 1",
   ).first<{ value: string }>();
   if (configured?.value) {
-    const vault = await d1.prepare(
+    const vault = await database.prepare(
       "SELECT id, owner_email, kind FROM vaults WHERE id = ? AND kind = 'public' LIMIT 1",
     ).bind(configured.value).first<{ id: string; owner_email: string; kind: VaultKind }>();
     if (vault) return { id: vault.id, ownerEmail: vault.owner_email, kind: vault.kind, role: "owner" };
   }
 
-  const existing = await d1.prepare(
+  const existing = await database.prepare(
     "SELECT id, owner_email, kind FROM vaults WHERE kind = 'public' ORDER BY created_at ASC LIMIT 1",
   ).first<{ id: string; owner_email: string; kind: VaultKind }>();
   const selected = resolveSharedPublicVault(configured?.value, existing ? [existing] : []);
   if (!selected) return null;
 
-  // 站点迁移或人工清理可能留下指向已删除密码库的旧设置。只要存在有效的
-  // 公共密码库，就以最早创建的项目恢复唯一映射，避免公共项目整体不可见。
-  await d1.prepare(
+  // 站点迁移或人工清理可能留下指向已删除工作区的旧设置。只要存在有效的
+  // 公共工作区，就以最早创建的项目恢复唯一映射，避免公共项目整体不可见。
+  await database.prepare(
     `INSERT INTO app_settings (key, value) VALUES ('shared_public_vault', ?)
      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP`,
   ).bind(selected.id).run();
@@ -274,22 +273,22 @@ async function findSharedPublicVault(): Promise<AccessibleVault | null> {
 
 async function ensureSharedPublicVault(adminEmail: string): Promise<AccessibleVault> {
   const actor = await getActiveApplicationActor(adminEmail);
-  if (!actor || actor.role !== "admin") throw new Error("公共密码库只能由管理员初始化。");
+  if (!actor || actor.role !== "admin") throw new Error("公共工作区只能由管理员初始化。");
 
   const existing = await findSharedPublicVault();
   if (existing) return existing;
 
-  const d1 = getD1();
-  await d1.prepare(
-    "INSERT OR IGNORE INTO vaults (id, owner_email, kind, name) VALUES (?, ?, 'public', '公共密码库')",
+  const database = getDatabase();
+  await database.prepare(
+    "INSERT OR IGNORE INTO vaults (id, owner_email, kind, name) VALUES (?, ?, 'public', '公共工作区')",
   ).bind(canonicalPublicVaultId, adminEmail).run();
-  await d1.prepare(
+  await database.prepare(
     `INSERT INTO app_settings (key, value) VALUES ('shared_public_vault', ?)
      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP`,
   ).bind(canonicalPublicVaultId).run();
 
   const shared = await findSharedPublicVault();
-  if (!shared) throw new Error("无法初始化公共密码库。");
+  if (!shared) throw new Error("无法初始化公共工作区。");
   return shared;
 }
 
@@ -362,7 +361,7 @@ function toSummary(credential: VaultCredential, securityIssues: SecurityIssue[] 
 }
 
 export async function listVaultData(email: string) {
-  const d1 = getD1();
+  const database = getDatabase();
   const actor = await getActiveApplicationActor(email);
   if (!actor) throw new Error("当前系统账户未启用。");
   await assertVaultEncryptionReady();
@@ -372,28 +371,32 @@ export async function listVaultData(email: string) {
   for (const vault of vaultAccess) {
     const space: VaultSpace = vault.kind === "personal" ? "个人" : "公共";
     const limit = vaultItemLimit(space);
-    const result = await d1.prepare(
+    const result = await database.prepare(
       "SELECT id, vault_id, ciphertext, iv, key_id, encryption_version, created_at, updated_at FROM vault_items WHERE vault_id = ? ORDER BY updated_at DESC LIMIT ?",
     ).bind(vault.id, limit + 1).all<VaultItemRow>();
-    if (result.results.length > limit) throw new Error("密码库项目数量超过安全上限。请联系管理员处理。");
+    if (result.results.length > limit) throw new Error("项目数量超过安全上限。请联系管理员处理。");
 
-    for (const row of result.results) {
+    // WebCrypto work is asynchronous.  A small bounded batch lowers list latency
+    // without starting hundreds of simultaneous decryptions for a large vault.
+    for (let offset = 0; offset < result.results.length; offset += 16) {
+      const batch = result.results.slice(offset, offset + 16);
       try {
-        const payload = await decryptVaultPayload<StoredCredential>(
-          { ciphertext: row.ciphertext, iv: row.iv, keyId: row.key_id, encryptionVersion: row.encryption_version },
-          { vaultId: row.vault_id, itemId: row.id },
-        );
-        items.push({ value: toCredential(row, payload, vault), updatedAt: row.updated_at });
+        const decrypted = await Promise.all(batch.map(async (row) => ({
+          row,
+          payload: await decryptVaultPayload<StoredCredential>(
+            { ciphertext: row.ciphertext, iv: row.iv, keyId: row.key_id, encryptionVersion: row.encryption_version },
+            { vaultId: row.vault_id, itemId: row.id },
+          ),
+        })));
+        items.push(...decrypted.map(({ row, payload }) => ({ value: toCredential(row, payload, vault), updatedAt: row.updated_at })));
       } catch {
-        throw new Error("无法读取已加密的密码库数据。");
+        throw new Error("无法读取已加密的数据。");
       }
     }
   }
 
   return {
     items: items.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)).map((item) => item.value),
-    publicUserCount: await countActiveApplicationUsers(),
-    approvals: await listApprovalRequests(email),
   };
 }
 
@@ -411,9 +414,9 @@ export async function listManagementAudit(email: string, options: { page?: numbe
     return { audit: [], chainIntegrity: "legacy", pagination: { page: 1, pageSize, total: 0, pageCount: 1 } };
   }
 
-  const d1 = getD1();
+  const database = getDatabase();
   const actionMarkers = actions.map(() => "?").join(", ");
-  const totalRow = await d1.prepare(
+  const totalRow = await database.prepare(
     `SELECT COUNT(*) AS count FROM audit_events
      WHERE vault_id = ? AND action IN (${actionMarkers})`,
   ).bind(publicVault.id, ...actions).first<{ count: number }>();
@@ -421,7 +424,7 @@ export async function listManagementAudit(email: string, options: { page?: numbe
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
   const page = Math.min(requestedPage, pageCount);
   const offset = (page - 1) * pageSize;
-  const result = await d1.prepare(
+  const result = await database.prepare(
     `SELECT id, vault_id, action, actor_email, item_id, created_at, signature, signature_key_id, event_version, sequence, previous_hash, chain_hash FROM audit_events
      WHERE vault_id = ? AND action IN (${actionMarkers})
      ORDER BY created_at DESC
@@ -448,24 +451,44 @@ export async function listManagementAudit(email: string, options: { page?: numbe
       chainHash: event.chain_hash,
     }),
   })));
-  const chainRows = await d1.prepare(
-    `SELECT id, vault_id, action, actor_email, item_id, created_at, signature, signature_key_id, event_version, sequence, previous_hash, chain_hash
-     FROM audit_events WHERE vault_id = ? AND event_version = 1 ORDER BY sequence ASC`,
-  ).bind(publicVault.id).all<AuditEventRow>();
-  const chainIntegrity = await verifyAuditChain(publicVault.id, chainRows.results.map((event) => ({
-    id: event.id,
-    vaultId: event.vault_id,
-    actorEmail: event.actor_email,
-    action: event.action,
-    itemId: event.item_id,
-    createdAt: event.created_at,
-    signature: event.signature,
-    signatureKeyId: event.signature_key_id,
-    eventVersion: event.event_version,
-    sequence: event.sequence,
-    previousHash: event.previous_hash,
-    chainHash: event.chain_hash,
-  })));
+  const chainState = await database.prepare(
+    "SELECT last_sequence, head_hash FROM audit_chain_states WHERE vault_id = ? LIMIT 1",
+  ).bind(publicVault.id).first<{ last_sequence: number; head_hash: string }>();
+  const cachedIntegrity = chainState ? managementAuditIntegrityCache.get(publicVault.id) : undefined;
+  let chainIntegrity: "legacy" | "sealed" | "failed";
+  if (chainState && cachedIntegrity
+    && cachedIntegrity.sequence === chainState.last_sequence
+    && cachedIntegrity.headHash === chainState.head_hash
+    && Date.now() - cachedIntegrity.checkedAt < managementAuditIntegrityCacheTtlMs) {
+    chainIntegrity = cachedIntegrity.integrity;
+  } else {
+    const chainRows = await database.prepare(
+      `SELECT id, vault_id, action, actor_email, item_id, created_at, signature, signature_key_id, event_version, sequence, previous_hash, chain_hash
+       FROM audit_events WHERE vault_id = ? AND event_version = 1 ORDER BY sequence ASC`,
+    ).bind(publicVault.id).all<AuditEventRow>();
+    chainIntegrity = await verifyAuditChain(publicVault.id, chainRows.results.map((event) => ({
+      id: event.id,
+      vaultId: event.vault_id,
+      actorEmail: event.actor_email,
+      action: event.action,
+      itemId: event.item_id,
+      createdAt: event.created_at,
+      signature: event.signature,
+      signatureKeyId: event.signature_key_id,
+      eventVersion: event.event_version,
+      sequence: event.sequence,
+      previousHash: event.previous_hash,
+      chainHash: event.chain_hash,
+    })));
+    if (chainState) {
+      managementAuditIntegrityCache.set(publicVault.id, {
+        sequence: chainState.last_sequence,
+        headHash: chainState.head_hash,
+        checkedAt: Date.now(),
+        integrity: chainIntegrity,
+      });
+    }
+  }
 
   return {
     audit,
@@ -491,9 +514,17 @@ function summaryMatchesQuery(item: VaultItemSummary, query: string) {
 }
 
 export async function listVaultSummaryData(email: string, options: VaultListOptions = {}) {
-  const data = await listVaultData(email);
-  const issuesByItem = reviewCredentialSecurity(data.items);
-  const summaries = data.items.map((item) => toSummary(item, issuesByItem.get(item.id) ?? []));
+  const cacheKey = email.toLowerCase();
+  const cached = vaultSummaryCache.get(cacheKey);
+  let summaries: VaultItemSummary[];
+  if (cached && cached.expiresAt > Date.now()) {
+    summaries = cached.summaries;
+  } else {
+    const data = await listVaultData(email);
+    const issuesByItem = reviewCredentialSecurity(data.items);
+    summaries = data.items.map((item) => toSummary(item, issuesByItem.get(item.id) ?? []));
+    vaultSummaryCache.set(cacheKey, { expiresAt: Date.now() + vaultSummaryCacheTtlMs, summaries });
+  }
   const categoryNames = Array.from(new Set(summaries.map((item) => item.category.trim()).filter(Boolean)))
     .sort((left, right) => left.localeCompare(right, "zh-CN"));
   const spaceCounts = {
@@ -527,7 +558,6 @@ export async function listVaultSummaryData(email: string, options: VaultListOpti
   const offset = (page - 1) * pageSize;
 
   return {
-    ...data,
     items: sorted.slice(offset, offset + pageSize),
     categoryNames,
     spaceCounts,
@@ -554,31 +584,40 @@ export async function createVaultItem(email: string, input: Record<string, unkno
   const payload = storedPayload(input);
   const id = crypto.randomUUID();
   const encrypted = await encryptVaultPayload(payload, { vaultId: vault.id, itemId: id });
-  const d1 = getD1();
+  const database = getDatabase();
 
-  const inserted = await d1.prepare(
-    `INSERT INTO vault_items (id, vault_id, ciphertext, iv, key_id, encryption_version)
-     SELECT ?, ?, ?, ?, ?, ?
-     WHERE (SELECT COUNT(*) FROM vault_items WHERE vault_id = ?) < ?`,
-  ).bind(
-    id,
-    vault.id,
-    encrypted.ciphertext,
-    encrypted.iv,
-    encrypted.keyId,
-    encrypted.encryptionVersion,
-    vault.id,
-    vaultItemLimit(space),
-  ).run();
-  if ((inserted.meta.changes ?? 0) !== 1) throw new Error("该密码库的项目数量已达到安全上限。");
-  await writeAudit(vault.id, email, "item_created", id);
+  await writeAuditedMutation(vault.id, email, "item_created", id, {
+    auditOrder: "before",
+    auditPrerequisite: { sql: "SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM vault_items WHERE id = ?)", values: [id] },
+    commitPrerequisite: { sql: "SELECT 1 FROM vault_items WHERE id = ?", values: [id] },
+    expectedChanges: 1,
+    statements: (guard) => [database.prepare(
+      `INSERT INTO vault_items (id, vault_id, ciphertext, iv, key_id, encryption_version)
+       SELECT ?, ?, ?, ?, ?, ?
+       WHERE (SELECT COUNT(*) FROM vault_items WHERE vault_id = ?) < ?
+         AND ${guard.conditionSql}
+         AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`,
+    ).bind(
+      id,
+      vault.id,
+      encrypted.ciphertext,
+      encrypted.iv,
+      encrypted.keyId,
+      encrypted.encryptionVersion,
+      vault.id,
+      vaultItemLimit(space),
+      ...guard.values,
+      guard.auditEventId,
+    )],
+  });
+  clearVaultSummaryCache();
 
   return { id, ...payload, category: payload.category ?? "", totps: payload.totps ?? [], group: space, updated: "刚刚更新", canEdit: space === "个人" || actor.role === "admin" } satisfies VaultCredential;
 }
 
 async function findItemAccess(email: string, itemId: string) {
-  const d1 = getD1();
-  const item = await d1.prepare(
+  const database = getDatabase();
+  const item = await database.prepare(
     "SELECT id, vault_id, ciphertext, iv, key_id, encryption_version, created_at, updated_at FROM vault_items WHERE id = ? LIMIT 1",
   ).bind(itemId).first<VaultItemRow>();
   if (!item) throw new Error("未找到该项目。");
@@ -587,6 +626,11 @@ async function findItemAccess(email: string, itemId: string) {
   if (!vault) throw new Error("你没有访问该项目的权限。");
 
   return { item, vault };
+}
+
+export async function getVaultItemScope(email: string, itemId: string) {
+  const { vault } = await findItemAccess(email, itemId);
+  return { group: vault.kind === "public" ? "公共" : "个人" } satisfies { group: VaultSpace };
 }
 
 export async function updateVaultItem(email: string, itemId: string, input: Record<string, unknown>) {
@@ -601,26 +645,39 @@ export async function updateVaultItem(email: string, itemId: string, input: Reco
   const destination = nextSpace === currentSpace ? vault : await vaultForSpace(email, nextSpace);
   const payload = storedPayload(input);
   const encrypted = await encryptVaultPayload(payload, { vaultId: destination.id, itemId: item.id });
-  const d1 = getD1();
+  const database = getDatabase();
 
-  const updated = await d1.prepare(
-    `UPDATE vault_items
-     SET vault_id = ?, ciphertext = ?, iv = ?, key_id = ?, encryption_version = ?, updated_at = CURRENT_TIMESTAMP
-     WHERE id = ?
-       AND (? = 0 OR (SELECT COUNT(*) FROM vault_items WHERE vault_id = ?) < ?)`,
-  ).bind(
-    destination.id,
-    encrypted.ciphertext,
-    encrypted.iv,
-    encrypted.keyId,
-    encrypted.encryptionVersion,
-    item.id,
-    destination.id === item.vault_id ? 0 : 1,
-    destination.id,
-    vaultItemLimit(nextSpace),
-  ).run();
-  if ((updated.meta.changes ?? 0) !== 1) throw new Error("目标密码库的项目数量已达到安全上限。");
-  await writeAudit(destination.id, email, nextSpace !== currentSpace ? "item_published_to_public" : "item_updated", item.id);
+  await writeAuditedMutation(destination.id, email, nextSpace !== currentSpace ? "item_published_to_public" : "item_updated", item.id, {
+    auditOrder: "before",
+    auditPrerequisite: { sql: "SELECT 1 FROM vault_items WHERE id = ? AND vault_id = ?", values: [item.id, item.vault_id] },
+    commitPrerequisite: {
+      sql: "SELECT 1 FROM vault_items WHERE id = ? AND vault_id = ? AND ciphertext = ? AND iv = ?",
+      values: [item.id, destination.id, encrypted.ciphertext, encrypted.iv],
+    },
+    expectedChanges: 1,
+    statements: (guard) => [database.prepare(
+      `UPDATE vault_items
+       SET vault_id = ?, ciphertext = ?, iv = ?, key_id = ?, encryption_version = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND vault_id = ?
+         AND (? = 0 OR (SELECT COUNT(*) FROM vault_items WHERE vault_id = ?) < ?)
+         AND ${guard.conditionSql}
+         AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`,
+    ).bind(
+      destination.id,
+      encrypted.ciphertext,
+      encrypted.iv,
+      encrypted.keyId,
+      encrypted.encryptionVersion,
+      item.id,
+      item.vault_id,
+      destination.id === item.vault_id ? 0 : 1,
+      destination.id,
+      vaultItemLimit(nextSpace),
+      ...guard.values,
+      guard.auditEventId,
+    )],
+  });
+  clearVaultSummaryCache();
 
   return { id: item.id, ...payload, category: payload.category ?? "", totps: payload.totps ?? [], group: nextSpace, updated: "刚刚更新", canEdit: nextSpace === "个人" || actor?.role === "admin" } satisfies VaultCredential;
 }
@@ -642,157 +699,18 @@ export async function deleteVaultItem(email: string, itemId: string) {
   const { item, vault } = await findItemAccess(email, itemId);
   if (!canWrite(vault.role)) throw new Error("你只有查看权限，无法删除该项目。");
 
-  const d1 = getD1();
-  await d1.prepare("DELETE FROM vault_items WHERE id = ?").bind(item.id).run();
-  await writeAudit(vault.id, email, "item_deleted", item.id);
-}
-
-export async function listApprovalRequests(email: string): Promise<ApprovalRequest[]> {
-  const d1 = getD1();
-  const publicVault = await findSharedPublicVault();
-  if (!publicVault) return [];
-  const approvals: ApprovalRequest[] = [];
-
-  {
-    const result = await d1.prepare(
-      "SELECT id, requested_by, action, status, approver_email, expires_at FROM approval_requests WHERE vault_id = ? AND status IN ('pending', 'approved') ORDER BY created_at DESC LIMIT 20",
-    ).bind(publicVault.id).all<{ id: string; requested_by: string; action: "export_vault"; status: "pending" | "approved"; approver_email: string | null; expires_at: string }>();
-
-    for (const approval of result.results) {
-      const expired = Date.parse(approval.expires_at) <= Date.now();
-      if (expired) {
-        await d1.prepare("UPDATE approval_requests SET status = 'expired', resolved_at = CURRENT_TIMESTAMP WHERE id = ?").bind(approval.id).run();
-        continue;
-      }
-      approvals.push({
-        id: approval.id,
-        action: approval.action,
-        requestedBy: approval.requested_by,
-        status: approval.status,
-        approverEmail: approval.approver_email,
-        expiresAt: timeLabel(approval.expires_at),
-        canDecide: approval.status === "pending" && approval.requested_by !== email,
-        isRequester: approval.requested_by === email,
-      });
-    }
-  }
-
-  return approvals;
-}
-
-export async function requestExportApproval(email: string) {
-  const vault = await findSharedPublicVault();
-  if (!vault) throw new Error("请先由管理员创建一项公共项目，再发起导出确认。");
-  const d1 = getD1();
-  if (await countActiveApplicationUsers() < 2) throw new Error("请先创建并启用另一位系统用户，再发起导出确认。");
-
-  const id = crypto.randomUUID();
-  const expiresAt = new Date(Date.now() + 10 * 60_000).toISOString();
-  const created = await d1.prepare(
-    `INSERT INTO approval_requests (id, vault_id, requested_by, action, expires_at)
-     SELECT ?, ?, ?, 'export_vault', ?
-     WHERE NOT EXISTS (
-       SELECT 1 FROM approval_requests WHERE vault_id = ? AND requested_by = ? AND status = 'pending'
-     )`,
-  ).bind(id, vault.id, email, expiresAt, vault.id, email).run();
-  if ((created.meta.changes ?? 0) !== 1) {
-    throw new Error("你已有一条等待确认的导出请求。请等待另一位用户处理，或在 10 分钟后重试。");
-  }
-  await writeAudit(vault.id, email, "export_approval_requested");
-
-  return { id, action: "export_vault" as const, requestedBy: email, status: "pending" as const, approverEmail: null, expiresAt: "10 分钟内", canDecide: false, isRequester: true };
-}
-
-export async function decideApproval(email: string, id: string, decision: "approved" | "rejected") {
-  const d1 = getD1();
-  const approval = await d1.prepare(
-    "SELECT id, vault_id, requested_by, action, status, expires_at FROM approval_requests WHERE id = ? LIMIT 1",
-  ).bind(id).first<{ id: string; vault_id: string; requested_by: string; action: string; status: string; expires_at: string }>();
-  if (!approval || approval.status !== "pending") throw new Error("该导出确认已不可处理。");
-  if (approval.requested_by === email) throw new Error("不能批准自己的导出确认。");
-  if (Date.parse(approval.expires_at) <= Date.now()) throw new Error("该导出确认已过期。");
-
-  const publicVault = await findSharedPublicVault();
-  if (!publicVault) throw new Error("公共密码库尚未初始化。");
-  if (publicVault.id !== approval.vault_id) throw new Error("该导出确认不属于当前公共项目。");
-
-  const decided = await d1.prepare(
-    `UPDATE approval_requests
-     SET status = ?, approver_email = ?, resolved_at = CURRENT_TIMESTAMP
-     WHERE id = ? AND status = 'pending' AND expires_at > ?`,
-  ).bind(decision, email, id, new Date().toISOString()).run();
-  if ((decided.meta.changes ?? 0) !== 1) throw new Error("该导出确认已不可处理。");
-  await writeAudit(approval.vault_id, email, decision === "approved" ? "export_approved" : "export_rejected");
-}
-
-export async function exportVaultData(email: string, approvalId: string) {
-  const d1 = getD1();
-  const publicVault = await findSharedPublicVault();
-  if (!publicVault) throw new Error("公共密码库尚未初始化。");
-  const recentExportCount = await d1.prepare(
-    `SELECT COUNT(*) AS count FROM audit_events
-     WHERE vault_id = ? AND actor_email = ? AND action = 'vault_exported'
-       AND julianday(created_at) >= julianday(?)`,
-  ).bind(publicVault.id, email, new Date(Date.now() - 60 * 60_000).toISOString()).first<{ count: number }>();
-  if ((recentExportCount?.count ?? 0) >= 3) throw new Error("导出次数已达到每小时安全上限。");
-  const consumed = await d1.prepare(
-    `UPDATE approval_requests
-     SET status = 'expired', resolved_at = CURRENT_TIMESTAMP
-     WHERE id = ? AND vault_id = ? AND requested_by = ? AND status = 'approved' AND expires_at > ?`,
-  ).bind(approvalId, publicVault.id, email, new Date().toISOString()).run();
-  if ((consumed.meta.changes ?? 0) !== 1) {
-    throw new Error("该导出请求尚未获得另一位用户的有效批准。");
-  }
-
-  const data = await listVaultData(email);
-  await writeAudit(publicVault.id, email, "vault_exported");
-  return { exportedAt: new Date().toISOString(), items: data.items };
-}
-
-export async function rotateVaultEncryption(email: string, input: Record<string, unknown>) {
-  const actor = await getActiveApplicationActor(email);
-  if (!actor || actor.role !== "admin") throw new Error("只有管理员可以执行密钥轮换。");
-  await assertVaultEncryptionReady();
-
-  const requestedBatchSize = typeof input.batchSize === "number" ? Math.floor(input.batchSize) : 50;
-  const batchSize = Math.max(1, Math.min(50, requestedBatchSize));
-  const activeKeyId = await activeVaultEncryptionKeyId();
-  const d1 = getD1();
-  const candidates = await d1.prepare(
-    `SELECT id, vault_id, ciphertext, iv, key_id, encryption_version, created_at, updated_at
-     FROM vault_items
-     WHERE encryption_version < 2 OR encryption_version IS NULL OR key_id IS NULL OR key_id <> ?
-     ORDER BY updated_at ASC
-     LIMIT ?`,
-  ).bind(activeKeyId, batchSize).all<VaultItemRow>();
-
-  let rotated = 0;
-  for (const item of candidates.results) {
-    let payload: StoredCredential;
-    try {
-      payload = await decryptVaultPayload<StoredCredential>(
-        { ciphertext: item.ciphertext, iv: item.iv, keyId: item.key_id, encryptionVersion: item.encryption_version },
-        { vaultId: item.vault_id, itemId: item.id },
-      );
-    } catch {
-      throw new Error("存在无法读取的加密项目，已停止密钥轮换。请恢复可用的历史密钥后重试。");
-    }
-    const encrypted = await encryptVaultPayload(payload, { vaultId: item.vault_id, itemId: item.id });
-    const updated = await d1.prepare(
-      `UPDATE vault_items
-       SET ciphertext = ?, iv = ?, key_id = ?, encryption_version = ?, updated_at = CURRENT_TIMESTAMP
-       WHERE id = ? AND vault_id = ?`,
-    ).bind(encrypted.ciphertext, encrypted.iv, encrypted.keyId, encrypted.encryptionVersion, item.id, item.vault_id).run();
-    if ((updated.meta.changes ?? 0) !== 1) throw new Error("密钥轮换时项目状态发生变化，请重新检查后继续。");
-    await writeAudit(item.vault_id, actor.email, "item_reencrypted", item.id);
-    rotated += 1;
-  }
-
-  const remaining = await d1.prepare(
-    `SELECT COUNT(*) AS count FROM vault_items
-     WHERE encryption_version < 2 OR encryption_version IS NULL OR key_id IS NULL OR key_id <> ?`,
-  ).bind(activeKeyId).first<{ count: number }>();
-  return { activeKeyId, rotated, remaining: remaining?.count ?? 0, complete: (remaining?.count ?? 0) === 0 };
+  const database = getDatabase();
+  await writeAuditedMutation(vault.id, email, "item_deleted", item.id, {
+    auditOrder: "before",
+    auditPrerequisite: { sql: "SELECT 1 FROM vault_items WHERE id = ? AND vault_id = ?", values: [item.id, item.vault_id] },
+    commitPrerequisite: { sql: "SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM vault_items WHERE id = ?)", values: [item.id] },
+    expectedChanges: 1,
+    statements: (guard) => [database.prepare(
+      `DELETE FROM vault_items WHERE id = ? AND vault_id = ? AND ${guard.conditionSql}
+         AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`,
+    ).bind(item.id, item.vault_id, ...guard.values, guard.auditEventId)],
+  });
+  clearVaultSummaryCache();
 }
 
 export async function recordVaultAudit(email: string, input: Record<string, unknown>) {

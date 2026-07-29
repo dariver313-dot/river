@@ -14,7 +14,7 @@ export class SecuritySessionRequiredError extends ClientSafeError {
 
 export class RecentSecurityConfirmationRequiredError extends ClientSafeError {
   constructor() {
-    super("这是一项敏感操作。请先在个人信息中重新验证登录。", 403, "RECENT_SECURITY_CONFIRMATION_REQUIRED");
+    super("这是一项敏感操作。请重新输入 Google 验证码后继续。", 403, "RECENT_SECURITY_CONFIRMATION_REQUIRED");
     this.name = "RecentSecurityConfirmationRequiredError";
   }
 }

@@ -1,38 +1,40 @@
 import { KeyRound, ShieldCheck, UsersRound } from "lucide-react";
+import { BackgroundGradientAnimation } from "../components/ui/background-gradient-animation";
 import LoginForm from "./login-form";
 
 export const dynamic = "force-dynamic";
 
 export default function LoginPage() {
   return (
-    <main className="login-shell">
-      <section className="login-intro" aria-label="djmima 安全登录说明">
+    <BackgroundGradientAnimation interactive={false}>
+      <main className="login-shell">
+      <section className="login-intro" aria-label="djmima 安全登录">
         <div className="login-brand">
           <span className="login-brand-icon" aria-hidden="true"><ShieldCheck size={25} strokeWidth={2.25} /></span>
           <span>djmima</span>
         </div>
         <div>
-          <p className="login-kicker">PERSONAL VAULT</p>
-          <h1>共同守护，<br />但不共享秘密。</h1>
-          <p>你的身份解锁密码库；需要额外保护的操作，再由协作人独立确认。</p>
+          <p className="login-kicker">SECURE WORKSPACE</p>
+          <h1>安全访问，<br />简洁管理。</h1>
+          <p>登录信息与验证器集中管理。</p>
         </div>
         <ul className="login-principles">
-          <li><ShieldCheck size={18} aria-hidden="true" /><span>登录密码仅以不可逆哈希保存</span></li>
-          <li><KeyRound size={18} aria-hidden="true" /><span>本人 Google 验证器作为第二要素</span></li>
-          <li><UsersRound size={18} aria-hidden="true" /><span>高风险操作保留双人确认位</span></li>
+          <li><ShieldCheck size={18} aria-hidden="true" /><span>登录密码安全存储</span></li>
+          <li><KeyRound size={18} aria-hidden="true" /><span>Google 验证器保护登录</span></li>
+          <li><UsersRound size={18} aria-hidden="true" /><span>敏感操作需要再次验证</span></li>
         </ul>
       </section>
 
       <section className="login-panel" aria-labelledby="login-title">
         <div className="login-card">
-          <span className="login-card-icon" aria-hidden="true"><KeyRound size={24} /></span>
-          <p className="eyebrow">安全登录</p>
-          <h2 id="login-title">进入你的密码库</h2>
-          <p className="login-copy">使用你的登录邮箱、登录密码和本人 Google 验证码进入。双人确认仅用于导出等高风险操作。</p>
+          <div className="login-card-heading">
+            <span className="login-card-icon" aria-hidden="true"><KeyRound size={22} /></span>
+            <h2 id="login-title"><span>安全登录</span>进入工作台</h2>
+          </div>
           <LoginForm />
         </div>
-        <p className="login-footer">djmima 将登录与密码库数据分开处理。</p>
       </section>
-    </main>
+      </main>
+    </BackgroundGradientAnimation>
   );
 }

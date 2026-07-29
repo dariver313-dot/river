@@ -1,3 +1,15 @@
+function embeddedFrameSources() {
+  // The database decides which HTTPS origins administrators can publish. CSP
+  // cannot synchronously query SQLite while headers are assembled, so it
+  // permits only the HTTPS scheme; page creation remains fail-closed against
+  // the database-backed trusted-origin list.
+  return "'self' https:";
+}
+
+// Keep JSON/API responses aligned with the document CSP during local
+// development. Production never includes this development-only directive.
+const developmentScriptSource = process.env.NODE_ENV === "development" ? " 'unsafe-eval'" : "";
+
 const applicationSecurityPolicy = [
   "default-src 'self'",
   "base-uri 'self'",
@@ -5,9 +17,10 @@ const applicationSecurityPolicy = [
   "font-src 'self' data:",
   "form-action 'self'",
   "frame-ancestors 'none'",
+  "frame-src " + embeddedFrameSources(),
   "img-src 'self' blob: data:",
   "object-src 'none'",
-  "script-src 'self' 'unsafe-inline'",
+  "script-src 'self' 'unsafe-inline'" + developmentScriptSource,
   "style-src 'self' 'unsafe-inline'",
 ].join("; ");
 

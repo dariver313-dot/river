@@ -1,14 +1,18 @@
-import { getD1 } from "../../db";
+import { getDatabase } from "../../db";
 import { RecentSecurityConfirmationRequiredError, SecuritySessionRequiredError } from "./security-errors";
 
 const sessionTtlMs = 15 * 60_000;
 const recentConfirmationTtlMs = 10 * 60_000;
+const sessionTouchIntervalMs = 60_000;
+const sessionCookieMaxAgeSeconds = 8 * 60 * 60;
 
 type SecuritySessionRow = {
   id: string;
   email: string;
+  auth_session_id: string | null;
   expires_at: string;
   recent_verified_at: string;
+  last_active_at: string;
   revoked_at: string | null;
 };
 
@@ -42,10 +46,12 @@ function cookieSettings(request: Request) {
   };
 }
 
-function sessionCookie(id: string, expiresAt: string, request: Request) {
-  const maxAge = Math.max(1, Math.floor((Date.parse(expiresAt) - Date.now()) / 1_000));
+function sessionCookie(id: string, request: Request) {
   const settings = cookieSettings(request);
-  return `${settings.name}=${encodeURIComponent(id)}; Path=/; Max-Age=${maxAge}; HttpOnly${settings.secure}; SameSite=Strict`;
+  // Keep the opaque browser handle for the same maximum lifetime as the
+  // authenticated session. The database remains authoritative for the
+  // shorter 15-minute idle timeout and for explicit revocation.
+  return `${settings.name}=${encodeURIComponent(id)}; Path=/; Max-Age=${sessionCookieMaxAgeSeconds}; HttpOnly${settings.secure}; SameSite=Strict`;
 }
 
 export function clearSecuritySessionCookie(request: Request) {
@@ -58,61 +64,73 @@ function isActive(row: SecuritySessionRow) {
 }
 
 async function findSession(id: string) {
-  return getD1().prepare(
-    "SELECT id, email, expires_at, recent_verified_at, revoked_at FROM security_sessions WHERE id = ? LIMIT 1",
+  return getDatabase().prepare(
+    "SELECT id, email, auth_session_id, expires_at, recent_verified_at, last_active_at, revoked_at FROM security_sessions WHERE id = ? LIMIT 1",
   ).bind(id).first<SecuritySessionRow>();
 }
 
-export async function beginSecuritySession(email: string, request: Request) {
-  const suppliedId = cookieValue(request, cookieSettings(request).name);
-  if (suppliedId) {
-    const existing = await findSession(suppliedId);
-    if (existing && existing.email === email && isActive(existing)) {
-      const expiresAt = toIso(Date.now() + sessionTtlMs);
-      await getD1().prepare(
-        "UPDATE security_sessions SET last_active_at = ?, expires_at = ? WHERE id = ?",
-      ).bind(new Date().toISOString(), expiresAt, existing.id).run();
-      return {
-        status: {
-          expiresAt,
-          recentVerificationExpiresAt: toIso(Date.parse(existing.recent_verified_at) + recentConfirmationTtlMs),
-        },
-        setCookie: sessionCookie(existing.id, expiresAt, request),
-      };
-    }
-
-    // 一个已过期或被撤销的浏览器会话不得在原页面上直接续期，必须返回登录流程。
-    throw new SecuritySessionRequiredError();
-  }
-
+/**
+ * A security session is issued only immediately after credentials have been
+ * verified.  It deliberately cannot be minted by merely holding an existing
+ * application cookie: that would turn a page load into a fake reauthentication.
+ */
+export async function createSecuritySession(email: string, authSessionId: string, request: Request) {
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
   const expiresAt = toIso(Date.now() + sessionTtlMs);
-  await getD1().prepare(
-    `INSERT INTO security_sessions (id, email, recent_verified_at, last_active_at, expires_at)
-     VALUES (?, ?, ?, ?, ?)`,
-  ).bind(id, email, now, now, expiresAt).run();
+  await getDatabase().prepare(
+    `INSERT INTO security_sessions (id, email, auth_session_id, recent_verified_at, last_active_at, expires_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).bind(id, email, authSessionId, now, now, expiresAt).run();
 
   return {
     status: { expiresAt, recentVerificationExpiresAt: toIso(Date.parse(now) + recentConfirmationTtlMs) },
-    setCookie: sessionCookie(id, expiresAt, request),
+    setCookie: sessionCookie(id, request),
   };
 }
 
-export async function requireActiveSecuritySession(email: string, request: Request): Promise<SecuritySessionStatus & { recentVerifiedAt: string }> {
+/** Refreshes an existing session only; it never grants a new recent verification. */
+export async function resumeSecuritySession(email: string, authSessionId: string, request: Request) {
+  const suppliedId = cookieValue(request, cookieSettings(request).name);
+  if (!suppliedId) throw new SecuritySessionRequiredError();
+  const existing = await findSession(suppliedId);
+  if (!existing || existing.email !== email || existing.auth_session_id !== authSessionId || !isActive(existing)) {
+    throw new SecuritySessionRequiredError();
+  }
+
+  const shouldTouch = Date.now() - Date.parse(existing.last_active_at) >= sessionTouchIntervalMs;
+  const expiresAt = shouldTouch ? toIso(Date.now() + sessionTtlMs) : existing.expires_at;
+  if (shouldTouch) {
+    const updated = await getDatabase().prepare(
+      `UPDATE security_sessions SET last_active_at = ?, expires_at = ?
+       WHERE id = ? AND email = ? AND auth_session_id = ? AND revoked_at IS NULL AND expires_at > ?`,
+    ).bind(new Date().toISOString(), expiresAt, existing.id, email, authSessionId, new Date().toISOString()).run();
+    if ((updated.meta.changes ?? 0) !== 1) throw new SecuritySessionRequiredError();
+  }
+
+  return {
+    status: { expiresAt, recentVerificationExpiresAt: toIso(Date.parse(existing.recent_verified_at) + recentConfirmationTtlMs) },
+    setCookie: sessionCookie(existing.id, request),
+  };
+}
+
+export async function requireActiveSecuritySession(email: string, authSessionId: string, request: Request): Promise<SecuritySessionStatus & { recentVerifiedAt: string }> {
   const id = cookieValue(request, cookieSettings(request).name);
   if (!id) throw new SecuritySessionRequiredError();
 
   const session = await findSession(id);
-  if (!session || session.email !== email || !isActive(session)) throw new SecuritySessionRequiredError();
+  if (!session || session.email !== email || session.auth_session_id !== authSessionId || !isActive(session)) throw new SecuritySessionRequiredError();
 
-  const expiresAt = toIso(Date.now() + sessionTtlMs);
-  const updated = await getD1().prepare(
-    `UPDATE security_sessions
-     SET last_active_at = ?, expires_at = ?
-     WHERE id = ? AND email = ? AND revoked_at IS NULL AND expires_at > ?`,
-  ).bind(new Date().toISOString(), expiresAt, id, email, new Date().toISOString()).run();
-  if ((updated.meta.changes ?? 0) !== 1) throw new SecuritySessionRequiredError();
+  const shouldTouch = Date.now() - Date.parse(session.last_active_at) >= sessionTouchIntervalMs;
+  const expiresAt = shouldTouch ? toIso(Date.now() + sessionTtlMs) : session.expires_at;
+  if (shouldTouch) {
+    const updated = await getDatabase().prepare(
+      `UPDATE security_sessions
+       SET last_active_at = ?, expires_at = ?
+       WHERE id = ? AND email = ? AND auth_session_id = ? AND revoked_at IS NULL AND expires_at > ?`,
+    ).bind(new Date().toISOString(), expiresAt, id, email, authSessionId, new Date().toISOString()).run();
+    if ((updated.meta.changes ?? 0) !== 1) throw new SecuritySessionRequiredError();
+  }
 
   return {
     expiresAt,
@@ -121,18 +139,36 @@ export async function requireActiveSecuritySession(email: string, request: Reque
   };
 }
 
-export async function requireRecentSecurityConfirmation(email: string, request: Request) {
-  const session = await requireActiveSecuritySession(email, request);
+export async function requireRecentSecurityConfirmation(email: string, authSessionId: string, request: Request) {
+  const session = await requireActiveSecuritySession(email, authSessionId, request);
   if (Date.parse(session.recentVerifiedAt) + recentConfirmationTtlMs <= Date.now()) {
     throw new RecentSecurityConfirmationRequiredError();
   }
   return session;
 }
 
+/** Refreshes the ten-minute sensitive-operation window after a fresh TOTP proof. */
+export async function renewRecentSecurityConfirmation(email: string, authSessionId: string, request: Request) {
+  const session = await requireActiveSecuritySession(email, authSessionId, request);
+  const id = cookieValue(request, cookieSettings(request).name);
+  if (!id) throw new SecuritySessionRequiredError();
+  const now = new Date().toISOString();
+  const updated = await getDatabase().prepare(
+    `UPDATE security_sessions
+     SET recent_verified_at = ?, last_active_at = ?
+     WHERE id = ? AND email = ? AND auth_session_id = ? AND revoked_at IS NULL AND expires_at > ?`,
+  ).bind(now, now, id, email, authSessionId, now).run();
+  if ((updated.meta.changes ?? 0) !== 1) throw new SecuritySessionRequiredError();
+  return {
+    expiresAt: session.expiresAt,
+    recentVerificationExpiresAt: toIso(Date.parse(now) + recentConfirmationTtlMs),
+  };
+}
+
 export async function endSecuritySession(email: string, request: Request) {
   const id = cookieValue(request, cookieSettings(request).name);
   if (id) {
-    await getD1().prepare(
+    await getDatabase().prepare(
       "UPDATE security_sessions SET revoked_at = ? WHERE id = ? AND email = ? AND revoked_at IS NULL",
     ).bind(new Date().toISOString(), id, email).run();
   }

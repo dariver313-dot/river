@@ -11,7 +11,7 @@ function positiveInteger(value: string | null) {
 }
 
 function auditCategory(value: string | null): ManagementAuditCategory {
-  if (value === "project" || value === "user" || value === "export") return value;
+  if (value === "project" || value === "user" || value === "embedded") return value;
   return "all";
 }
 

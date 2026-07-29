@@ -12,12 +12,15 @@ function tokenFromFragment() {
 }
 
 export default function SetupClient() {
+  // Keep the fragment token in React state before clearing it from the address
+  // bar. Effects can run more than once during development-style remounts;
+  // rereading window.location there would turn a valid token into an empty one.
+  const [suppliedToken] = useState(tokenFromFragment);
   const [token, setToken] = useState("");
   const [setup, setSetup] = useState<SetupDetails | null>(null);
   const [message, setMessage] = useState("正在读取初始化令牌。");
 
   useEffect(() => {
-    const suppliedToken = tokenFromFragment();
     // Remove the secret before any user interaction can copy or share the URL.
     window.history.replaceState(null, "", window.location.pathname);
     let active = true;
@@ -44,7 +47,7 @@ export default function SetupClient() {
       if (active) setMessage(error instanceof Error ? error.message : "无法读取初始化信息。");
     });
     return () => { active = false; };
-  }, []);
+  }, [suppliedToken]);
 
   if (!setup) return <p className="login-error" role="alert">{message}</p>;
   return <>

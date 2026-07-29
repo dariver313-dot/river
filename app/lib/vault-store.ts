@@ -101,12 +101,12 @@ type AuditEventRow = {
 
 const managementAuditActions = {
   all: [
-    "item_created", "item_updated", "item_published_to_public", "item_deleted",
+    "item_created", "item_updated", "item_published_to_public", "item_deleted", "public_secret_accessed",
     "system_user_created", "system_user_role_changed", "system_user_status_changed", "system_user_authenticator_reset", "system_user_deleted", "account_password_changed",
     "initial_admin_initialized",
     "embedded_origin_added", "embedded_origin_deleted", "embedded_page_created", "embedded_page_updated", "embedded_page_deleted",
   ],
-  project: ["item_created", "item_updated", "item_published_to_public", "item_deleted"],
+  project: ["item_created", "item_updated", "item_published_to_public", "item_deleted", "public_secret_accessed"],
   user: ["system_user_created", "system_user_role_changed", "system_user_status_changed", "system_user_authenticator_reset", "system_user_deleted", "account_password_changed", "initial_admin_initialized"],
   embedded: ["embedded_origin_added", "embedded_origin_deleted", "embedded_page_created", "embedded_page_updated", "embedded_page_deleted"],
 } as const satisfies Record<ManagementAuditCategory, readonly string[]>;
@@ -689,7 +689,12 @@ export async function getVaultItem(email: string, itemId: string) {
       { ciphertext: item.ciphertext, iv: item.iv, keyId: item.key_id, encryptionVersion: item.encryption_version },
       { vaultId: item.vault_id, itemId: item.id },
     );
-    return toCredential(item, payload, vault);
+    const credential = toCredential(item, payload, vault);
+    // Public credentials are shared team secrets. Record their delivery on the
+    // server before returning the decrypted value so the audit chain cannot be
+    // bypassed by a modified browser client. Personal vault reads stay private.
+    if (vault.kind === "public") await writeAudit(vault.id, email, "public_secret_accessed", item.id);
+    return credential;
   } catch {
     throw new Error("无法读取已加密的项目数据。");
   }
@@ -711,13 +716,4 @@ export async function deleteVaultItem(email: string, itemId: string) {
     ).bind(item.id, item.vault_id, ...guard.values, guard.auditEventId)],
   });
   clearVaultSummaryCache();
-}
-
-export async function recordVaultAudit(email: string, input: Record<string, unknown>) {
-  const action = input.action === "password_revealed" || input.action === "totp_revealed" || input.action === "credential_copied" || input.action === "totp_copied" ? input.action : null;
-  const itemId = typeof input.itemId === "string" ? input.itemId : "";
-  if (!action || !itemId) return;
-
-  const { vault } = await findItemAccess(email, itemId);
-  await writeAudit(vault.id, email, action, itemId);
 }

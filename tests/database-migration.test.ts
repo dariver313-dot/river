@@ -169,3 +169,35 @@ test("安全会话以数据库空闲期限为准且浏览器句柄最多保留�
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("公共项目凭据访问由服务端审计，个人项目和越权读取不会写入访问事件", () => {
+  const directory = mkdtempSync(join(tmpdir(), "djmima-public-access-audit-"));
+  const databasePath = join(directory, "audit.sqlite");
+
+  try {
+    const key = Buffer.alloc(32, 83).toString("base64url");
+    const child = spawnSync(
+      process.execPath,
+      [
+        "node_modules/jiti/lib/jiti-cli.mjs",
+        "tests/fixtures/public-access-audit-integration.ts",
+      ],
+      {
+        cwd: resolve("."),
+        env: {
+          ...process.env,
+          DJMIMA_DATABASE_PATH: databasePath,
+          PRIMARY_ADMIN_ACCOUNT: "admin01",
+          AUTH_TOTP_ENCRYPTION_KEY: key,
+          VAULT_ENCRYPTION_KEY: key,
+          VAULT_AUDIT_SIGNING_KEY: key,
+          LOGIN_TOKEN_HASH_KEY: key,
+        },
+        encoding: "utf8",
+      },
+    );
+    assert.equal(child.status, 0, `${child.stderr}\n${child.stdout}`);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

@@ -16,11 +16,12 @@
 
 ## 首次部署
 
-前置条件：Ubuntu 服务器、Docker Compose、宝塔 Nginx 站点和已签发的 HTTPS 证书。仓库提供的 `compose.yaml` 只将应用映射到 `127.0.0.1:3101`，公网入口始终由宝塔 Nginx 提供。
+前置条件：Ubuntu 服务器、Node.js 22.13–24、Docker Compose、宝塔 Nginx 站点和已签发的 HTTPS 证书。Node 用于生成首次部署的受控 `.env`；仓库提供的 `compose.yaml` 只将应用映射到 `127.0.0.1:3101`，公网入口始终由宝塔 Nginx 提供。
 
 ```bash
 git clone <你的仓库地址> /opt/djmima
 cd /opt/djmima
+node --version # 必须为 22.13–24
 node scripts/initialize-selfhost.mjs --account admin@example.com --origin https://djmima.com
 sudo chown -R 1001:1001 data
 # 将本地 GeoLite2/GeoIP2 City MMDB 复制为 data/GeoLite2-City.mmdb，
@@ -65,7 +66,7 @@ npm run security:check
 
 - `.env`、`.selfhost-setup-url` 与离线管理员恢复码仅限受控人员访问，且不进入 Git。
 - 宝塔 Nginx 使用 HTTPS、传递真实客户端 IP；只开放 80/443 和受限管理端口。
-- 每次升级先备份，再以已审查的提交 SHA 构建；不要覆盖现有 `./data/` 目录。
+- 每次升级先备份，再以已审查的提交 SHA 构建；基础镜像 digest 仅随明确审查的升级变更更新；不要覆盖现有 `./data/` 目录。
 - 先检查 `/api/health?mode=live`，完成初始化和安全邮箱确认后再检查 `/api/health`。
 - 使用真实 SMTP 与 GeoIP 验证首次地区基线、同国换网络、新国家邮箱确认、验证码过期和邮件不可用时拒绝登录。
 - 验证账号激活、密码恢复不绕过 Google 验证器、验证器重置、15 分钟空闲登出、公共项目权限、删除验证码和内嵌来源限制。

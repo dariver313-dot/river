@@ -32,7 +32,7 @@ import {
   WandSparkles,
   X,
 } from "lucide-react";
-import { ChangeEvent, FormEvent, KeyboardEvent as ReactKeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, FormEvent, KeyboardEvent as ReactKeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AdminTableLoading, AdminTableState } from "./components/admin-table-state";
 import { TablePagination } from "./components/table-pagination";
 import { Spotlight } from "./components/ui/spotlight";
@@ -340,7 +340,7 @@ function ProfileOverview({
   </section>;
 }
 
-function AuthenticatorCode({ entry, itemId, onCopy, onReveal }: { entry: VaultTotp; itemId: string; onCopy: (value: string, label: string, itemId: string) => void; onReveal: () => void }) {
+function AuthenticatorCode({ entry, onCopy }: { entry: VaultTotp; onCopy: (value: string, label: string) => void }) {
   const { config } = entry;
   const [now, setNow] = useState(() => Date.now());
   const [code, setCode] = useState("");
@@ -396,8 +396,8 @@ function AuthenticatorCode({ entry, itemId, onCopy, onReveal }: { entry: VaultTo
       <div className="totp-value">
         <strong>{visible ? (error || (code ? <>{code.slice(0, splitAt)} <span>{code.slice(splitAt)}</span></> : "··· ···")) : "••• •••"}</strong>
         <div className="totp-actions">
-          <button className="icon-button" onClick={() => { const next = !visible; if (next) { setNow(Date.now()); onReveal(); setVisible(true); } else { setVisible(false); setCode(""); setError(""); } }} aria-label={visible ? "隐藏验证器代码" : "显示验证器代码"}>{visible ? <EyeOff size={17} /> : <Eye size={17} />}</button>
-          <button className="icon-button" onClick={() => code && onCopy(code, `${entry.label}验证码`, itemId)} aria-label={`复制${entry.label}验证码`} disabled={!visible || !code}><Copy size={17} /></button>
+          <button className="icon-button" onClick={() => { const next = !visible; if (next) { setNow(Date.now()); setVisible(true); } else { setVisible(false); setCode(""); setError(""); } }} aria-label={visible ? "隐藏验证器代码" : "显示验证器代码"}>{visible ? <EyeOff size={17} /> : <Eye size={17} />}</button>
+          <button className="icon-button" onClick={() => code && onCopy(code, `${entry.label}验证码`)} aria-label={`复制${entry.label}验证码`} disabled={!visible || !code}><Copy size={17} /></button>
         </div>
       </div>
       <div className="totp-timer" role="progressbar" aria-label="验证码有效时间" aria-valuemin={0} aria-valuemax={config.period} aria-valuenow={remaining}><span style={{ width: `${(remaining / config.period) * 100}%` }} /><small>{remaining} 秒后刷新</small></div>
@@ -488,12 +488,9 @@ function auditLabel(action: string) {
     item_updated: "更新了项目",
     item_published_to_public: "将项目设为公共项目",
     item_deleted: "删除了项目",
+    public_secret_accessed: "访问了公共项目凭据",
     member_invited: "添加了系统用户",
     member_removed: "移除了系统用户",
-    password_revealed: "查看了密码",
-    totp_revealed: "查看了验证器代码",
-    credential_copied: "复制了账号信息",
-    totp_copied: "复制了验证器代码",
     system_user_created: "创建了系统用户",
     system_user_role_changed: "调整了系统用户角色",
     system_user_status_changed: "调整了系统用户状态",
@@ -635,6 +632,26 @@ export default function VaultClient({ viewer: initialViewer }: { viewer: Viewer 
   const isModalOpen = activeDialogKey !== null;
   const pageTransitionKey = page === "users" ? `${page}-${userManagementTab}` : page;
   const { totalItems, weakPasswordCount, reusedPasswordCount, missingTwoFactorCount, securityIssueCount, score: securityScore } = securitySummary;
+
+  const restartSecuritySession = useCallback(() => {
+    setSecurityReverifyCode("");
+    setSecurityReverifyError("");
+    setShowSecurityReverify(true);
+  }, []);
+
+  const requestVault = useCallback(async function requestVault<T>(path: string, init: RequestInit) {
+    const response = await fetch(path, {
+      ...init,
+      cache: "no-store",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", ...(init.headers ?? {}) },
+    });
+    const payload = response.status === 204 ? null : await readJsonResponse<T & { error?: string; code?: string }>(response, "操作未完成，请稍后重试。");
+    if (response.status === 401 && payload?.code === "SECURITY_SESSION_REQUIRED" && path !== "/api/security/session") endCurrentSecuritySession("/login");
+    if (payload?.code === "RECENT_SECURITY_CONFIRMATION_REQUIRED") restartSecuritySession();
+    if (!response.ok) throw new Error(payload?.error ?? "操作未完成，请稍后重试。");
+    return payload as T;
+  }, [restartSecuritySession]);
 
   useEffect(() => {
     if (!toast) return;
@@ -895,7 +912,7 @@ export default function VaultClient({ viewer: initialViewer }: { viewer: Viewer 
 
     void loadUsers();
     return () => { cancelled = true; controller.abort(); };
-  }, [debouncedUserQuery, isAdmin, page, serverSessionReady, userCurrentPage, userLoadAttempt, userManagementTab]);
+  }, [debouncedUserQuery, isAdmin, page, requestVault, serverSessionReady, userCurrentPage, userLoadAttempt, userManagementTab]);
 
   useEffect(() => {
     if (!serverSessionReady || page !== "users" || userManagementTab !== "users" || !isAdmin) return;
@@ -933,7 +950,7 @@ export default function VaultClient({ viewer: initialViewer }: { viewer: Viewer 
 
     void loadAudit();
     return () => { cancelled = true; controller.abort(); };
-  }, [auditCategory, auditCurrentPage, auditLoadAttempt, isAdmin, page, serverSessionReady, userManagementTab]);
+  }, [auditCategory, auditCurrentPage, auditLoadAttempt, isAdmin, page, requestVault, serverSessionReady, userManagementTab]);
 
   useEffect(() => {
     if (!serverSessionReady || !activeSelectedId) return;
@@ -957,7 +974,7 @@ export default function VaultClient({ viewer: initialViewer }: { viewer: Viewer 
     });
 
     return () => { cancelled = true; controller.abort(); };
-  }, [activeSelectedId, detailAttempt, serverSessionReady]);
+  }, [activeSelectedId, detailAttempt, requestVault, serverSessionReady]);
 
   useEffect(() => {
     let idleTimer = window.setTimeout(endSession, 15 * 60_000);
@@ -995,12 +1012,6 @@ export default function VaultClient({ viewer: initialViewer }: { viewer: Viewer 
     endCurrentSecuritySession("/login");
   }
 
-  function restartSecuritySession() {
-    setSecurityReverifyCode("");
-    setSecurityReverifyError("");
-    setShowSecurityReverify(true);
-  }
-
   async function renewSecuritySession(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (isSaving) return;
@@ -1034,28 +1045,9 @@ export default function VaultClient({ viewer: initialViewer }: { viewer: Viewer 
     }
   }
 
-  async function requestVault<T>(path: string, init: RequestInit) {
-    const response = await fetch(path, {
-      ...init,
-      cache: "no-store",
-      credentials: "same-origin",
-      headers: { "Content-Type": "application/json", ...(init.headers ?? {}) },
-    });
-    const payload = response.status === 204 ? null : await readJsonResponse<T & { error?: string; code?: string }>(response, "操作未完成，请稍后重试。");
-    if (response.status === 401 && payload?.code === "SECURITY_SESSION_REQUIRED" && path !== "/api/security/session") endCurrentSecuritySession("/login");
-    if (payload?.code === "RECENT_SECURITY_CONFIRMATION_REQUIRED") restartSecuritySession();
-    if (!response.ok) throw new Error(payload?.error ?? "操作未完成，请稍后重试。");
-    return payload as T;
-  }
-
-  function recordAudit(action: "password_revealed" | "totp_revealed" | "credential_copied" | "totp_copied", itemId: string) {
-    void requestVault("/api/vault/audit", { method: "POST", body: JSON.stringify({ action, itemId }) }).catch(() => undefined);
-  }
-
-  async function copyValue(value: string, label: string, itemId?: string) {
+  async function copyValue(value: string, label: string) {
     try {
       await navigator.clipboard.writeText(value);
-      if (itemId) recordAudit(label.includes("验证码") ? "totp_copied" : "credential_copied", itemId);
       setToast(`${label}已复制`);
     } catch {
       setToast("复制失败");
@@ -1623,12 +1615,12 @@ export default function VaultClient({ viewer: initialViewer }: { viewer: Viewer 
 
             <div className="detail-section">
               <div className="field-label"><span>用户名</span></div>
-              <div className="secret-field"><span>{selected.username}</span><button className="icon-button" onClick={() => copyValue(selected.username, "用户名", selected.id)} aria-label="复制用户名"><Copy size={17} /></button></div>
+              <div className="secret-field"><span>{selected.username}</span><button className="icon-button" onClick={() => copyValue(selected.username, "用户名")} aria-label="复制用户名"><Copy size={17} /></button></div>
             </div>
 
             <div className="detail-section">
               <div className="field-label"><span>密码</span><span className="password-meta">{selected.password.length} 位</span></div>
-              <div className="secret-field password-field"><span className={revealed ? "password-revealed" : "password-masked"}>{revealed ? selected.password : "••••••••••••••••"}</span><button className="icon-button" onClick={() => { const next = !revealed; setRevealed(next); if (next) recordAudit("password_revealed", selected.id); }} aria-label={revealed ? "隐藏密码" : "显示密码"}>{revealed ? <EyeOff size={17} /> : <Eye size={17} />}</button><button className="icon-button" onClick={() => copyValue(selected.password, "密码", selected.id)} aria-label="复制密码"><Copy size={17} /></button></div>
+              <div className="secret-field password-field"><span className={revealed ? "password-revealed" : "password-masked"}>{revealed ? selected.password : "••••••••••••••••"}</span><button className="icon-button" onClick={() => setRevealed((current) => !current)} aria-label={revealed ? "隐藏密码" : "显示密码"}>{revealed ? <EyeOff size={17} /> : <Eye size={17} />}</button><button className="icon-button" onClick={() => copyValue(selected.password, "密码")} aria-label="复制密码"><Copy size={17} /></button></div>
               <div className="credential-statuses" aria-label="账号安全状态"><span className={`credential-status credential-status-${selected.strength}`}>{selected.strength === "安全" ? <ShieldCheck size={14} aria-hidden="true" /> : <AlertTriangle size={14} aria-hidden="true" />}密码{selected.strength}</span><span className={`credential-status ${selected.twoFactor ? "is-protected" : "is-unprotected"}`}>{selected.twoFactor ? <ShieldCheck size={14} aria-hidden="true" /> : <AlertTriangle size={14} aria-hidden="true" />}{selected.totps.length > 0 ? `已保存 ${selected.totps.length} 个验证器` : selected.twoFactor ? "双重验证已开启" : "未开双重验证"}</span></div>
             </div>
 
@@ -1637,7 +1629,7 @@ export default function VaultClient({ viewer: initialViewer }: { viewer: Viewer 
               <div className="security-finding-list">{selectedSummary.securityIssues.map((issue) => <div className={`security-finding security-finding-${issue}`} key={issue}><AlertTriangle size={16} aria-hidden="true" /><div><strong>{securityIssueCopy[issue].label}</strong><span>{securityIssueCopy[issue].detail}</span></div></div>)}</div>
             </div>}
 
-            {selected.totps.length > 0 && <div className="detail-section"><div className="field-label"><span>验证器代码</span><span className="password-meta">{selected.totps.length} 个</span></div><div className="totp-list">{selected.totps.map((entry, index) => <AuthenticatorCode entry={entry} itemId={selected.id} onCopy={copyValue} onReveal={() => recordAudit("totp_revealed", selected.id)} key={`${entry.label}-${index}`} />)}</div></div>}
+            {selected.totps.length > 0 && <div className="detail-section"><div className="field-label"><span>验证器代码</span><span className="password-meta">{selected.totps.length} 个</span></div><div className="totp-list">{selected.totps.map((entry, index) => <AuthenticatorCode entry={entry} onCopy={copyValue} key={`${entry.label}-${index}`} />)}</div></div>}
 
             {selected.note && <div className="detail-section">
               <div className="field-label"><span>备注</span></div>

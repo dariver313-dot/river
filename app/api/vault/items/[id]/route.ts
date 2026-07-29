@@ -22,6 +22,8 @@ export async function GET(request: Request, context: RouteContext) {
 
   try {
     const { id } = await context.params;
+    // getVaultItem records a signed public_secret_accessed event before it
+    // returns any decrypted public credential to this response.
     return secureJson({ item: await getVaultItem(actor.email, id) });
   } catch (error) {
     return apiError(error, 400, request);

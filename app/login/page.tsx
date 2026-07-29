@@ -14,14 +14,14 @@ export default function LoginPage() {
           <span>djmima</span>
         </div>
         <div>
-          <p className="login-kicker">SECURE WORKSPACE</p>
-          <h1>安全访问，<br />简洁管理。</h1>
-          <p>登录信息与验证器集中管理。</p>
+          <p className="login-kicker">INTERNAL WORKSPACE</p>
+          <h1>安全访问，<br />简洁协作。</h1>
+          <p>仅限授权成员进入。</p>
         </div>
         <ul className="login-principles">
-          <li><ShieldCheck size={18} aria-hidden="true" /><span>登录密码安全存储</span></li>
-          <li><KeyRound size={18} aria-hidden="true" /><span>Google 验证器保护登录</span></li>
-          <li><UsersRound size={18} aria-hidden="true" /><span>敏感操作需要再次验证</span></li>
+          <li><ShieldCheck size={18} aria-hidden="true" /><span>多重身份验证</span></li>
+          <li><KeyRound size={18} aria-hidden="true" /><span>按角色隔离权限</span></li>
+          <li><UsersRound size={18} aria-hidden="true" /><span>关键操作完整审计</span></li>
         </ul>
       </section>
 

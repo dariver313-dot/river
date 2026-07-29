@@ -7,7 +7,7 @@
   --surface-subtle: #f8f8f4;
   --ink: #282f2b;
   --ink-soft: #66706a;
-  --ink-faint: #7c857f;
+  --ink-faint: #707973;
   --ink-muted: var(--ink-soft);
   --line: #e5e8e2;
   --line-strong: #d5dbd3;
@@ -4501,13 +4501,13 @@ button:disabled {
 .primary-button,
 .login-action {
   border-color: transparent;
-  background: linear-gradient(135deg, #769e7b 0%, #5f8d6a 58%, #9aa76d 130%);
+  background: linear-gradient(135deg, #5b7f63 0%, #52765b 58%, #69784d 130%);
   box-shadow: 0 8px 20px rgb(85 134 94 / .2), inset 0 1px 0 rgb(255 255 255 / .18);
 }
 .primary-button:hover,
 .login-action:hover {
   border-color: transparent;
-  background: linear-gradient(135deg, #668f70 0%, #527e5e 58%, #899864 130%);
+  background: linear-gradient(135deg, #52765b 0%, #476b51 58%, #64744b 130%);
   box-shadow: 0 11px 25px rgb(85 134 94 / .28), inset 0 1px 0 rgb(255 255 255 / .18);
 }
 .secondary-button,

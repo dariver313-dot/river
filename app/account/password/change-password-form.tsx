@@ -1,7 +1,8 @@
 "use client";
 
-import { Eye, EyeOff, KeyRound, LoaderCircle, ShieldCheck } from "lucide-react";
+import { Eye, EyeOff, KeyRound, ShieldCheck } from "lucide-react";
 import { FormEvent, useState } from "react";
+import { LoadingMark } from "../../components/loading-indicator";
 
 type ChangePasswordResponse = { next?: string; error?: string };
 
@@ -61,7 +62,7 @@ export default function ChangePasswordForm() {
       </label>
       {message && <p className="login-error" role="alert">{message}</p>}
       <button className="login-action" type="submit" disabled={isSubmitting}>
-        {isSubmitting ? <LoaderCircle className="button-spinner" size={19} aria-hidden="true" /> : <ShieldCheck size={19} aria-hidden="true" />}
+        {isSubmitting ? <LoadingMark className="button-loading-mark" /> : <ShieldCheck size={19} aria-hidden="true" />}
         {isSubmitting ? "正在更新" : "确认并更新密码"}
       </button>
       <p className="login-note"><KeyRound size={15} aria-hidden="true" /> 更新后需使用新密码重新登录。</p>

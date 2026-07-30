@@ -1,17 +1,15 @@
 import { actorRequiredResponse, apiError, readJsonObject, requireVaultActor } from "../../../../lib/api-response";
 import { crossOriginRequestResponse, secureEmpty, secureJson } from "../../../../lib/response-security";
 import { rateLimitResponse } from "../../../../lib/rate-limit";
-import { requireRecentSecurityConfirmation } from "../../../../lib/security-session";
+import { verifyTotpAndRenewSecurityConfirmation } from "../../../../lib/security-session";
 import { deleteVaultItem, getVaultItem, getVaultItemScope, updateVaultItem } from "../../../../lib/vault-store";
-import { verifySelfHostedTotp } from "../../../../lib/selfhost-auth";
 
 export const dynamic = "force-dynamic";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
 async function requirePublicItemTotp(actor: { email: string; authSessionId: string }, request: Request, body: Record<string, unknown>) {
-  await requireRecentSecurityConfirmation(actor.email, actor.authSessionId, request);
-  return typeof body.userCode === "string" && await verifySelfHostedTotp(actor.email, body.userCode);
+  return verifyTotpAndRenewSecurityConfirmation(actor.email, actor.authSessionId, request, body.userCode);
 }
 
 export async function GET(request: Request, context: RouteContext) {
@@ -45,7 +43,7 @@ export async function PATCH(request: Request, context: RouteContext) {
     if ((scope.group === "公共" || body.group === "公共") && !await requirePublicItemTotp(actor, request, body)) {
       return secureJson({ error: "Google 验证码不正确，请重试。" }, { status: 401 });
     }
-    const item = await updateVaultItem(actor.email, id, body);
+    const item = await updateVaultItem(actor.email, id, body, scope.vaultId);
     return secureJson({ item });
   } catch (error) {
     return apiError(error, 400, request);
@@ -67,7 +65,7 @@ export async function DELETE(request: Request, context: RouteContext) {
     if (scope.group === "公共" && !await requirePublicItemTotp(actor, request, body)) {
       return secureJson({ error: "Google 验证码不正确，请重试。" }, { status: 401 });
     }
-    await deleteVaultItem(actor.email, id);
+    await deleteVaultItem(actor.email, id, scope.vaultId);
     return secureEmpty();
   } catch (error) {
     return apiError(error, 400, request);

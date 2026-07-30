@@ -27,4 +27,5 @@ console.log("# Copy these values into the server-only .env file once. Do not reu
 console.log(`VAULT_ENCRYPTION_KEY=${base64Url()}`);
 console.log(`VAULT_AUDIT_SIGNING_KEY=${base64Url()}`);
 console.log(`AUTH_TOTP_ENCRYPTION_KEY=${base64Url()}`);
+console.log(`LOGIN_TOKEN_HASH_KEY=${base64Url()}`);
 console.log(`PRIMARY_ADMIN_TOTP_SECRET=${base32()}`);

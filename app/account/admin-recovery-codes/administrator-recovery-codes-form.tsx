@@ -1,8 +1,9 @@
 "use client";
 
-import { Check, Copy, KeyRound, LoaderCircle, ShieldCheck } from "lucide-react";
+import { Check, Copy, KeyRound, ShieldCheck } from "lucide-react";
 import Link from "next/link";
 import { FormEvent, useState } from "react";
+import { LoadingMark } from "../../components/loading-indicator";
 
 type Response = { recoveryCodes?: string[]; error?: string };
 
@@ -33,5 +34,5 @@ export default function AdministratorRecoveryCodesForm() {
 
   if (recoveryCodes) return <section className="setup-recovery-codes" aria-live="polite"><div className="login-challenge-heading"><ShieldCheck size={20} aria-hidden="true" /><div><strong>保存新的恢复码</strong><p>每个恢复码只能使用一次，关闭后无法再次查看。</p></div></div><div className="recovery-code-list">{recoveryCodes.map((code) => <code key={code}>{code}</code>)}</div><button type="button" className="secondary-button" onClick={async () => { try { await navigator.clipboard.writeText(recoveryCodes.join("\n")); setMessage("恢复码已复制，请离线保存。"); } catch { setMessage("无法自动复制，请手动离线保存。 "); } }}><Copy size={16} />复制全部</button>{message && <p className="login-note" role="status">{message}</p>}<Link className="login-action" href="/"><Check size={19} />已安全保存，返回系统</Link></section>;
 
-  return <form className="selfhost-login-form" onSubmit={submit}><label htmlFor="recovery-codes-totp">Google 验证码<input id="recovery-codes-totp" required autoFocus inputMode="numeric" autoComplete="one-time-code" value={userCode} onChange={(event) => setUserCode(event.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="6 位验证码" /></label>{message && <p className="login-error" role="alert">{message}</p>}<button className="login-action" type="submit" disabled={isSubmitting}>{isSubmitting ? <LoaderCircle className="button-spinner" size={19} /> : <KeyRound size={19} />}{isSubmitting ? "正在生成" : "生成新的恢复码"}</button></form>;
+  return <form className="selfhost-login-form" onSubmit={submit}><label htmlFor="recovery-codes-totp">Google 验证码<input id="recovery-codes-totp" required autoFocus inputMode="numeric" autoComplete="one-time-code" value={userCode} onChange={(event) => setUserCode(event.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="6 位验证码" /></label>{message && <p className="login-error" role="alert">{message}</p>}<button className="login-action" type="submit" disabled={isSubmitting}>{isSubmitting ? <LoadingMark className="button-loading-mark" /> : <KeyRound size={19} />}{isSubmitting ? "正在生成" : "生成新的恢复码"}</button></form>;
 }

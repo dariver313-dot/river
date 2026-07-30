@@ -3,8 +3,7 @@ import { addEmbeddedOrigin, deleteEmbeddedOrigin, listEmbeddedOrigins } from "..
 import { isInitialAdminAccount } from "../../lib/initial-admin";
 import { rateLimitResponse } from "../../lib/rate-limit";
 import { crossOriginRequestResponse, secureJson } from "../../lib/response-security";
-import { requireRecentSecurityConfirmation } from "../../lib/security-session";
-import { verifySelfHostedTotp } from "../../lib/selfhost-auth";
+import { verifyTotpAndRenewSecurityConfirmation } from "../../lib/security-session";
 
 export const dynamic = "force-dynamic";
 
@@ -19,10 +18,9 @@ async function requireInitialAdminTotp(request: Request) {
   if (!isInitialAdminAccount(actor.email)) return { actor: null, response: initialAdminRequiredResponse() };
   const rateLimited = await rateLimitResponse(request, actor.email, "sensitive");
   if (rateLimited) return { actor: null, response: rateLimited };
-  await requireRecentSecurityConfirmation(actor.email, actor.authSessionId, request);
   const body = await readJsonObject(request);
-  if (typeof body.userCode !== "string" || !await verifySelfHostedTotp(actor.email, body.userCode)) {
-    throw new Error("Google 验证码不正确，请重试。");
+  if (!await verifyTotpAndRenewSecurityConfirmation(actor.email, actor.authSessionId, request, body.userCode)) {
+    return { actor: null, response: secureJson({ error: "Google 验证码不正确，请重试。" }, { status: 401 }) };
   }
   return { actor, body, response: null };
 }

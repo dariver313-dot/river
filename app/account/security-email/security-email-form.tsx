@@ -1,18 +1,21 @@
 "use client";
 
 import { FormEvent, useState } from "react";
-import { LoaderCircle, MailCheck, ShieldCheck } from "lucide-react";
+import { MailCheck, ShieldCheck } from "lucide-react";
+import { LoadingMark } from "../../components/loading-indicator";
 
 type RequestResponse = { unchanged?: boolean; expiresAt?: string; error?: string };
 type ConfirmResponse = { updated?: boolean; requiresRelogin?: boolean; error?: string };
 
-export default function SecurityEmailForm({ requiresGoogleCode }: { requiresGoogleCode: boolean }) {
+export default function SecurityEmailForm() {
   const [securityEmail, setSecurityEmail] = useState("");
   const [code, setCode] = useState("");
   const [userCode, setUserCode] = useState("");
   const [step, setStep] = useState<"request" | "confirm">("request");
   const [message, setMessage] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const canRequestCode = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(securityEmail.trim())
+    && userCode.length === 6;
 
   async function requestCode(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -64,12 +67,13 @@ export default function SecurityEmailForm({ requiresGoogleCode }: { requiresGoog
 
   if (step === "confirm") {
     return <form className="selfhost-login-form" onSubmit={confirmCode}>
+      <p className="login-note">确认码已发送至 <strong>{securityEmail}</strong>。如需修改地址，返回修改不会发送邮件。</p>
       <label htmlFor="security-email-code">邮箱确认码
         <input id="security-email-code" value={code} onChange={(event) => setCode(event.target.value.toUpperCase().replace(/[^A-Z0-9-]/g, "").slice(0, 80))} autoComplete="one-time-code" required placeholder="输入安全邮箱中的确认码" />
       </label>
       {message && <p className="login-error" role="status">{message}</p>}
-      <button className="login-action" type="submit" disabled={isSubmitting}>{isSubmitting ? <LoaderCircle className="button-spinner" size={19} /> : <MailCheck size={19} />}确认并更新</button>
-      <button type="button" className="login-text-button" onClick={() => { setStep("request"); setCode(""); setMessage(""); }} disabled={isSubmitting}>更换邮箱</button>
+      <button className="login-action" type="submit" disabled={isSubmitting}>{isSubmitting ? <LoadingMark className="button-loading-mark" /> : <MailCheck size={19} />}确认并更新</button>
+      <button type="button" className="login-text-button" onClick={() => { setStep("request"); setCode(""); setMessage(""); }} disabled={isSubmitting}>返回修改邮箱</button>
     </form>;
   }
 
@@ -77,10 +81,11 @@ export default function SecurityEmailForm({ requiresGoogleCode }: { requiresGoog
     <label htmlFor="security-email">新安全邮箱
       <input id="security-email" type="email" value={securityEmail} onChange={(event) => setSecurityEmail(event.target.value)} autoComplete="email" required placeholder="name@example.com" />
     </label>
-    {requiresGoogleCode && <label htmlFor="security-email-user-code">Google 验证码
+    <label htmlFor="security-email-user-code">Google 验证码
       <input id="security-email-user-code" required value={userCode} onChange={(event) => setUserCode(event.target.value.replace(/\D/g, "").slice(0, 6))} inputMode="numeric" autoComplete="one-time-code" placeholder="输入当前 6 位验证码" />
-    </label>}
+    </label>
+    <p className="login-note">填写或修改邮箱不会发送邮件；确认地址后，请主动点击“发送确认码”。</p>
     {message && <p className="login-error" role="status">{message}</p>}
-    <button className="login-action" type="submit" disabled={isSubmitting}>{isSubmitting ? <LoaderCircle className="button-spinner" size={19} /> : <ShieldCheck size={19} />}发送确认码</button>
+    <button className="login-action" type="submit" disabled={isSubmitting || !canRequestCode}>{isSubmitting ? <LoadingMark className="button-loading-mark" /> : <ShieldCheck size={19} />}发送确认码</button>
   </form>;
 }

@@ -1,7 +1,8 @@
 "use client";
 
-import { Check, Copy, LoaderCircle, ShieldCheck } from "lucide-react";
+import { Check, Copy, ShieldCheck } from "lucide-react";
 import { FormEvent, useState } from "react";
+import { LoadingMark } from "../components/loading-indicator";
 
 type ActivationStage = { setupKey: string; confirmationCode: string; expiresAt: string };
 
@@ -64,7 +65,7 @@ export default function ActivateAccountForm() {
       <p className="login-note">在 Google Authenticator 中选择“输入设置密钥”，类型选“基于时间”。确认码不会被保存。</p>
       <label htmlFor="activation-user-code">Google 验证码<input id="activation-user-code" required autoFocus inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" value={confirmation} onChange={(event) => setConfirmation(event.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="6 位验证码" /></label>
       {message && <p className="login-error" role="alert">{message}</p>}
-      <button className="login-action" type="submit" disabled={isSubmitting}>{isSubmitting ? <LoaderCircle className="button-spinner" size={19} /> : <Check size={19} />}{isSubmitting ? "正在确认" : "确认并启用账号"}</button>
+      <button className="login-action" type="submit" disabled={isSubmitting}>{isSubmitting ? <LoadingMark className="button-loading-mark" /> : <Check size={19} />}{isSubmitting ? "正在确认" : "确认并启用账号"}</button>
     </form>;
   }
 
@@ -73,6 +74,6 @@ export default function ActivateAccountForm() {
     <label htmlFor="activation-password">设置登录密码<input id="activation-password" required type="password" minLength={14} maxLength={512} autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="至少 14 位" /></label>
     <p className="login-note">下一步将生成仅供你扫码的 Google 验证器密钥。</p>
     {message && <p className="login-error" role="alert">{message}</p>}
-    <button className="login-action" type="submit" disabled={isSubmitting}>{isSubmitting ? <LoaderCircle className="button-spinner" size={19} /> : <ShieldCheck size={19} />}{isSubmitting ? "正在准备" : "继续设置验证器"}</button>
+    <button className="login-action" type="submit" disabled={isSubmitting}>{isSubmitting ? <LoadingMark className="button-loading-mark" /> : <ShieldCheck size={19} />}{isSubmitting ? "正在准备" : "继续设置验证器"}</button>
   </form>;
 }

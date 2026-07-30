@@ -5,7 +5,7 @@ import { crossOriginRequestResponse, secureHeaders, secureJson } from "../app/li
 import { maxJsonRequestBytes, readLimitedJsonObject } from "../app/lib/request-validation.ts";
 import { reviewCredentialSecurity } from "../app/lib/security-review.ts";
 import { canonicalPublicVaultId, resolveSharedPublicVault } from "../app/lib/shared-public-vault.ts";
-import { assertSystemUserChangeAllowed, assertSystemUserDeletionAllowed } from "../app/lib/system-user-policy.ts";
+import { assertSystemUserChangeAllowed, assertSystemUserDeletionAllowed, assertSystemUserStatusTransitionAllowed } from "../app/lib/system-user-policy.ts";
 import { generateTotpCode, parseTotpInput } from "../app/lib/totp.ts";
 import { vaultRouteFromSearch, vaultRouteSearch } from "../app/lib/vault-navigation.ts";
 import { assertVaultMoveAllowed, boundedText } from "../app/lib/vault-policy.ts";
@@ -311,6 +311,19 @@ test("用户管理始终保留有效主管理员", () => {
     }),
     /至少需要保留一位有效管理员/,
   );
+});
+
+test("待激活账户只能由激活确认流程进入已启用状态", () => {
+  assert.throws(
+    () => assertSystemUserStatusTransitionAllowed("pending", "suspended"),
+    /待激活账户只能通过激活确认流程/,
+  );
+  assert.throws(
+    () => assertSystemUserStatusTransitionAllowed("suspended", "pending"),
+    /待激活账户只能通过激活确认流程/,
+  );
+  assert.doesNotThrow(() => assertSystemUserStatusTransitionAllowed("active", "suspended"));
+  assert.doesNotThrow(() => assertSystemUserStatusTransitionAllowed("suspended", "active"));
 });
 
 

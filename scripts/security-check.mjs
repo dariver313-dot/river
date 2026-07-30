@@ -48,7 +48,10 @@ for (const file of apiRoutes) {
 }
 
 for (const file of ["app/api/users/route.ts", "app/api/vault/items/[id]/route.ts", "app/api/embedded-origins/route.ts"]) {
-  if (!readCheckedSource(file).includes("requireRecentSecurityConfirmation")) violations.push(`${file}: 敏感接口缺少近期身份确认`);
+  const source = readCheckedSource(file);
+  const hasRecentConfirmation = source.includes("requireRecentSecurityConfirmation")
+    || source.includes("verifyTotpAndRenewSecurityConfirmation");
+  if (!hasRecentConfirmation) violations.push(`${file}: 敏感接口缺少近期身份确认`);
 }
 
 // 页面配置不要求额外 Google 验证码，但必须始终由当前安全会话中的

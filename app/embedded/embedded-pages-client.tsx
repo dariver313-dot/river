@@ -1,8 +1,9 @@
 "use client";
 
-import { LayoutPanelLeft, RefreshCw } from "lucide-react";
+import { ExternalLink, LayoutPanelLeft, RefreshCw } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { AdminTableState } from "../components/admin-table-state";
+import { LoadingState } from "../components/loading-indicator";
 
 type EmbeddedPage = { id: string; name: string; url: string; origin: string };
 
@@ -59,11 +60,11 @@ export function EmbeddedPagesWorkspace({ selectedPageId, onPageSelect }: Embedde
   }
 
   return <section className="users-page embedded-workspace-page" aria-label="内嵌页面工作台">
-    {loading ? <section className="users-panel embedded-workspace-panel"><AdminTableState icon={LayoutPanelLeft} title="加载中" description="正在读取页面。" /></section>
+    {loading ? <section className="users-panel embedded-workspace-panel"><LoadingState title="正在加载内嵌页面" description="正在读取可访问的页面配置。" /></section>
       : message ? <section className="users-panel embedded-workspace-panel"><AdminTableState tone="error" icon={LayoutPanelLeft} title="无法读取页面" description={message} action={<button type="button" className="secondary-button" onClick={reloadPages}><RefreshCw size={16} />重新加载</button>} /></section>
         : pages.length === 0 ? <section className="users-panel embedded-workspace-panel"><AdminTableState icon={LayoutPanelLeft} title="暂无数据" /></section>
           : <section className="users-panel embedded-frame-panel">
-            <div className="users-toolbar embedded-frame-toolbar"><div className="users-toolbar-copy"><h2 title={current?.name}>{current?.name}</h2><span>工作台页面</span></div><div className="users-toolbar-actions embedded-frame-actions"><button type="button" className="icon-button" onClick={reloadPages} aria-label="刷新内嵌页面" title="刷新内嵌页面"><RefreshCw size={16} /></button></div></div>
+            <div className="users-toolbar embedded-frame-toolbar"><div className="users-toolbar-copy"><h2 title={current?.name}>{current?.name}</h2></div><div className="users-toolbar-actions embedded-frame-actions">{current && <a className="secondary-button embedded-open-button" href={current.url} target="_blank" rel="noopener noreferrer"><ExternalLink size={15} />新窗口打开</a>}<button type="button" className="icon-button" onClick={reloadPages} aria-label="刷新内嵌页面" title="刷新内嵌页面"><RefreshCw size={16} /></button></div></div>
             <div className="embedded-frame-content">{current && <iframe key={current.id} src={current.url} title={current.name} referrerPolicy="no-referrer" sandbox="allow-forms allow-popups allow-scripts allow-same-origin" />}</div>
           </section>}
   </section>;

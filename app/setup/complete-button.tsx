@@ -1,7 +1,8 @@
 "use client";
 
-import { Check, Copy, Eye, EyeOff, LoaderCircle, ShieldCheck } from "lucide-react";
+import { Check, Copy, Eye, EyeOff, ShieldCheck } from "lucide-react";
 import { FormEvent, useState } from "react";
+import { LoadingMark } from "../components/loading-indicator";
 
 export default function CompleteSetupButton({ token }: { token: string }) {
   const [isSaving, setIsSaving] = useState(false);
@@ -56,7 +57,7 @@ export default function CompleteSetupButton({ token }: { token: string }) {
       <small>请填写你能稳定访问的邮箱，不建议使用临时邮箱。</small>
     </label>
     <p className="login-note">首次登录采用账号、密码和 Google 验证码；网络位置异常时会向安全邮箱发送额外确认码。</p>
-    <button className="login-action" type="submit" disabled={isSaving}>{isSaving ? <LoaderCircle className="button-spinner" size={19} aria-hidden="true" /> : <Check size={19} aria-hidden="true" />}{isSaving ? "正在确认" : "完成初始化并进入登录"}</button>
+    <button className="login-action" type="submit" disabled={isSaving}>{isSaving ? <LoadingMark className="button-loading-mark" /> : <Check size={19} aria-hidden="true" />}{isSaving ? "正在确认" : "完成初始化并进入登录"}</button>
     {message && <p className="login-error" role="alert">{message}</p>}
   </form>;
 }

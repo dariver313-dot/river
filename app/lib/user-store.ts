@@ -1,5 +1,5 @@
 import { getDatabase } from "../../db";
-import { assertSystemUserChangeAllowed, assertSystemUserDeletionAllowed } from "./system-user-policy";
+import { assertSystemUserChangeAllowed, assertSystemUserDeletionAllowed, assertSystemUserStatusTransitionAllowed } from "./system-user-policy";
 import { writeAuditedMutation } from "./audit-log";
 import { sharedAuditVaultId } from "./embedded-audit";
 import { accountDisplayName, isValidLoginAccount, normalizeLoginAccount } from "./identity";
@@ -260,6 +260,15 @@ function toManagedUser(row: AppUserRow, actorEmail: string): ManagedAppUser {
   };
 }
 
+async function activationDeliveryMode(allowManualActivation: boolean) {
+  if (!securityEmailConfigured()) {
+    if (!allowManualActivation) throw new ClientSafeError("创建用户前请先配置安全邮箱通知服务。", 503, "SECURITY_EMAIL_UNAVAILABLE");
+    return "manual" as const;
+  }
+  if (!await securityEmailReady()) throw new ClientSafeError("安全邮箱服务不可用，请检查配置后重试。", 503, "SECURITY_EMAIL_UNAVAILABLE");
+  return "email" as const;
+}
+
 export async function createManagedUser(actorEmail: string, input: Record<string, unknown>) {
   const actor = await requireAdmin(actorEmail);
   const email = typeof input.email === "string" ? normalizedEmail(input.email) : "";
@@ -268,9 +277,7 @@ export async function createManagedUser(actorEmail: string, input: Record<string
   const securityEmail = typeof input.securityEmail === "string" ? input.securityEmail.trim().toLowerCase() : "";
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(securityEmail)) throw new Error("请填写接收安全确认码的邮箱。");
   const allowManualActivation = process.env.NODE_ENV !== "production" || process.env.DJMIMA_ALLOW_MANUAL_ACTIVATION_CODES === "1";
-  if (!allowManualActivation && !securityEmailConfigured()) {
-    throw new Error("创建用户前请先配置安全邮箱通知服务。");
-  }
+  const delivery = await activationDeliveryMode(allowManualActivation);
   const database = getDatabase();
   try {
     await writeAuditedMutation(await sharedAuditVaultId(actor.email), actor.email, "system_user_created", email, {
@@ -283,7 +290,7 @@ export async function createManagedUser(actorEmail: string, input: Record<string
       expectedChanges: 1,
       statements: (guard) => [database.prepare(
         `INSERT INTO app_users (email, role, status, security_email, security_email_verified_at, must_change_password, created_by)
-         SELECT ?, ?, 'pending', ?, 0, ?
+         SELECT ?, ?, 'pending', ?, NULL, 0, ?
          WHERE (SELECT COUNT(*) FROM app_users) < ?
            AND NOT EXISTS (SELECT 1 FROM app_users WHERE email = ?)
            AND ${guard.conditionSql}
@@ -304,8 +311,12 @@ export async function createManagedUser(actorEmail: string, input: Record<string
     createdBy: actor.email,
     lifetimeMs: 24 * 60 * 60_000,
   });
-  if (securityEmailConfigured()) {
-    await sendAccountActivation({ to: securityEmail, code: activation.code, expiresAt: activation.expiresAt });
+  if (delivery === "email") {
+    try {
+      await sendAccountActivation({ to: securityEmail, code: activation.code, expiresAt: activation.expiresAt });
+    } catch {
+      throw new ClientSafeError("用户已创建，但激活邮件发送失败。请检查邮件服务后在用户列表中重新发送激活码。", 503, "ACTIVATION_DELIVERY_FAILED");
+    }
     return { user: toManagedUser(created, actor.email), activation: { delivery: "email" as const, expiresAt: activation.expiresAt } };
   }
   // This is for local preview or an explicit, controlled break-glass deployment
@@ -323,9 +334,7 @@ export async function resendManagedUserActivation(actorEmail: string, input: Rec
   const target = current.security_email?.trim().toLowerCase() ?? "";
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(target)) throw new Error("该用户未配置有效的安全邮箱。");
   const allowManualActivation = process.env.NODE_ENV !== "production" || process.env.DJMIMA_ALLOW_MANUAL_ACTIVATION_CODES === "1";
-  if (!allowManualActivation && !securityEmailConfigured()) {
-    throw new Error("请先配置安全邮箱通知服务。");
-  }
+  const delivery = await activationDeliveryMode(allowManualActivation);
   const database = getDatabase();
   await writeAuditedMutation(await sharedAuditVaultId(actor.email), actor.email, "system_user_activation_resent", current.email, {
     auditOrder: "before",
@@ -344,8 +353,12 @@ export async function resendManagedUserActivation(actorEmail: string, input: Rec
     createdBy: actor.email,
     lifetimeMs: 24 * 60 * 60_000,
   });
-  if (securityEmailConfigured()) {
-    await sendAccountActivation({ to: target, code: activation.code, expiresAt: activation.expiresAt });
+  if (delivery === "email") {
+    try {
+      await sendAccountActivation({ to: target, code: activation.code, expiresAt: activation.expiresAt });
+    } catch {
+      throw new ClientSafeError("激活码已重新生成，但邮件发送失败。请检查邮件服务后再次重新发送。", 503, "ACTIVATION_DELIVERY_FAILED");
+    }
     return { user: toManagedUser(current, actor.email), activation: { delivery: "email" as const, expiresAt: activation.expiresAt } };
   }
   return { user: toManagedUser(current, actor.email), activation: { delivery: "manual" as const, code: activation.code, expiresAt: activation.expiresAt } };
@@ -360,9 +373,7 @@ export async function updateManagedUser(actorEmail: string, input: Record<string
   if (!current) throw new Error("未找到该用户。");
   const nextRole = input.role === undefined ? current.role : inputRole(input.role);
   const nextStatus = input.status === undefined ? current.status : inputStatus(input.status);
-  if (current.status === "pending" && nextStatus === "active") {
-    throw new Error("待激活用户必须先完成自己的密码和 Google 验证器配置。");
-  }
+  assertSystemUserStatusTransitionAllowed(current.status, nextStatus);
   const removesActiveAdmin = current.role === "admin" && current.status === "active"
     && (nextRole !== "admin" || nextStatus !== "active");
   const database = getDatabase();
@@ -435,6 +446,7 @@ export async function resetManagedUserAuthenticator(actorEmail: string, input: R
 
   const current = await findUser(email);
   if (!current) throw new Error("未找到该用户。");
+  if (current.status !== "active") throw new Error("请先启用该用户后再重置登录验证器。");
   const securityEmail = current.security_email?.trim().toLowerCase() ?? "";
   if (!current.security_email_verified_at || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(securityEmail)) {
     throw new Error("该用户尚未验证安全邮箱，不能重置登录验证器。");
@@ -520,9 +532,6 @@ export async function deleteManagedUser(actorEmail: string, input: Record<string
   });
 
   const database = getDatabase();
-  const personalVaults = await database.prepare(
-    "SELECT id FROM vaults WHERE owner_email = ? AND kind = 'personal'",
-  ).bind(current.email).all<{ id: string }>();
   const removingActiveAdmin = current.role === "admin" && current.status === "active";
   const targetStillCurrent = `EXISTS (
     SELECT 1 FROM app_users WHERE email = ? AND role = ? AND status = ?
@@ -535,11 +544,18 @@ export async function deleteManagedUser(actorEmail: string, input: Record<string
     commitPrerequisite: { sql: "SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM app_users WHERE email = ?)", values: [current.email] },
     expectedChanges: (results) => (results[results.length - 1]?.meta.changes ?? 0) === 1,
     statements: (guard) => [
-      ...personalVaults.results.flatMap((vault) => [
-        database.prepare(`DELETE FROM vault_items WHERE vault_id = ? AND ${targetStillCurrent} AND ${guard.conditionSql} AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`).bind(vault.id, ...targetValues, ...guard.values, guard.auditEventId),
-        database.prepare(`DELETE FROM vault_members WHERE vault_id = ? AND ${targetStillCurrent} AND ${guard.conditionSql} AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`).bind(vault.id, ...targetValues, ...guard.values, guard.auditEventId),
-        database.prepare(`DELETE FROM vaults WHERE id = ? AND ${targetStillCurrent} AND ${guard.conditionSql} AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`).bind(vault.id, ...targetValues, ...guard.values, guard.auditEventId),
-      ]),
+      database.prepare(`DELETE FROM vault_items
+        WHERE vault_id IN (SELECT id FROM vaults WHERE owner_email = ? AND kind = 'personal')
+          AND ${targetStillCurrent} AND ${guard.conditionSql} AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`)
+        .bind(current.email, ...targetValues, ...guard.values, guard.auditEventId),
+      database.prepare(`DELETE FROM vault_members
+        WHERE vault_id IN (SELECT id FROM vaults WHERE owner_email = ? AND kind = 'personal')
+          AND ${targetStillCurrent} AND ${guard.conditionSql} AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`)
+        .bind(current.email, ...targetValues, ...guard.values, guard.auditEventId),
+      database.prepare(`DELETE FROM vaults
+        WHERE owner_email = ? AND kind = 'personal'
+          AND ${targetStillCurrent} AND ${guard.conditionSql} AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`)
+        .bind(current.email, ...targetValues, ...guard.values, guard.auditEventId),
       database.prepare(`DELETE FROM vault_members WHERE email = ? AND ${targetStillCurrent} AND ${guard.conditionSql} AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`).bind(current.email, ...targetValues, ...guard.values, guard.auditEventId),
       database.prepare(`DELETE FROM account_tokens WHERE email = ? AND ${targetStillCurrent} AND ${guard.conditionSql} AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`).bind(current.email, ...targetValues, ...guard.values, guard.auditEventId),
       database.prepare(`DELETE FROM login_challenges WHERE email = ? AND ${targetStillCurrent} AND ${guard.conditionSql} AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`).bind(current.email, ...targetValues, ...guard.values, guard.auditEventId),

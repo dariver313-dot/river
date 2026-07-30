@@ -1,5 +1,6 @@
 import { getDatabase } from "../../db";
 import { RecentSecurityConfirmationRequiredError, SecuritySessionRequiredError } from "./security-errors";
+import { verifySelfHostedTotp } from "./selfhost-auth";
 
 const sessionTtlMs = 15 * 60_000;
 const recentConfirmationTtlMs = 10 * 60_000;
@@ -163,6 +164,17 @@ export async function renewRecentSecurityConfirmation(email: string, authSession
     expiresAt: session.expiresAt,
     recentVerificationExpiresAt: toIso(Date.parse(now) + recentConfirmationTtlMs),
   };
+}
+
+/**
+ * A sensitive-operation form already asks the user for a current TOTP code.
+ * Treat that successful proof as the recent confirmation for this operation,
+ * instead of requiring the browser to complete the same proof twice.
+ */
+export async function verifyTotpAndRenewSecurityConfirmation(email: string, authSessionId: string, request: Request, userCode: unknown) {
+  if (typeof userCode !== "string" || !await verifySelfHostedTotp(email, userCode)) return false;
+  await renewRecentSecurityConfirmation(email, authSessionId, request);
+  return true;
 }
 
 export async function endSecuritySession(email: string, request: Request) {

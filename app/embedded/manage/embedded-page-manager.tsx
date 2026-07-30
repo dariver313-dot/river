@@ -1,8 +1,9 @@
 "use client";
 
-import { AlertTriangle, Check, Edit3, Globe2, LayoutPanelLeft, LoaderCircle, Plus, RefreshCw, ShieldCheck, Trash2, X } from "lucide-react";
+import { AlertTriangle, Check, Edit3, Globe2, LayoutPanelLeft, Plus, RefreshCw, ShieldCheck, Trash2, X } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
 import { AdminTableLoading, AdminTableState } from "../../components/admin-table-state";
+import { LoadingMark } from "../../components/loading-indicator";
 import { ModalPortal } from "../../components/modal-portal";
 import { SurfaceSelect } from "../../components/surface-select";
 import { TablePagination } from "../../components/table-pagination";
@@ -19,7 +20,7 @@ type EmbeddedPage = {
 };
 
 type EmbeddedPageForm = Pick<EmbeddedPage, "name" | "url" | "visibility" | "enabled" | "sortOrder">;
-type EmbeddedOrigin = { origin: string; createdAt: string; createdBy: string };
+type EmbeddedOrigin = { origin: string; createdAt: string; createdBy: string; pageCount: number };
 type Pagination = { page: number; pageSize: number; total: number; pageCount: number };
 
 const blankForm: EmbeddedPageForm = {
@@ -50,7 +51,18 @@ function Feedback({ tone, children }: { tone: "success" | "error"; children: str
   return <p className={`embedded-management-feedback is-${tone}`} role={tone === "error" ? "alert" : "status"} aria-live="polite">{children}</p>;
 }
 
-export function EmbeddedPageManagerContent({ onDialogStateChange, onPagesChanged, serverSessionReady }: { onDialogStateChange?: (isOpen: boolean) => void; onPagesChanged?: () => void; serverSessionReady: boolean }) {
+type EmbeddedRequestError = Error & { code?: string };
+
+function managementErrorMessage(error: unknown, fallback: string, onRecentSecurityConfirmationRequired?: () => void) {
+  const requestError = error as EmbeddedRequestError;
+  if (requestError?.code === "RECENT_SECURITY_CONFIRMATION_REQUIRED") {
+    onRecentSecurityConfirmationRequired?.();
+    return "请先完成 Google 重新验证，再次提交此操作。";
+  }
+  return error instanceof Error ? error.message : fallback;
+}
+
+export function EmbeddedPageManagerContent({ onDialogStateChange, onPagesChanged, onRecentSecurityConfirmationRequired, serverSessionReady }: { onDialogStateChange?: (isOpen: boolean) => void; onPagesChanged?: () => void; onRecentSecurityConfirmationRequired?: () => void; serverSessionReady: boolean }) {
   const [pages, setPages] = useState<EmbeddedPage[]>([]);
   const [origins, setOrigins] = useState<EmbeddedOrigin[]>([]);
   const [canManageOrigins, setCanManageOrigins] = useState(false);
@@ -82,24 +94,28 @@ export function EmbeddedPageManagerContent({ onDialogStateChange, onPagesChanged
       credentials: "same-origin",
       headers: { "Content-Type": "application/json", ...(init.headers ?? {}) },
     });
-    const payload = await response.json().catch(() => ({})) as T & { error?: string };
-    if (!response.ok) throw new Error(payload.error ?? "操作未完成。");
+    const payload = await response.json().catch(() => ({})) as T & { error?: string; code?: string };
+    if (!response.ok) {
+      const error = new Error(payload.error ?? "操作未完成。") as EmbeddedRequestError;
+      error.code = payload.code;
+      throw error;
+    }
     return payload;
   }
 
-  async function load() {
+  async function load(page = currentPage) {
     if (!serverSessionReady) return;
     setLoading(true);
     setLoadError("");
     try {
-      const response = await request<{ pages: EmbeddedPage[]; pagination: Pagination; origins: EmbeddedOrigin[]; canManageOrigins: boolean }>(`/api/embedded-pages?manage=1&page=${currentPage}&pageSize=${pageSize}`);
+      const response = await request<{ pages: EmbeddedPage[]; pagination: Pagination; origins: EmbeddedOrigin[]; canManageOrigins: boolean }>(`/api/embedded-pages?manage=1&page=${page}&pageSize=${pageSize}`);
       setPages(response.pages);
       setPagination(response.pagination);
-      if (response.pagination.page !== currentPage) setCurrentPage(response.pagination.page);
+      if (response.pagination.page !== page) setCurrentPage(response.pagination.page);
       setOrigins(response.origins);
       setCanManageOrigins(response.canManageOrigins);
     } catch (error) {
-      setLoadError(error instanceof Error ? error.message : "无法读取内嵌页面配置。");
+      setLoadError(managementErrorMessage(error, "无法读取内嵌页面配置。", onRecentSecurityConfirmationRequired));
     } finally {
       setLoading(false);
     }
@@ -233,14 +249,15 @@ export function EmbeddedPageManagerContent({ onDialogStateChange, onPagesChanged
         method: wasEditing ? "PATCH" : "POST",
         body: JSON.stringify({ ...form, id: editingId }),
       });
-      if (!wasEditing) setCurrentPage(1);
-      await load();
+      const targetPage = wasEditing ? currentPage : 1;
+      if (!wasEditing) setCurrentPage(targetPage);
+      await load(targetPage);
       onPagesChanged?.();
       resetForm();
       setIsFormOpen(false);
       setNotice(wasEditing ? "内嵌页面已更新。" : "内嵌页面已添加。");
     } catch (error) {
-      setFormError(error instanceof Error ? error.message : "页面未保存。");
+      setFormError(managementErrorMessage(error, "页面未保存。", onRecentSecurityConfirmationRequired));
     } finally {
       setSaving(false);
     }
@@ -257,12 +274,12 @@ export function EmbeddedPageManagerContent({ onDialogStateChange, onPagesChanged
         method: "DELETE",
         body: JSON.stringify({ id: target.id }),
       });
-      await load();
+      await load(currentPage);
       onPagesChanged?.();
       closeDeleteConfirmation(true);
       setNotice(`“${target.name}”已删除。`);
     } catch (error) {
-      setDeleteError(error instanceof Error ? error.message : "页面未删除。");
+      setDeleteError(managementErrorMessage(error, "页面未删除。", onRecentSecurityConfirmationRequired));
     } finally {
       setSaving(false);
     }
@@ -287,7 +304,7 @@ export function EmbeddedPageManagerContent({ onDialogStateChange, onPagesChanged
       setOriginUserCode("");
       setNotice("可信来源已添加。");
     } catch (error) {
-      setOriginError(error instanceof Error ? error.message : "可信来源未添加。");
+      setOriginError(managementErrorMessage(error, "可信来源未添加。", onRecentSecurityConfirmationRequired));
     } finally {
       setSaving(false);
     }
@@ -312,7 +329,7 @@ export function EmbeddedPageManagerContent({ onDialogStateChange, onPagesChanged
       closeOriginDeleteConfirmation(true);
       setNotice(`“${target.origin}”已从可信来源中移除。`);
     } catch (error) {
-      setOriginError(error instanceof Error ? error.message : "可信来源未删除。");
+      setOriginError(managementErrorMessage(error, "可信来源未删除。", onRecentSecurityConfirmationRequired));
     } finally {
       setSaving(false);
     }
@@ -366,7 +383,7 @@ export function EmbeddedPageManagerContent({ onDialogStateChange, onPagesChanged
             </div>
             <aside className="access-setup-note embedded-management-note"><ShieldCheck size={17} aria-hidden="true" /><div><strong>当前可信来源</strong><p className="embedded-management-allowed-origins">{origins.map((item) => item.origin).join("、")}</p></div></aside>
           </div>
-          <footer className="modal-footer"><button type="button" className="secondary-button" onClick={closeForm} disabled={saving}>取消</button><button type="submit" className="primary-button" disabled={saving}>{saving ? <LoaderCircle className="spin" size={17} /> : <Check size={17} />}{editing ? "保存页面" : "添加页面"}</button></footer>
+          <footer className="modal-footer"><button type="button" className="secondary-button" onClick={closeForm} disabled={saving}>取消</button><button type="submit" className="primary-button" disabled={saving}>{saving ? <LoadingMark className="button-loading-mark" /> : <Check size={17} />}{saving ? "正在保存" : editing ? "保存页面" : "添加页面"}</button></footer>
         </form>
       </section>
     </div></ModalPortal>}
@@ -377,10 +394,10 @@ export function EmbeddedPageManagerContent({ onDialogStateChange, onPagesChanged
         <form className="modal-form" onSubmit={addOrigin}>
           <div className="modal-body embedded-origins-body">
             {originError && <Feedback tone="error">{originError}</Feedback>}
-            {canManageOrigins ? <><label>可信 HTTPS 来源<input required autoFocus value={originValue} onChange={(event) => { setOriginValue(event.target.value); setOriginError(""); }} placeholder="https://reports.example.com" /><small>仅填写来源，不含路径或参数。</small></label><label>Google 验证码<input required value={originUserCode} onChange={(event) => { setOriginUserCode(formatVerificationCode(event.target.value)); setOriginError(""); }} inputMode="numeric" autoComplete="one-time-code" placeholder="000000" /></label><aside className="access-setup-note embedded-management-note"><ShieldCheck size={17} aria-hidden="true" /><div><strong>系统范围设置</strong><p>删除来源前需先移除关联页面。</p></div></aside></> : <aside className="access-setup-note embedded-management-note" role="note"><ShieldCheck size={17} aria-hidden="true" /><div><strong>仅初始管理员可维护</strong><p>你可以查看并使用现有来源。</p></div></aside>}
-            <div className="system-user-table-wrap embedded-origins-table-wrap"><table className="system-user-table embedded-origins-table"><thead><tr><th scope="col">可信来源</th><th scope="col">添加信息</th><th scope="col">管理</th></tr></thead><tbody>{origins.length ? origins.map((item) => <tr key={item.origin}><td data-label="可信来源"><strong>{item.origin}</strong></td><td data-label="添加信息"><div className="embedded-origin-meta"><span title={item.createdBy}>{item.createdBy}</span><time title={formatManagementTime(item.createdAt)}>{formatManagementTime(item.createdAt)}</time></div></td><td data-label="管理">{canManageOrigins ? <button type="button" className="secondary-button user-delete-button" onClick={() => { setOriginUserCode(""); setOriginError(""); setIsOriginsOpen(false); setOriginDeleteTarget(item); }} disabled={saving}><Trash2 size={15} />移除</button> : <span className="current-user">仅查看</span>}</td></tr>) : <tr><td colSpan={3}><p className="embedded-origins-empty">暂无可信来源。</p></td></tr>}</tbody></table></div>
+            {canManageOrigins ? <><label>可信 HTTPS 来源<input required autoFocus value={originValue} onChange={(event) => { setOriginValue(event.target.value); setOriginError(""); }} placeholder="https://reports.example.com" /><small>仅填写来源，不含路径或参数。</small></label><label>Google 验证码<input required value={originUserCode} onChange={(event) => { setOriginUserCode(formatVerificationCode(event.target.value)); setOriginError(""); }} inputMode="numeric" autoComplete="one-time-code" placeholder="000000" /></label><aside className="access-setup-note embedded-management-note"><ShieldCheck size={17} aria-hidden="true" /><div><strong>系统范围设置</strong><p>变更来源时：新增新来源，逐页更新后，再移除旧来源。</p></div></aside></> : <aside className="access-setup-note embedded-management-note" role="note"><ShieldCheck size={17} aria-hidden="true" /><div><strong>仅初始管理员可维护</strong><p>你可以查看并使用现有来源。</p></div></aside>}
+            <div className="system-user-table-wrap embedded-origins-table-wrap"><table className="system-user-table embedded-origins-table"><thead><tr><th scope="col">可信来源</th><th scope="col">添加信息</th><th scope="col">管理</th></tr></thead><tbody>{origins.length ? origins.map((item) => <tr key={item.origin}><td data-label="可信来源"><div className="embedded-origin-meta"><strong>{item.origin}</strong><span>{item.pageCount > 0 ? `已关联 ${item.pageCount} 个页面` : "暂无关联页面"}</span></div></td><td data-label="添加信息"><div className="embedded-origin-meta"><span title={item.createdBy}>{item.createdBy}</span><time title={formatManagementTime(item.createdAt)}>{formatManagementTime(item.createdAt)}</time></div></td><td data-label="管理">{canManageOrigins ? <button type="button" className="secondary-button user-delete-button" onClick={() => { setOriginUserCode(""); setOriginError(""); setIsOriginsOpen(false); setOriginDeleteTarget(item); }} disabled={saving || item.pageCount > 0} title={item.pageCount > 0 ? "请先迁移或删除关联页面" : undefined}><Trash2 size={15} />移除</button> : <span className="current-user">仅查看</span>}</td></tr>) : <tr><td colSpan={3}><p className="embedded-origins-empty">暂无可信来源。</p></td></tr>}</tbody></table></div>
           </div>
-          <footer className="modal-footer"><button type="button" className="secondary-button" onClick={closeOriginsDialog} disabled={saving}>关闭</button>{canManageOrigins && <button type="submit" className="primary-button" disabled={saving}><Plus size={17} />{saving ? "正在添加" : "添加来源"}</button>}</footer>
+          <footer className="modal-footer"><button type="button" className="secondary-button" onClick={closeOriginsDialog} disabled={saving}>关闭</button>{canManageOrigins && <button type="submit" className="primary-button" disabled={saving}>{saving ? <LoadingMark className="button-loading-mark" /> : <Plus size={17} />}{saving ? "正在添加" : "添加来源"}</button>}</footer>
         </form>
       </section>
     </div></ModalPortal>}
@@ -394,7 +411,7 @@ export function EmbeddedPageManagerContent({ onDialogStateChange, onPagesChanged
             <p className="delete-description">删除后，该页面不再显示在工作台。</p>
             {deleteError && <Feedback tone="error">{deleteError}</Feedback>}
           </div>
-          <footer className="modal-footer"><button type="button" className="secondary-button" onClick={() => closeDeleteConfirmation()} disabled={saving}>取消</button><button type="submit" className="danger-button" disabled={saving}><Trash2 size={17} />{saving ? "正在删除" : "删除页面"}</button></footer>
+          <footer className="modal-footer"><button type="button" className="secondary-button" onClick={() => closeDeleteConfirmation()} disabled={saving}>取消</button><button type="submit" className="danger-button" disabled={saving}>{saving ? <LoadingMark className="button-loading-mark" /> : <Trash2 size={17} />}{saving ? "正在删除" : "删除页面"}</button></footer>
         </form>
       </section>
     </div></ModalPortal>}
@@ -403,7 +420,7 @@ export function EmbeddedPageManagerContent({ onDialogStateChange, onPagesChanged
       <section className="modal danger-modal" role="dialog" aria-modal="true" aria-labelledby="embedded-origin-delete-title">
         <header><div><span className="modal-icon danger-icon"><AlertTriangle size={20} /></span><div><h2 id="embedded-origin-delete-title">移除可信来源？</h2><p>此操作不可恢复。</p></div></div><button type="button" className="icon-button" onClick={() => closeOriginDeleteConfirmation()} aria-label="关闭移除可信来源确认" disabled={saving}><X size={20} /></button></header>
         <form className="modal-form" onSubmit={deleteOrigin}>
-          <div className="modal-body"><div className="delete-summary"><strong>{originDeleteTarget.origin}</strong><span>系统范围可信来源</span></div><p className="delete-description">关联页面存在时无法移除。</p>{originError && <Feedback tone="error">{originError}</Feedback>}<label>Google 验证码<input required autoFocus value={originUserCode} onChange={(event) => { setOriginUserCode(formatVerificationCode(event.target.value)); setOriginError(""); }} inputMode="numeric" autoComplete="one-time-code" placeholder="000000" /></label></div>
+          <div className="modal-body"><div className="delete-summary"><strong>{originDeleteTarget.origin}</strong><span>系统范围可信来源</span></div><p className="delete-description">{originDeleteTarget.pageCount > 0 ? `当前关联 ${originDeleteTarget.pageCount} 个页面，请先迁移或删除。` : "移除后，该来源不能再用于新增或编辑页面。"}</p>{originError && <Feedback tone="error">{originError}</Feedback>}<label>Google 验证码<input required autoFocus value={originUserCode} onChange={(event) => { setOriginUserCode(formatVerificationCode(event.target.value)); setOriginError(""); }} inputMode="numeric" autoComplete="one-time-code" placeholder="000000" /></label></div>
           <footer className="modal-footer"><button type="button" className="secondary-button" onClick={() => closeOriginDeleteConfirmation()} disabled={saving}>取消</button><button type="submit" className="danger-button" disabled={saving}><Trash2 size={17} />{saving ? "正在移除" : "移除来源"}</button></footer>
         </form>
       </section>

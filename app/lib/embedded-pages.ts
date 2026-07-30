@@ -62,7 +62,7 @@ function cleanSortOrder(value: unknown) {
   return number;
 }
 
-function inputVisibility(value: unknown) {
+function inputVisibility(value: unknown): EmbeddedPage["visibility"] {
   if (value === "admin" || value === "all") return value;
   throw new Error("页面可见范围无效。");
 }
@@ -73,8 +73,24 @@ function inputEnabled(value: unknown) {
   return value;
 }
 
-function auditSubject(id: string, name: string, origin: string) {
-  return JSON.stringify({ id, name, origin });
+type EmbeddedPageAuditSnapshot = Pick<EmbeddedPage, "id" | "name" | "origin" | "visibility" | "enabled" | "sortOrder"> & { path: string };
+
+function auditSnapshot(page: Pick<EmbeddedPage, "id" | "name" | "url" | "origin" | "visibility" | "enabled" | "sortOrder">): EmbeddedPageAuditSnapshot {
+  return {
+    id: page.id,
+    name: page.name,
+    origin: page.origin,
+    // Query values can contain a remote service token. Keep the audit useful
+    // without copying such a token into a long-lived management log.
+    path: new URL(page.url).pathname,
+    visibility: page.visibility,
+    enabled: page.enabled,
+    sortOrder: page.sortOrder,
+  };
+}
+
+function auditSubject(page: Parameters<typeof auditSnapshot>[0], previous?: Parameters<typeof auditSnapshot>[0]) {
+  return JSON.stringify({ ...auditSnapshot(page), ...(previous ? { previous: auditSnapshot(previous) } : {}) });
 }
 
 export async function listEmbeddedPages(role: "admin" | "user") {
@@ -115,16 +131,18 @@ export async function createEmbeddedPage(actorEmail: string, input: Record<strin
   const sortOrder = cleanSortOrder(input.sortOrder);
   const id = crypto.randomUUID();
   const database = getDatabase();
-  await writeAuditedMutation(await embeddedAuditVaultId(actorEmail), actorEmail, "embedded_page_created", auditSubject(id, name, page.origin), {
+  const nextPage = { id, name, url: page.url, origin: page.origin, visibility, enabled, sortOrder };
+  await writeAuditedMutation(await embeddedAuditVaultId(actorEmail), actorEmail, "embedded_page_created", auditSubject(nextPage), {
     auditOrder: "before",
-    auditPrerequisite: { sql: "SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM embedded_pages WHERE id = ?)", values: [id] },
-    commitPrerequisite: { sql: "SELECT 1 FROM embedded_pages WHERE id = ?", values: [id] },
+    auditPrerequisite: { sql: "SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM embedded_pages WHERE id = ?) AND EXISTS (SELECT 1 FROM embedded_allowed_origins WHERE origin = ?)", values: [id, page.origin] },
+    commitPrerequisite: { sql: "SELECT 1 FROM embedded_pages WHERE id = ? AND origin = ? AND EXISTS (SELECT 1 FROM embedded_allowed_origins WHERE origin = ?)", values: [id, page.origin, page.origin] },
     expectedChanges: 1,
     statements: (guard) => [database.prepare(
       `INSERT INTO embedded_pages (id, name, url, origin, visibility, enabled, sort_order, created_by)
        SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE ${guard.conditionSql}
-       AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`,
-    ).bind(id, name, page.url, page.origin, visibility, enabled ? 1 : 0, sortOrder, actorEmail, ...guard.values, guard.auditEventId)],
+       AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)
+       AND EXISTS (SELECT 1 FROM embedded_allowed_origins WHERE origin = ?)`,
+    ).bind(id, name, page.url, page.origin, visibility, enabled ? 1 : 0, sortOrder, actorEmail, ...guard.values, guard.auditEventId, page.origin)],
   });
   return id;
 }
@@ -139,19 +157,23 @@ export async function updateEmbeddedPage(actorEmail: string, input: Record<strin
   const enabled = inputEnabled(input.enabled);
   const sortOrder = cleanSortOrder(input.sortOrder);
   const database = getDatabase();
-  const existing = await database.prepare("SELECT id FROM embedded_pages WHERE id = ? LIMIT 1").bind(id).first<{ id: string }>();
+  const existing = await database.prepare(
+    "SELECT id, name, url, origin, visibility, enabled, sort_order, created_at, updated_at FROM embedded_pages WHERE id = ? LIMIT 1",
+  ).bind(id).first<EmbeddedPageRow>();
   if (!existing) throw new Error("未找到内嵌页面项目。");
-  await writeAuditedMutation(await embeddedAuditVaultId(actorEmail), actorEmail, "embedded_page_updated", auditSubject(id, name, page.origin), {
+  const nextPage = { id, name, url: page.url, origin: page.origin, visibility, enabled, sortOrder };
+  await writeAuditedMutation(await embeddedAuditVaultId(actorEmail), actorEmail, "embedded_page_updated", auditSubject(nextPage, toPage(existing)), {
     auditOrder: "before",
-    auditPrerequisite: { sql: "SELECT 1 FROM embedded_pages WHERE id = ?", values: [id] },
-    commitPrerequisite: { sql: "SELECT 1 FROM embedded_pages WHERE id = ?", values: [id] },
+    auditPrerequisite: { sql: "SELECT 1 FROM embedded_pages WHERE id = ? AND EXISTS (SELECT 1 FROM embedded_allowed_origins WHERE origin = ?)", values: [id, page.origin] },
+    commitPrerequisite: { sql: "SELECT 1 FROM embedded_pages WHERE id = ? AND origin = ? AND EXISTS (SELECT 1 FROM embedded_allowed_origins WHERE origin = ?)", values: [id, page.origin, page.origin] },
     expectedChanges: 1,
     statements: (guard) => [database.prepare(
       `UPDATE embedded_pages
        SET name = ?, url = ?, origin = ?, visibility = ?, enabled = ?, sort_order = ?, updated_at = CURRENT_TIMESTAMP
        WHERE id = ? AND ${guard.conditionSql}
-         AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`,
-    ).bind(name, page.url, page.origin, visibility, enabled ? 1 : 0, sortOrder, id, ...guard.values, guard.auditEventId)],
+         AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)
+         AND EXISTS (SELECT 1 FROM embedded_allowed_origins WHERE origin = ?)`,
+    ).bind(name, page.url, page.origin, visibility, enabled ? 1 : 0, sortOrder, id, ...guard.values, guard.auditEventId, page.origin)],
   });
 }
 
@@ -160,10 +182,10 @@ export async function deleteEmbeddedPage(actorEmail: string, id: unknown) {
   if (!value || value.length > 128) throw new Error("内嵌页面项目无效。");
   const database = getDatabase();
   const existing = await database.prepare(
-    "SELECT id, name, origin FROM embedded_pages WHERE id = ? LIMIT 1",
-  ).bind(value).first<{ id: string; name: string; origin: string }>();
+    "SELECT id, name, url, origin, visibility, enabled, sort_order, created_at, updated_at FROM embedded_pages WHERE id = ? LIMIT 1",
+  ).bind(value).first<EmbeddedPageRow>();
   if (!existing) throw new Error("未找到内嵌页面项目。");
-  await writeAuditedMutation(await embeddedAuditVaultId(actorEmail), actorEmail, "embedded_page_deleted", auditSubject(existing.id, existing.name, existing.origin), {
+  await writeAuditedMutation(await embeddedAuditVaultId(actorEmail), actorEmail, "embedded_page_deleted", auditSubject(toPage(existing)), {
     auditOrder: "before",
     auditPrerequisite: { sql: "SELECT 1 FROM embedded_pages WHERE id = ?", values: [value] },
     commitPrerequisite: { sql: "SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM embedded_pages WHERE id = ?)", values: [value] },

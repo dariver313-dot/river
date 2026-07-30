@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { getDatabase } from "../../db";
-import { createVaultItem, getVaultItem, listManagementAudit } from "../../app/lib/vault-store";
+import { writeAuditEvent } from "../../app/lib/audit-log";
+import { createVaultItem, deleteVaultItem, getVaultItem, getVaultItemScope, listManagementAudit } from "../../app/lib/vault-store";
 
 const database = getDatabase();
 
@@ -23,6 +24,20 @@ const publicItem = await createVaultItem("admin01", {
   brand: "new",
   note: "",
 });
+
+const publicScope = await getVaultItemScope("admin01", publicItem.id);
+assert.equal(publicScope.group, "公共");
+await assert.rejects(
+  deleteVaultItem("admin01", publicItem.id, `${publicScope.vaultId}-stale`),
+  /项目所在工作区已变更/,
+);
+assert.equal((await getVaultItem("admin01", publicItem.id)).id, publicItem.id, "A stale scope must not delete a credential.");
+
+await writeAuditEvent(publicScope.vaultId, "member01", "account_security_email_changed", "member01");
+const userAudit = await listManagementAudit("admin01", { category: "user" });
+const emailChangeEvent = userAudit.audit.find((event) => event.action === "account_security_email_changed");
+assert(emailChangeEvent, "Security-email changes must be visible in management user audit.");
+assert.equal(emailChangeEvent.integrity, "sealed");
 
 const accessedPublicItem = await getVaultItem("member01", publicItem.id);
 assert.equal(accessedPublicItem.password, "team-password");

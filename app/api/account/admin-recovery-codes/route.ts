@@ -3,8 +3,7 @@ import { actorRequiredResponse, adminRequiredResponse, apiError, readJsonObject,
 import { isInitialAdminAccount } from "../../../lib/initial-admin";
 import { rateLimitResponse } from "../../../lib/rate-limit";
 import { crossOriginRequestResponse, secureJson } from "../../../lib/response-security";
-import { requireRecentSecurityConfirmation } from "../../../lib/security-session";
-import { verifySelfHostedTotp } from "../../../lib/selfhost-auth";
+import { verifyTotpAndRenewSecurityConfirmation } from "../../../lib/security-session";
 
 export const dynamic = "force-dynamic";
 
@@ -18,9 +17,8 @@ export async function POST(request: Request) {
   if (rateLimited) return rateLimited;
 
   try {
-    await requireRecentSecurityConfirmation(actor.email, actor.authSessionId, request);
     const body = await readJsonObject(request);
-    if (typeof body.userCode !== "string" || !await verifySelfHostedTotp(actor.email, body.userCode)) {
+    if (!await verifyTotpAndRenewSecurityConfirmation(actor.email, actor.authSessionId, request, body.userCode)) {
       return secureJson({ error: "Google 验证码不正确，请重试。" }, { status: 401 });
     }
     const recoveryCodes = await regenerateAdministratorRecoveryCodes(actor.email);

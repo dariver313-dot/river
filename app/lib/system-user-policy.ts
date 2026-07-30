@@ -4,6 +4,13 @@ export type ManagedUserPolicyState = {
   status: "pending" | "active" | "suspended" | "frozen";
 };
 
+/** A pending account can become active only after proving its activation TOTP. */
+export function assertSystemUserStatusTransitionAllowed(currentStatus: ManagedUserPolicyState["status"], nextStatus: ManagedUserPolicyState["status"]) {
+  if (currentStatus !== nextStatus && (currentStatus === "pending" || nextStatus === "pending")) {
+    throw new Error("待激活账户只能通过激活确认流程变更状态。");
+  }
+}
+
 export function assertSystemUserChangeAllowed(input: {
   actorEmail: string;
   target: ManagedUserPolicyState;

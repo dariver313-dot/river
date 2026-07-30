@@ -1,8 +1,7 @@
 import { actorRequiredResponse, apiError, readJsonObject, requireVaultActor } from "../../../lib/api-response";
 import { crossOriginRequestResponse, secureJson } from "../../../lib/response-security";
 import { rateLimitResponse } from "../../../lib/rate-limit";
-import { requireRecentSecurityConfirmation } from "../../../lib/security-session";
-import { verifySelfHostedTotp } from "../../../lib/selfhost-auth";
+import { verifyTotpAndRenewSecurityConfirmation } from "../../../lib/security-session";
 import { createVaultItem } from "../../../lib/vault-store";
 
 export const dynamic = "force-dynamic";
@@ -18,8 +17,7 @@ export async function POST(request: Request) {
   try {
     const body = await readJsonObject(request);
     if (body.group === "公共") {
-      await requireRecentSecurityConfirmation(actor.email, actor.authSessionId, request);
-      if (typeof body.userCode !== "string" || !await verifySelfHostedTotp(actor.email, body.userCode)) {
+      if (!await verifyTotpAndRenewSecurityConfirmation(actor.email, actor.authSessionId, request, body.userCode)) {
         return secureJson({ error: "Google 验证码不正确，请重试。" }, { status: 401 });
       }
     }

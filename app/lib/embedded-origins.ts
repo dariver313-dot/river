@@ -7,21 +7,25 @@ export type EmbeddedOrigin = {
   origin: string;
   createdAt: string;
   createdBy: string;
+  pageCount: number;
 };
 
 type EmbeddedOriginRow = {
   origin: string;
   created_at: string;
   created_by: string;
+  page_count: number;
 };
 
 function toOrigin(row: EmbeddedOriginRow): EmbeddedOrigin {
-  return { origin: row.origin, createdAt: row.created_at, createdBy: row.created_by };
+  return { origin: row.origin, createdAt: row.created_at, createdBy: row.created_by, pageCount: row.page_count };
 }
 
 export async function listEmbeddedOrigins() {
   const result = await getDatabase().prepare(
-    "SELECT origin, created_at, created_by FROM embedded_allowed_origins ORDER BY created_at ASC, origin ASC",
+    `SELECT origin, created_at, created_by,
+       (SELECT COUNT(*) FROM embedded_pages WHERE embedded_pages.origin = embedded_allowed_origins.origin) AS page_count
+     FROM embedded_allowed_origins ORDER BY created_at ASC, origin ASC`,
   ).all<EmbeddedOriginRow>();
   return result.results.map(toOrigin);
 }
@@ -61,13 +65,14 @@ export async function deleteEmbeddedOrigin(actorEmail: string, value: unknown) {
   if ((pages?.count ?? 0) > 0) throw new Error("该来源仍被内嵌页面使用。请先调整或删除相关页面。");
   await writeAuditedMutation(await embeddedAuditVaultId(actorEmail), actorEmail, "embedded_origin_deleted", origin, {
     auditOrder: "before",
-    auditPrerequisite: { sql: "SELECT 1 FROM embedded_allowed_origins WHERE origin = ?", values: [origin] },
-    commitPrerequisite: { sql: "SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM embedded_allowed_origins WHERE origin = ?)", values: [origin] },
+    auditPrerequisite: { sql: "SELECT 1 FROM embedded_allowed_origins WHERE origin = ? AND NOT EXISTS (SELECT 1 FROM embedded_pages WHERE origin = ?)", values: [origin, origin] },
+    commitPrerequisite: { sql: "SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM embedded_allowed_origins WHERE origin = ?) AND NOT EXISTS (SELECT 1 FROM embedded_pages WHERE origin = ?)", values: [origin, origin] },
     expectedChanges: 1,
     statements: (guard) => [database.prepare(
       `DELETE FROM embedded_allowed_origins WHERE origin = ? AND ${guard.conditionSql}
-         AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`,
-    ).bind(origin, ...guard.values, guard.auditEventId)],
+         AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)
+         AND NOT EXISTS (SELECT 1 FROM embedded_pages WHERE origin = ?)`,
+    ).bind(origin, ...guard.values, guard.auditEventId, origin)],
   });
   return listEmbeddedOrigins();
 }

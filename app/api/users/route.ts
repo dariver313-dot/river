@@ -1,9 +1,8 @@
 import { actorRequiredResponse, adminRequiredResponse, apiError, readJsonObject, requireVaultActor } from "../../lib/api-response";
 import { crossOriginRequestResponse, secureEmpty, secureJson } from "../../lib/response-security";
 import { rateLimitResponse } from "../../lib/rate-limit";
-import { requireRecentSecurityConfirmation } from "../../lib/security-session";
+import { verifyTotpAndRenewSecurityConfirmation } from "../../lib/security-session";
 import { createManagedUser, deleteManagedUser, listManagedUsers, resendManagedUserActivation, resetManagedUserAuthenticator, updateManagedUser } from "../../lib/user-store";
-import { verifySelfHostedTotp } from "../../lib/selfhost-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -47,9 +46,8 @@ export async function POST(request: Request) {
   if (rateLimited) return rateLimited;
 
   try {
-    await requireRecentSecurityConfirmation(actor.email, actor.authSessionId, request);
     const body = await readJsonObject(request);
-    if (typeof body.userCode !== "string" || !await verifySelfHostedTotp(actor.email, body.userCode)) {
+    if (!await verifyTotpAndRenewSecurityConfirmation(actor.email, actor.authSessionId, request, body.userCode)) {
       return secureJson({ error: "Google 验证码不正确，请重试。" }, { status: 401 });
     }
     if (body.action === "reset_authenticator") {
@@ -77,9 +75,8 @@ export async function PATCH(request: Request) {
   if (rateLimited) return rateLimited;
 
   try {
-    await requireRecentSecurityConfirmation(actor.email, actor.authSessionId, request);
     const body = await readJsonObject(request);
-    if (typeof body.userCode !== "string" || !await verifySelfHostedTotp(actor.email, body.userCode)) {
+    if (!await verifyTotpAndRenewSecurityConfirmation(actor.email, actor.authSessionId, request, body.userCode)) {
       return secureJson({ error: "Google 验证码不正确，请重试。" }, { status: 401 });
     }
     const user = await updateManagedUser(actor.email, body);
@@ -99,9 +96,8 @@ export async function DELETE(request: Request) {
   if (rateLimited) return rateLimited;
 
   try {
-    await requireRecentSecurityConfirmation(actor.email, actor.authSessionId, request);
     const body = await readJsonObject(request);
-    if (typeof body.userCode !== "string" || !await verifySelfHostedTotp(actor.email, body.userCode)) {
+    if (!await verifyTotpAndRenewSecurityConfirmation(actor.email, actor.authSessionId, request, body.userCode)) {
       return secureJson({ error: "Google 验证码不正确，请重试。" }, { status: 401 });
     }
     await deleteManagedUser(actor.email, body);

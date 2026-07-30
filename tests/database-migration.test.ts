@@ -201,3 +201,67 @@ test("公共项目凭据访问由服务端审计，个人项目和越权读取�
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("内嵌页面与可信来源保持关联约束，并记录脱敏审计", () => {
+  const directory = mkdtempSync(join(tmpdir(), "djmima-embedded-pages-"));
+  const databasePath = join(directory, "embedded.sqlite");
+
+  try {
+    const key = Buffer.alloc(32, 97).toString("base64url");
+    const child = spawnSync(
+      process.execPath,
+      [
+        "node_modules/jiti/lib/jiti-cli.mjs",
+        "tests/fixtures/embedded-pages-integration.ts",
+      ],
+      {
+        cwd: resolve("."),
+        env: {
+          ...process.env,
+          DJMIMA_DATABASE_PATH: databasePath,
+          PRIMARY_ADMIN_ACCOUNT: "admin01",
+          AUTH_TOTP_ENCRYPTION_KEY: key,
+          VAULT_ENCRYPTION_KEY: key,
+          VAULT_AUDIT_SIGNING_KEY: key,
+          LOGIN_TOKEN_HASH_KEY: key,
+        },
+        encoding: "utf8",
+      },
+    );
+    assert.equal(child.status, 0, `${child.stderr}\n${child.stdout}`);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("用户创建保持待激活状态，删除会清理个人库", () => {
+  const directory = mkdtempSync(join(tmpdir(), "djmima-user-management-"));
+  const databasePath = join(directory, "users.sqlite");
+
+  try {
+    const key = Buffer.alloc(32, 101).toString("base64url");
+    const child = spawnSync(
+      process.execPath,
+      [
+        "node_modules/jiti/lib/jiti-cli.mjs",
+        "tests/fixtures/user-management-integration.ts",
+      ],
+      {
+        cwd: resolve("."),
+        env: {
+          ...process.env,
+          DJMIMA_DATABASE_PATH: databasePath,
+          PRIMARY_ADMIN_ACCOUNT: "admin01",
+          AUTH_TOTP_ENCRYPTION_KEY: key,
+          VAULT_ENCRYPTION_KEY: key,
+          VAULT_AUDIT_SIGNING_KEY: key,
+          LOGIN_TOKEN_HASH_KEY: key,
+        },
+        encoding: "utf8",
+      },
+    );
+    assert.equal(child.status, 0, `${child.stderr}\n${child.stdout}`);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

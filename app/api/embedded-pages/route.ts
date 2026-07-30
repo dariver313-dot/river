@@ -4,6 +4,7 @@ import { listEmbeddedOrigins } from "../../lib/embedded-origins";
 import { isInitialAdminAccount } from "../../lib/initial-admin";
 import { rateLimitResponse } from "../../lib/rate-limit";
 import { crossOriginRequestResponse, secureEmpty, secureJson } from "../../lib/response-security";
+import { requireRecentSecurityConfirmation } from "../../lib/security-session";
 
 export const dynamic = "force-dynamic";
 
@@ -32,6 +33,7 @@ export async function POST(request: Request) {
   const rateLimited = await rateLimitResponse(request, actor.email, "sensitive");
   if (rateLimited) return rateLimited;
   try {
+    await requireRecentSecurityConfirmation(actor.email, actor.authSessionId, request);
     const body = await readJsonObject(request);
     await createEmbeddedPage(actor.email, body);
     return secureJson({ created: true }, { status: 201 });
@@ -49,6 +51,7 @@ export async function PATCH(request: Request) {
   const rateLimited = await rateLimitResponse(request, actor.email, "sensitive");
   if (rateLimited) return rateLimited;
   try {
+    await requireRecentSecurityConfirmation(actor.email, actor.authSessionId, request);
     const body = await readJsonObject(request);
     await updateEmbeddedPage(actor.email, body);
     return secureJson({ updated: true });
@@ -66,6 +69,7 @@ export async function DELETE(request: Request) {
   const rateLimited = await rateLimitResponse(request, actor.email, "sensitive");
   if (rateLimited) return rateLimited;
   try {
+    await requireRecentSecurityConfirmation(actor.email, actor.authSessionId, request);
     const body = await readJsonObject(request);
     await deleteEmbeddedPage(actor.email, body.id);
     return secureEmpty();

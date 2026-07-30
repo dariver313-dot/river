@@ -6,6 +6,7 @@ import { assertVaultMoveAllowed, boundedText, isVaultSpace, vaultItemLimit, type
 import { reviewCredentialSecurity, type SecurityIssue } from "./security-review";
 import { canonicalPublicVaultId, resolveSharedPublicVault } from "./shared-public-vault";
 import { auditIntegrity, verifyAuditChain, writeAuditedMutation, writeAuditEvent } from "./audit-log";
+import { ClientSafeError } from "./security-errors";
 
 export type VaultItemType = "登录" | "卡片" | "安全笔记";
 export type VaultStrength = "安全" | "一般" | "风险";
@@ -102,12 +103,12 @@ type AuditEventRow = {
 const managementAuditActions = {
   all: [
     "item_created", "item_updated", "item_published_to_public", "item_deleted", "public_secret_accessed",
-    "system_user_created", "system_user_role_changed", "system_user_status_changed", "system_user_authenticator_reset", "system_user_deleted", "account_password_changed",
-    "initial_admin_initialized",
+    "system_user_created", "system_user_activation_resent", "system_user_activation_started", "system_user_activated", "system_user_role_changed", "system_user_status_changed", "system_user_authenticator_reset", "system_user_authenticator_recovery_started", "system_user_authenticator_recovered", "system_user_deleted",
+    "profile_updated", "account_password_changed", "account_password_recovered", "account_security_email_changed", "initial_admin_initialized", "initial_admin_recovery_codes_rotated", "initial_admin_recovered",
     "embedded_origin_added", "embedded_origin_deleted", "embedded_page_created", "embedded_page_updated", "embedded_page_deleted",
   ],
   project: ["item_created", "item_updated", "item_published_to_public", "item_deleted", "public_secret_accessed"],
-  user: ["system_user_created", "system_user_role_changed", "system_user_status_changed", "system_user_authenticator_reset", "system_user_deleted", "account_password_changed", "initial_admin_initialized"],
+  user: ["system_user_created", "system_user_activation_resent", "system_user_activation_started", "system_user_activated", "system_user_role_changed", "system_user_status_changed", "system_user_authenticator_reset", "system_user_authenticator_recovery_started", "system_user_authenticator_recovered", "system_user_deleted", "profile_updated", "account_password_changed", "account_password_recovered", "account_security_email_changed", "initial_admin_initialized", "initial_admin_recovery_codes_rotated", "initial_admin_recovered"],
   embedded: ["embedded_origin_added", "embedded_origin_deleted", "embedded_page_created", "embedded_page_updated", "embedded_page_deleted"],
 } as const satisfies Record<ManagementAuditCategory, readonly string[]>;
 
@@ -629,12 +630,19 @@ async function findItemAccess(email: string, itemId: string) {
 }
 
 export async function getVaultItemScope(email: string, itemId: string) {
-  const { vault } = await findItemAccess(email, itemId);
-  return { group: vault.kind === "public" ? "公共" : "个人" } satisfies { group: VaultSpace };
+  const { item, vault } = await findItemAccess(email, itemId);
+  return { vaultId: item.vault_id, group: vault.kind === "public" ? "公共" : "个人" } satisfies { vaultId: string; group: VaultSpace };
 }
 
-export async function updateVaultItem(email: string, itemId: string, input: Record<string, unknown>) {
+function assertVaultItemScopeUnchanged(item: VaultItemRow, expectedVaultId?: string) {
+  if (expectedVaultId && item.vault_id !== expectedVaultId) {
+    throw new ClientSafeError("项目所在工作区已变更，请刷新后重新确认操作。", 409, "VAULT_ITEM_SCOPE_CHANGED");
+  }
+}
+
+export async function updateVaultItem(email: string, itemId: string, input: Record<string, unknown>, expectedVaultId?: string) {
   const { item, vault } = await findItemAccess(email, itemId);
+  assertVaultItemScopeUnchanged(item, expectedVaultId);
   if (!canWrite(vault.role)) throw new Error("你只有查看权限，无法编辑该项目。");
 
   const currentSpace: VaultSpace = vault.kind === "personal" ? "个人" : "公共";
@@ -700,8 +708,9 @@ export async function getVaultItem(email: string, itemId: string) {
   }
 }
 
-export async function deleteVaultItem(email: string, itemId: string) {
+export async function deleteVaultItem(email: string, itemId: string, expectedVaultId?: string) {
   const { item, vault } = await findItemAccess(email, itemId);
+  assertVaultItemScopeUnchanged(item, expectedVaultId);
   if (!canWrite(vault.role)) throw new Error("你只有查看权限，无法删除该项目。");
 
   const database = getDatabase();

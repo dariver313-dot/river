@@ -1,8 +1,9 @@
 "use client";
 
-import { Eye, EyeOff, LoaderCircle, ShieldCheck } from "lucide-react";
+import { Eye, EyeOff, ShieldCheck } from "lucide-react";
 import { FormEvent, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { LoadingMark } from "../components/loading-indicator";
 
 type LoginResponse = {
   next?: string;
@@ -113,7 +114,7 @@ export default function LoginForm() {
         <p className="login-challenge-expiry">确认码将在 {new Date(challenge.expiresAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })} 失效。</p>
         {message && <p className="login-error" role="alert">{message}</p>}
         <button className="login-action" type="submit" disabled={isSubmitting}>
-          {isSubmitting ? <LoaderCircle className="button-spinner" size={19} aria-hidden="true" /> : <ShieldCheck size={19} aria-hidden="true" />}
+          {isSubmitting ? <LoadingMark className="button-loading-mark" /> : <ShieldCheck size={19} aria-hidden="true" />}
           {isSubmitting ? "正在确认" : "确认并进入"}
         </button>
         <button className="login-text-button" type="button" onClick={() => { setChallenge(null); setChallengeCode(""); setMessage(""); }} disabled={isSubmitting}>返回重新登录</button>
@@ -134,7 +135,7 @@ export default function LoginForm() {
       </label>
       {message && <p className="login-error" role="alert">{message}</p>}
       <button className="login-action" type="submit" disabled={isSubmitting}>
-        {isSubmitting ? <LoaderCircle className="button-spinner" size={19} aria-hidden="true" /> : <ShieldCheck size={19} aria-hidden="true" />}
+        {isSubmitting ? <LoadingMark className="button-loading-mark" /> : <ShieldCheck size={19} aria-hidden="true" />}
         {isSubmitting ? "正在验证" : "验证并进入"}
       </button>
       <a className="login-text-link" href="/recover">忘记登录密码</a>

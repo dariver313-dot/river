@@ -8,6 +8,7 @@ import { generateTotpCode, parseTotpInput } from "./totp";
 import { writeAuditedMutation } from "./audit-log";
 import { sharedAuditVaultId } from "./embedded-audit";
 import { issueAdministratorRecoveryCodes } from "./one-time-tokens";
+import { ClientSafeError } from "./security-errors";
 
 export type SelfHostedUser = {
   displayName: string;
@@ -182,7 +183,7 @@ export async function completeInitialAuthenticatorSetup(
   const setup = await initialAuthenticatorSetup(token);
   if (!setup) return null;
   const normalizedSecurityEmail = validSecurityEmail(securityEmail);
-  if (!normalizedSecurityEmail) throw new Error("请填写初始管理员的安全邮箱。");
+  if (!normalizedSecurityEmail) throw new ClientSafeError("请填写初始管理员的安全邮箱。");
   const passwordHash = await hashLoginPassword(password);
   const encryptedTotpSecret = await encryptAuthTotpSecret(setup.email, setup.primarySecret);
   const database = getDatabase();

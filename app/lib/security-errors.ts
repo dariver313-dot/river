@@ -1,7 +1,12 @@
 export class ClientSafeError extends Error {
-  constructor(message: string, readonly status = 400, readonly code = "REQUEST_REJECTED") {
+  readonly status: number;
+  readonly code: string;
+
+  constructor(message: string, status = 400, code = "REQUEST_REJECTED") {
     super(message);
     this.name = "ClientSafeError";
+    this.status = status;
+    this.code = code;
   }
 }
 

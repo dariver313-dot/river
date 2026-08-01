@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { getDatabase } from "../../db";
 import { writeAuditEvent } from "../../app/lib/audit-log";
-import { createVaultItem, deleteVaultItem, getVaultItem, getVaultItemScope, listManagementAudit } from "../../app/lib/vault-store";
+import { createVaultItem, deleteVaultItem, getVaultItem, getVaultItemScope, listManagementAudit, updateVaultItem } from "../../app/lib/vault-store";
 
 const database = getDatabase();
 
@@ -66,6 +66,10 @@ const personalItem = await createVaultItem("member01", {
   brand: "new",
   note: "",
 });
+const markedTwoFactor = await updateVaultItem("member01", personalItem.id, { ...personalItem, twoFactor: true });
+assert.equal(markedTwoFactor.twoFactor, true, "External two-factor use must be recordable without storing a TOTP secret.");
+const clearedTwoFactor = await updateVaultItem("member01", personalItem.id, { ...markedTwoFactor, twoFactor: false });
+assert.equal(clearedTwoFactor.twoFactor, false, "Removing the independent two-factor flag must not preserve stale state.");
 const personalAuditBeforeRead = await database.prepare(
   "SELECT COUNT(*) AS count FROM audit_events WHERE item_id = ?",
 ).bind(personalItem.id).first<{ count: number }>();

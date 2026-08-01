@@ -2,6 +2,7 @@ import { getDatabase } from "../../db";
 import { writeAuditedMutation } from "./audit-log";
 import { embeddedAuditVaultId } from "./embedded-audit";
 import { normalizeEmbeddedOrigin } from "./embedded-page-policy";
+import { ClientSafeError } from "./security-errors";
 
 export type EmbeddedOrigin = {
   origin: string;
@@ -41,7 +42,7 @@ export async function addEmbeddedOrigin(actorEmail: string, value: unknown) {
   const origin = normalizeEmbeddedOrigin(value);
   const database = getDatabase();
   const existing = await database.prepare("SELECT origin FROM embedded_allowed_origins WHERE origin = ? LIMIT 1").bind(origin).first<{ origin: string }>();
-  if (existing) throw new Error("该可信来源已存在。");
+  if (existing) throw new ClientSafeError("该可信来源已存在。", 409, "EMBEDDED_ORIGIN_EXISTS");
   await writeAuditedMutation(await embeddedAuditVaultId(actorEmail), actorEmail, "embedded_origin_added", origin, {
     auditOrder: "before",
     auditPrerequisite: { sql: "SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM embedded_allowed_origins WHERE origin = ?)", values: [origin] },
@@ -60,9 +61,9 @@ export async function deleteEmbeddedOrigin(actorEmail: string, value: unknown) {
   const origin = normalizeEmbeddedOrigin(value);
   const database = getDatabase();
   const existing = await database.prepare("SELECT origin FROM embedded_allowed_origins WHERE origin = ? LIMIT 1").bind(origin).first<{ origin: string }>();
-  if (!existing) throw new Error("未找到该可信来源。");
+  if (!existing) throw new ClientSafeError("未找到该可信来源。", 404, "EMBEDDED_ORIGIN_NOT_FOUND");
   const pages = await database.prepare("SELECT COUNT(*) AS count FROM embedded_pages WHERE origin = ?").bind(origin).first<{ count: number }>();
-  if ((pages?.count ?? 0) > 0) throw new Error("该来源仍被内嵌页面使用。请先调整或删除相关页面。");
+  if ((pages?.count ?? 0) > 0) throw new ClientSafeError("该来源仍被内嵌页面使用。请先调整或删除相关页面。", 409, "EMBEDDED_ORIGIN_IN_USE");
   await writeAuditedMutation(await embeddedAuditVaultId(actorEmail), actorEmail, "embedded_origin_deleted", origin, {
     auditOrder: "before",
     auditPrerequisite: { sql: "SELECT 1 FROM embedded_allowed_origins WHERE origin = ? AND NOT EXISTS (SELECT 1 FROM embedded_pages WHERE origin = ?)", values: [origin, origin] },

@@ -18,17 +18,18 @@ docker compose exec -T djmima node scripts/selfhost-backup.mjs
 
 ### 启用每日定时任务
 
-仓库提供每天 03:15（随机延迟最多 15 分钟）的 systemd 定时任务。首次部署后，以 root 执行：
+仓库提供每天 03:15（随机延迟最多 15 分钟）的 systemd 定时任务。service 通过 `/etc/default/djmima` 读取实际安装目录，不需要修改仓库中的模板。首次部署后，在应用目录以 root 执行：
 
 ```bash
-install -m 0644 /opt/djmima/ops/selfhost/djmima-backup.service /etc/systemd/system/djmima-backup.service
-install -m 0644 /opt/djmima/ops/selfhost/djmima-backup.timer /etc/systemd/system/djmima-backup.timer
+install -m 0644 ops/selfhost/djmima-backup.service /etc/systemd/system/djmima-backup.service
+install -m 0644 ops/selfhost/djmima-backup.timer /etc/systemd/system/djmima-backup.timer
+printf 'DJMIMA_APP_DIR=%s\n' "$PWD" > /etc/default/djmima
 systemctl daemon-reload
 systemctl enable --now djmima-backup.timer
 systemctl list-timers djmima-backup.timer
 ```
 
-若实际安装目录不是 `/opt/djmima`，先修改 service 文件中的 `WorkingDirectory` 与 compose 文件路径。每次升级后至少执行一次 `systemctl start djmima-backup.service`，并使用 `journalctl -u djmima-backup.service -n 50 --no-pager` 确认成功。定时任务只负责在本机生成加密数据库备份；仍须按下述步骤将它复制到独立受控存储。
+确认 `/etc/default/djmima` 中保存的是绝对路径；当前宝塔部署通常填写 `/www/wwwroot/djmima`。每次升级后至少执行一次 `systemctl start djmima-backup.service`，并使用 `journalctl -u djmima-backup.service -n 50 --no-pager` 确认成功。定时任务只负责在本机生成加密数据库备份；仍须按下述步骤将它复制到独立受控存储。
 
 每日检查：
 

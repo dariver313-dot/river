@@ -17,6 +17,8 @@ import { safeInternalPath } from "../app/lib/safe-navigation.ts";
 import { normalizeProfileDisplayName, profileAvatarStyle, profileDisplayName } from "../app/lib/profile.ts";
 import { resolveLoginRiskMode } from "../app/lib/login-risk-mode.ts";
 import { requestClientIp } from "../app/lib/request-ip.ts";
+import { securityEmailConfirmationRequired } from "../app/lib/security-email-policy.ts";
+import { ClientSafeError } from "../app/lib/security-errors.ts";
 
 test("公共项目不会被静默移入个人项目", () => {
   assert.throws(
@@ -73,6 +75,31 @@ test("内嵌来源与页面地址只接受安全的 HTTPS 格式", () => {
     origin: "https://reports.example.test",
   });
   assert.throws(() => normalizeEmbeddedPageUrl("http://reports.example.test/dashboard"), /HTTPS/);
+});
+
+test("可修正的内嵌输入错误会安全返回给用户", () => {
+  assert.throws(
+    () => normalizeEmbeddedOrigin("http://reports.example.test"),
+    (error) => error instanceof ClientSafeError && error.status === 400,
+  );
+});
+
+test("相同但尚未验证的安全邮箱仍需发送确认码", () => {
+  assert.equal(securityEmailConfirmationRequired({
+    currentEmail: "Admin@Example.test",
+    verifiedAt: null,
+    targetEmail: "admin@example.test",
+  }), true);
+  assert.equal(securityEmailConfirmationRequired({
+    currentEmail: "admin@example.test",
+    verifiedAt: "2026-08-02T00:00:00.000Z",
+    targetEmail: "admin@example.test",
+  }), false);
+  assert.equal(securityEmailConfirmationRequired({
+    currentEmail: "old@example.test",
+    verifiedAt: "2026-08-02T00:00:00.000Z",
+    targetEmail: "new@example.test",
+  }), true);
 });
 
 test("内嵌页面不能指向本应用域名", () => {

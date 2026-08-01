@@ -4451,16 +4451,17 @@ button:disabled {
 .modal .embedded-management-visibility-field .surface-select { min-width: 0; }
 .modal .embedded-management-visibility-field .surface-select-control { min-height: 38px; border-color: var(--line-strong); border-radius: var(--radius-sm); background: var(--surface-soft); color: var(--ink); font-size: 12px; font-weight: 400; line-height: normal; }
 .modal .embedded-management-visibility-field .surface-select:focus-within .surface-select-control { border-color: var(--focus); background: var(--surface); box-shadow: 0 0 0 3px rgb(168 197 166 / 0.26); }
-.embedded-management-checkbox { grid-column: 1 / -1; display: flex !important; align-items: center; gap: 12px; min-height: 58px; padding: 11px 13px; border: 1px solid rgb(212 224 211 / .96); border-radius: 14px; background: linear-gradient(135deg, rgb(250 252 249 / .92), rgb(245 249 244 / .8)); cursor: pointer; transition: border-color 160ms ease, background-color 160ms ease, box-shadow 160ms ease; }
-.embedded-management-checkbox:hover { border-color: rgb(173 203 173 / .95); }
-.embedded-management-checkbox:has(input:checked) { border-color: rgb(163 198 165 / .96); background: linear-gradient(135deg, rgb(234 247 232 / .94), rgb(248 252 246 / .88)); box-shadow: inset 0 0 0 1px rgb(176 211 177 / .42), 0 7px 17px rgb(72 111 78 / .06); }
-.embedded-management-checkbox input { appearance: none; position: relative; width: 34px; min-width: 34px; height: 20px; min-height: 20px !important; margin: 0; padding: 0; border: 1px solid rgb(185 199 184 / .95); border-radius: 999px; background: rgb(213 220 211 / .92); cursor: pointer; transition: background-color 160ms ease, border-color 160ms ease; }
-.embedded-management-checkbox input::after { position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; content: ""; border-radius: 50%; background: white; box-shadow: 0 1px 3px rgb(39 58 42 / .2); transition: transform 160ms ease; }
-.embedded-management-checkbox input:checked { border-color: var(--accent-strong); background: var(--accent-strong); }
-.embedded-management-checkbox input:checked::after { transform: translateX(14px); }
-.embedded-management-checkbox span { display: grid; gap: 3px; min-width: 0; }
-.embedded-management-checkbox strong { color: var(--ink); font-size: 12px; font-weight: 720; }
-.embedded-management-checkbox small { color: var(--ink-soft); font-size: 11px; font-weight: 500; line-height: 1.45; }
+:is(.embedded-management-checkbox, .credential-two-factor-toggle) { grid-column: 1 / -1; display: flex !important; align-items: center; gap: 12px; min-height: 58px; padding: 11px 13px; border: 1px solid rgb(212 224 211 / .96); border-radius: 14px; background: linear-gradient(135deg, rgb(250 252 249 / .92), rgb(245 249 244 / .8)); cursor: pointer; transition: border-color 160ms ease, background-color 160ms ease, box-shadow 160ms ease; }
+:is(.embedded-management-checkbox, .credential-two-factor-toggle):hover { border-color: rgb(173 203 173 / .95); }
+:is(.embedded-management-checkbox, .credential-two-factor-toggle):has(input:checked) { border-color: rgb(163 198 165 / .96); background: linear-gradient(135deg, rgb(234 247 232 / .94), rgb(248 252 246 / .88)); box-shadow: inset 0 0 0 1px rgb(176 211 177 / .42), 0 7px 17px rgb(72 111 78 / .06); }
+:is(.embedded-management-checkbox, .credential-two-factor-toggle) input { appearance: none; position: relative; width: 34px; min-width: 34px; height: 20px; min-height: 20px !important; margin: 0; padding: 0; border: 1px solid rgb(185 199 184 / .95); border-radius: 999px; background: rgb(213 220 211 / .92); cursor: pointer; transition: background-color 160ms ease, border-color 160ms ease; }
+:is(.embedded-management-checkbox, .credential-two-factor-toggle) input::after { position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; content: ""; border-radius: 50%; background: white; box-shadow: 0 1px 3px rgb(39 58 42 / .2); transition: transform 160ms ease; }
+:is(.embedded-management-checkbox, .credential-two-factor-toggle) input:checked { border-color: var(--accent-strong); background: var(--accent-strong); }
+:is(.embedded-management-checkbox, .credential-two-factor-toggle) input:checked::after { transform: translateX(14px); }
+:is(.embedded-management-checkbox, .credential-two-factor-toggle) input:disabled { cursor: not-allowed; opacity: .72; }
+:is(.embedded-management-checkbox, .credential-two-factor-toggle) span { display: grid; gap: 3px; min-width: 0; }
+:is(.embedded-management-checkbox, .credential-two-factor-toggle) strong { color: var(--ink); font-size: 12px; font-weight: 720; }
+:is(.embedded-management-checkbox, .credential-two-factor-toggle) small { color: var(--ink-soft); font-size: 11px; font-weight: 500; line-height: 1.45; }
 .embedded-management-verification { grid-column: 1 / -1; }
 .embedded-management-note { margin: 2px 0 0; }
 .embedded-management-note .embedded-management-allowed-origins { display: block; width: fit-content; max-width: 100%; margin-top: 7px; padding: 5px 8px; overflow-wrap: anywhere; border: 1px solid rgb(204 222 202 / .88); border-radius: 8px; background: rgb(255 255 255 / .68); color: var(--accent-strong); font-family: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; line-height: 1.45; }
@@ -4785,13 +4786,13 @@ button:disabled {
 
 html,
 body {
-  min-width: 1240px;
+  min-width: 0;
 }
 
 .vault-app {
   grid-template-columns: var(--desktop-rail) minmax(0, 1fr);
   grid-template-rows: minmax(100vh, auto);
-  min-width: 1240px;
+  min-width: 0;
   min-height: 100vh;
 }
 
@@ -4840,15 +4841,11 @@ body {
   background: linear-gradient(180deg, rgb(255 255 255 / .24), rgb(248 251 246 / .55));
 }
 
-/* Keep the desktop shell deterministic even when a browser reports a narrow CSS viewport. */
+/* The rail remains desktop-only, while the work surface may still contract on
+   common 1280/1366 laptop viewports without forcing horizontal scrolling. */
 .sidebar-backdrop,
 .mobile-menu {
   display: none !important;
-}
-
-@media (max-width: 1280px) {
-  .security-strip { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-  .content-grid { grid-template-columns: minmax(720px, 1.28fr) minmax(400px, .72fr); }
 }
 
 .topbar {
@@ -5400,6 +5397,13 @@ body {
   min-height: 0;
 }
 
+/* Override the generic users-panel flex layout: the iframe needs a definite
+   second grid row so its 100% height fills the remaining workspace. */
+.embedded-workspace-page > .embedded-frame-panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
 .embedded-frame-toolbar {
   min-height: 56px;
 }
@@ -5424,6 +5428,14 @@ body {
   box-shadow: inset 3px 0 0 rgb(111 146 117 / .7);
 }
 
+}
+
+@media (min-width: 1081px) and (max-width: 1475px) {
+  :root { --desktop-rail: 240px; --desktop-gutter: 20px; }
+  .vault-app .security-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .vault-app .content-grid { grid-template-columns: minmax(0, 1fr); }
+  .vault-app .detail-panel { position: static; }
+  .main-shell .topbar { grid-template-columns: minmax(240px, 1fr) minmax(220px, 300px) auto auto; }
 }
 
 /* Motion is reserved for short, intentional interactions rather than data. */

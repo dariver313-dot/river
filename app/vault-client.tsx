@@ -88,6 +88,7 @@ type Viewer = {
 };
 
 type CredentialForm = Pick<VaultItem, "name" | "domain" | "username" | "password" | "category" | "group"> & {
+  twoFactor: boolean;
   totpEntries: TotpFormEntry[];
 };
 type AuditIntegrity = "legacy" | "sealed" | "failed" | "unknown";
@@ -186,7 +187,11 @@ function newTotpFormEntry(index = 0, config?: TotpConfig, label?: string): TotpF
 }
 
 function emptyCredentialForm(): CredentialForm {
-  return { name: "", domain: "", username: "", password: "", category: "", group: "个人", totpEntries: [newTotpFormEntry()] };
+  return { name: "", domain: "", username: "", password: "", category: "", group: "个人", twoFactor: false, totpEntries: [newTotpFormEntry()] };
+}
+
+function credentialFormHasTotp(form: CredentialForm) {
+  return form.totpEntries.some((entry) => Boolean(entry.config) || Boolean(entry.value.trim()));
 }
 
 function generateStrongPassword() {
@@ -223,7 +228,7 @@ function StrengthBadge({ strength }: { strength: Strength }) {
 const securityIssueCopy: Record<SecurityIssue, { label: string; detail: string }> = {
   weak_password: { label: "密码长度不足", detail: "少于 14 位" },
   reused_password: { label: "密码重复", detail: "用于多个项目" },
-  missing_two_factor: { label: "未开启双重验证", detail: "未配置验证器" },
+  missing_two_factor: { label: "未开启双重验证", detail: "网站账户尚未标记启用二步验证" },
 };
 
 function SecurityIssueBadges({ issues }: { issues: SecurityIssue[] }) {
@@ -301,6 +306,8 @@ function ProfileOverview({
   viewer,
   viewerInitial,
   isLoading,
+  securitySummaryReady,
+  securityTotalItems,
   securityScore,
   securityIssueCount,
   isSaving,
@@ -311,6 +318,8 @@ function ProfileOverview({
   viewer: Viewer;
   viewerInitial: string;
   isLoading: boolean;
+  securitySummaryReady: boolean;
+  securityTotalItems: number;
   securityScore: number;
   securityIssueCount: number;
   isSaving: boolean;
@@ -333,9 +342,9 @@ function ProfileOverview({
       </div>
     </div>
     <div className="profile-layout">
-      <section className="profile-card" aria-labelledby="profile-account-title"><div className="profile-card-heading"><span className="profile-card-icon"><UserRound size={18} /></span><div><h3 id="profile-account-title">基本信息</h3><p>当前登录账户</p></div></div><div className="profile-card-body"><dl className="profile-details"><div><dt>登录账号</dt><dd title={viewer.email}>{viewer.email}</dd></div><div><dt>登录方式</dt><dd>{loginMethod}</dd></div><div><dt>访问限制</dt><dd>{loginAccessScope}</dd></div></dl></div></section>
+      <section className="profile-card" aria-labelledby="profile-account-title"><div className="profile-card-heading"><span className="profile-card-icon"><UserRound size={18} /></span><div><h3 id="profile-account-title">基本信息</h3><p>当前登录账户</p></div></div><div className="profile-card-body"><dl className="profile-details"><div><dt>登录账号</dt><dd title={viewer.email}>{viewer.email}</dd></div><div><dt>登录方式</dt><dd>{loginMethod}</dd></div><div><dt>安全邮箱</dt><dd>已验证</dd></div><div><dt>访问限制</dt><dd>{loginAccessScope}</dd></div></dl></div></section>
       <section className="profile-card" aria-labelledby="profile-permission-title"><div className="profile-card-heading"><span className="profile-card-icon"><UsersRound size={18} /></span><div><h3 id="profile-permission-title">项目权限</h3><p>由系统角色决定</p></div></div><div className="profile-card-body"><div className="profile-permission-list"><div><span>个人项目</span><strong>仅自己管理</strong></div><div><span>公共项目</span><strong>{isAdmin ? "可查看和管理" : "仅查看"}</strong></div><div><span>系统范围</span><strong>{systemAccessScope}</strong></div></div></div></section>
-      <section className="profile-card profile-security-card" aria-labelledby="profile-security-title"><div className="profile-card-heading"><span className="profile-card-icon"><ShieldCheck size={18} /></span><div><h3 id="profile-security-title">账户安全</h3><p>安全检查与会话状态</p></div></div><div className="profile-security-summary"><div><strong>{isLoading ? <Skeleton className="skeleton-score" /> : securityScore}</strong><span>基础安全评分</span></div><p>{isLoading ? <Skeleton className="skeleton-line skeleton-line-profile" /> : securityIssueCount === 0 ? "暂无基础风险" : `${securityIssueCount} 条风险待处理`}</p></div><div className="profile-security-footer"><span>空闲 15 分钟或最长 8 小时后重新登录</span><button type="button" className="secondary-button" onClick={onOpenSecurity} disabled={isLoading}>{isLoading ? "读取中" : "安全检查"}</button></div></section>
+      <section className="profile-card profile-security-card" aria-labelledby="profile-security-title" aria-busy={isLoading}><div className="profile-card-heading"><span className="profile-card-icon"><ShieldCheck size={18} /></span><div><h3 id="profile-security-title">密码库安全</h3><p>已保存凭据检查</p></div></div><div className="profile-security-summary"><div><strong>{isLoading ? <Skeleton className="skeleton-score" /> : securitySummaryReady && securityTotalItems > 0 ? securityScore : "—"}</strong><span>凭据安全评分</span></div><p>{isLoading ? <Skeleton className="skeleton-line skeleton-line-profile" /> : !securitySummaryReady ? "暂时无法读取凭据检查结果" : securityTotalItems === 0 ? "暂无可检查项目" : securityIssueCount === 0 ? "已保存凭据暂无基础风险" : `${securityIssueCount} 条凭据风险待处理`}</p></div><div className="profile-security-footer"><span>登录会话空闲 15 分钟或最长 8 小时后结束</span><button type="button" className="secondary-button" onClick={onOpenSecurity} disabled={isLoading}>{isLoading ? "读取中" : "检查凭据"}</button></div></section>
       <section className="profile-card profile-data-security-card" aria-labelledby="profile-data-security-title"><div className="profile-card-heading"><span className="profile-card-icon"><ShieldCheck size={18} /></span><div><h3 id="profile-data-security-title">敏感操作</h3><p>公共项目和系统管理</p></div></div><div className="profile-card-body profile-sensitive-body"><div className="profile-sensitive-actions"><button type="button" className="secondary-button" onClick={onRestartSecuritySession} disabled={isSaving}><ShieldCheck size={17} />重新验证</button></div><p className="profile-card-note">个人项目使用当前会话；公共项目与系统操作需 Google 验证码。</p></div></section>
     </div>
   </section>;
@@ -586,6 +595,7 @@ export default function VaultClient({ viewer: initialViewer }: { viewer: Viewer 
   const [categoryNames, setCategoryNames] = useState<string[]>([]);
   const [spaceCounts, setSpaceCounts] = useState<Record<Space, number>>({ 全部: 0, 个人: 0, 公共: 0 });
   const [securitySummary, setSecuritySummary] = useState<VaultSecuritySummary>(emptySecuritySummary);
+  const [securitySummaryReady, setSecuritySummaryReady] = useState(false);
   const [isDetailLoading, setIsDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [detailAttempt, setDetailAttempt] = useState(0);
@@ -643,7 +653,7 @@ export default function VaultClient({ viewer: initialViewer }: { viewer: Viewer 
   const selected = selectedDetail?.id === activeSelectedId ? selectedDetail : null;
   const selectedSummary = items.find((item) => item.id === activeSelectedId) ?? null;
   const listTitle = collection === "security"
-      ? securityFocus === "all" ? "待处理账户" : securityIssueCopy[securityFocus].label
+      ? securityFocus === "all" ? "待处理项目" : securityIssueCopy[securityFocus].label
       : space === "全部" ? "全部项目" : `${space}项目`;
   const viewerInitial = viewer.displayName.trim().slice(0, 1).toLocaleUpperCase() || "你";
   const isAdmin = viewer.role === "admin";
@@ -651,6 +661,8 @@ export default function VaultClient({ viewer: initialViewer }: { viewer: Viewer 
   const isModalOpen = activeDialogKey !== null;
   const pageTransitionKey = page === "users" ? `${page}-${userManagementTab}` : page;
   const { totalItems, weakPasswordCount, reusedPasswordCount, missingTwoFactorCount, securityIssueCount, score: securityScore } = securitySummary;
+  const addFormHasTotp = credentialFormHasTotp(form);
+  const editFormHasTotp = credentialFormHasTotp(editForm);
 
   const restartSecuritySession = useCallback(() => {
     setSecurityReverifyCode("");
@@ -848,7 +860,7 @@ export default function VaultClient({ viewer: initialViewer }: { viewer: Viewer 
   }, [activeDialogKey, isModalOpen]);
 
   useEffect(() => {
-    if (!serverSessionReady || page !== "vault") return;
+    if (!serverSessionReady || (page !== "vault" && page !== "profile")) return;
     let cancelled = false;
     const controller = new AbortController();
 
@@ -856,15 +868,18 @@ export default function VaultClient({ viewer: initialViewer }: { viewer: Viewer 
       setIsLoading(true);
       setLoadError(null);
       try {
-        const search = new URLSearchParams({
-          page: String(vaultCurrentPage),
-          query: debouncedVaultQuery,
-          space,
-          category: activeCategory,
-          collection,
-          securityFocus,
-          sortOrder,
-        });
+        const profileOnly = page === "profile";
+        const search = profileOnly
+          ? new URLSearchParams({ page: "1" })
+          : new URLSearchParams({
+            page: String(vaultCurrentPage),
+            query: debouncedVaultQuery,
+            space,
+            category: activeCategory,
+            collection,
+            securityFocus,
+            sortOrder,
+          });
         const response = await fetch(`/api/vault?${search.toString()}`, { cache: "no-store", signal: controller.signal });
         if (response.status === 401) endSession();
         const payload = await readJsonResponse<{
@@ -879,11 +894,14 @@ export default function VaultClient({ viewer: initialViewer }: { viewer: Viewer 
         if (!payload) throw new Error("服务器没有返回项目数据，请重新加载。");
         if (cancelled) return;
 
+        setSecuritySummary(payload.security ?? emptySecuritySummary);
+        setSecuritySummaryReady(true);
+        if (profileOnly) return;
+
         const loadedItems = payload.items ?? [];
         setItems(loadedItems);
         setCategoryNames(payload.categoryNames ?? []);
         setSpaceCounts(payload.spaceCounts ?? { 全部: 0, 个人: 0, 公共: 0 });
-        setSecuritySummary(payload.security ?? emptySecuritySummary);
         const nextPagination = payload.pagination ?? emptyPagination;
         setVaultPagination(nextPagination);
         setVaultCurrentPage((current) => current === nextPagination.page ? current : nextPagination.page);
@@ -1118,7 +1136,7 @@ export default function VaultClient({ viewer: initialViewer }: { viewer: Viewer 
     try {
       const payload = await requestVault<{ item: VaultItem }>("/api/vault/items", {
         method: "POST",
-        body: JSON.stringify({ ...credential, type: "登录", twoFactor: false, favorite: false, brand: "new", note: "", ...(userCode ? { userCode } : {}) }),
+        body: JSON.stringify({ ...credential, type: "登录", favorite: false, brand: "new", note: "", ...(userCode ? { userCode } : {}) }),
       });
       setVaultCurrentPage(1);
       setSelectedId(payload.item.id);
@@ -1143,7 +1161,7 @@ export default function VaultClient({ viewer: initialViewer }: { viewer: Viewer 
   }
 
   function openEdit(item: VaultItem) {
-    setEditForm({ name: item.name, domain: item.domain, username: item.username, password: item.password, category: item.category, group: item.group, totpEntries: item.totps.length > 0 ? item.totps.map((entry, index) => newTotpFormEntry(index, entry.config, entry.label)) : [newTotpFormEntry()] });
+    setEditForm({ name: item.name, domain: item.domain, username: item.username, password: item.password, category: item.category, group: item.group, twoFactor: item.twoFactor, totpEntries: item.totps.length > 0 ? item.totps.map((entry, index) => newTotpFormEntry(index, entry.config, entry.label)) : [newTotpFormEntry()] });
     setEditingItem(item);
     setPublicItemCode("");
     setRevealed(false);
@@ -1597,20 +1615,20 @@ export default function VaultClient({ viewer: initialViewer }: { viewer: Viewer 
               </> : <AdminTableState icon={ShieldCheck} title="暂无数据" />}
             </section>}
           </section>
-        </section> : page === "embedded-manage" ? <EmbeddedPageManagerContent onDialogStateChange={setEmbeddedPageDialogOpen} serverSessionReady={serverSessionReady} onPagesChanged={refreshEmbeddedNavigation} onRecentSecurityConfirmationRequired={restartSecuritySession} /> : page === "embedded" ? <EmbeddedPagesWorkspace selectedPageId={embeddedPageId} onPageSelect={selectEmbeddedPage} /> : page === "profile" ? <ProfileOverview viewer={viewer} viewerInitial={viewerInitial} isLoading={isLoading} securityScore={securityScore} securityIssueCount={securityIssueCount} isSaving={isSaving} onOpenSecurity={openSecurityReview} onRestartSecuritySession={restartSecuritySession} onOpenProfileEditor={openProfileEditor} /> : <>
-        <section className="security-strip" aria-label="账户安全概览" aria-busy={isLoading}>
-          {isLoading ? <SecurityStripLoading /> : securityIssueCount > 0 ? <button type="button" className="risk-item" onClick={() => openSecurityReview()} aria-label="查看全部账户安全检查结果">
-            <span className="risk-icon risk-danger"><AlertTriangle size={17} /></span><span><strong id="security-heading">基础安全评分 {securityScore}/100</strong><small>{securityIssueCount} 条风险待处理</small></span><ChevronRight size={18} aria-hidden="true" />
-          </button> : <div className="risk-item risk-item-static"><span className="risk-icon risk-safe">{totalItems === 0 ? <ShieldCheck size={17} aria-hidden="true" /> : <Check size={17} aria-hidden="true" />}</span><span><strong id="security-heading">基础安全评分 {totalItems === 0 ? "—/100" : `${securityScore}/100`}</strong><small>{totalItems === 0 ? "暂无数据" : "基础检查已通过"}</small></span></div>}
-          {weakPasswordCount > 0 ? <button className="risk-item" onClick={() => openSecurityReview("weak_password")}><span className="risk-icon risk-danger"><AlertTriangle size={17} /></span><span><strong>{weakPasswordCount} 个密码长度不足</strong><small>少于 14 位</small></span><ChevronRight size={18} /></button> : <div className="risk-item risk-item-static"><span className="risk-icon risk-safe"><Check size={17} /></span><span><strong>{totalItems === 0 ? "暂无账户" : "密码长度正常"}</strong><small>{totalItems === 0 ? "等待数据" : "未发现短密码"}</small></span></div>}
-          {reusedPasswordCount > 0 ? <button className="risk-item" onClick={() => openSecurityReview("reused_password")}><span className="risk-icon risk-warning"><ShieldEllipsis size={17} /></span><span><strong>{reusedPasswordCount} 个重复密码</strong><small>用于多个项目</small></span><ChevronRight size={18} /></button> : <div className="risk-item risk-item-static"><span className="risk-icon risk-safe"><Check size={17} /></span><span><strong>{totalItems === 0 ? "暂无账户" : "无重复密码"}</strong><small>{totalItems === 0 ? "等待数据" : "已保存密码不重复"}</small></span></div>}
-          {missingTwoFactorCount > 0 ? <button className="risk-item" onClick={() => openSecurityReview("missing_two_factor")}><span className="risk-icon risk-info"><Smartphone size={17} /></span><span><strong>{missingTwoFactorCount} 个未启用双重验证</strong><small>需配置验证器</small></span><ChevronRight size={18} /></button> : <div className="risk-item risk-item-static"><span className="risk-icon risk-safe"><Check size={17} /></span><span><strong>{totalItems === 0 ? "暂无账户" : "双重验证正常"}</strong><small>{totalItems === 0 ? "等待数据" : "全部账户已开启"}</small></span></div>}
+        </section> : page === "embedded-manage" ? <EmbeddedPageManagerContent onDialogStateChange={setEmbeddedPageDialogOpen} serverSessionReady={serverSessionReady} onPagesChanged={refreshEmbeddedNavigation} onRecentSecurityConfirmationRequired={restartSecuritySession} /> : page === "embedded" ? <EmbeddedPagesWorkspace selectedPageId={embeddedPageId} onPageSelect={selectEmbeddedPage} /> : page === "profile" ? <ProfileOverview viewer={viewer} viewerInitial={viewerInitial} isLoading={isLoading} securitySummaryReady={securitySummaryReady} securityTotalItems={totalItems} securityScore={securityScore} securityIssueCount={securityIssueCount} isSaving={isSaving} onOpenSecurity={openSecurityReview} onRestartSecuritySession={restartSecuritySession} onOpenProfileEditor={openProfileEditor} /> : <>
+        <section className="security-strip" aria-label="密码库凭据安全概览" aria-busy={isLoading}>
+          {isLoading ? <SecurityStripLoading /> : securityIssueCount > 0 ? <button type="button" className="risk-item" onClick={() => openSecurityReview()} aria-label="查看全部密码库凭据检查结果">
+            <span className="risk-icon risk-danger"><AlertTriangle size={17} /></span><span><strong id="security-heading">凭据安全评分 {securityScore}/100</strong><small>{securityIssueCount} 条风险待处理</small></span><ChevronRight size={18} aria-hidden="true" />
+          </button> : <div className="risk-item risk-item-static"><span className="risk-icon risk-safe">{totalItems === 0 ? <ShieldCheck size={17} aria-hidden="true" /> : <Check size={17} aria-hidden="true" />}</span><span><strong id="security-heading">凭据安全评分 {totalItems === 0 ? "—/100" : `${securityScore}/100`}</strong><small>{totalItems === 0 ? "暂无数据" : "基础检查已通过"}</small></span></div>}
+          {weakPasswordCount > 0 ? <button className="risk-item" onClick={() => openSecurityReview("weak_password")}><span className="risk-icon risk-danger"><AlertTriangle size={17} /></span><span><strong>{weakPasswordCount} 个密码长度不足</strong><small>少于 14 位</small></span><ChevronRight size={18} /></button> : <div className="risk-item risk-item-static"><span className="risk-icon risk-safe"><Check size={17} /></span><span><strong>{totalItems === 0 ? "暂无项目" : "密码长度正常"}</strong><small>{totalItems === 0 ? "等待数据" : "未发现短密码"}</small></span></div>}
+          {reusedPasswordCount > 0 ? <button className="risk-item" onClick={() => openSecurityReview("reused_password")}><span className="risk-icon risk-warning"><ShieldEllipsis size={17} /></span><span><strong>{reusedPasswordCount} 个重复密码</strong><small>用于多个项目</small></span><ChevronRight size={18} /></button> : <div className="risk-item risk-item-static"><span className="risk-icon risk-safe"><Check size={17} /></span><span><strong>{totalItems === 0 ? "暂无项目" : "无重复密码"}</strong><small>{totalItems === 0 ? "等待数据" : "已保存密码不重复"}</small></span></div>}
+          {missingTwoFactorCount > 0 ? <button className="risk-item" onClick={() => openSecurityReview("missing_two_factor")}><span className="risk-icon risk-info"><Smartphone size={17} /></span><span><strong>{missingTwoFactorCount} 个未启用双重验证</strong><small>按网站账户实际状态确认</small></span><ChevronRight size={18} /></button> : <div className="risk-item risk-item-static"><span className="risk-icon risk-safe"><Check size={17} /></span><span><strong>{totalItems === 0 ? "暂无项目" : "双重验证状态正常"}</strong><small>{totalItems === 0 ? "等待数据" : "全部项目已标记开启"}</small></span></div>}
         </section>
 
         <div className="content-grid">
           <section className="vault-panel" aria-labelledby="vault-list-title" aria-busy={isLoading}>
             {collection === "security" && <div className="security-review" role="region" aria-labelledby="security-review-title">
-              <div className="security-review-head"><div><span className="eyebrow">账户安全检查</span><h2 id="security-review-title">{totalItems === 0 ? "暂无可检查账户" : securityIssueCount > 0 ? `${securityIssueCount} 条风险待处理` : "基础检查已通过"}</h2><p>{totalItems === 0 ? "暂无数据。" : "密码长度、重复使用与双重验证。"}</p></div><button type="button" className="secondary-button" onClick={openAccountManagement}>全部账户</button></div>
+              <div className="security-review-head"><div><span className="eyebrow">密码库凭据检查</span><h2 id="security-review-title">{totalItems === 0 ? "暂无可检查项目" : securityIssueCount > 0 ? `${securityIssueCount} 条风险待处理` : "基础检查已通过"}</h2><p>{totalItems === 0 ? "暂无数据。" : "检查密码长度、重复使用和网站账户的二步验证状态。"}</p></div><button type="button" className="secondary-button" onClick={openAccountManagement}>全部项目</button></div>
               <div className="security-focuses" role="group" aria-label="安全风险筛选">
                 <button className={securityFocus === "all" ? "is-selected" : ""} aria-pressed={securityFocus === "all"} onClick={() => { setSecurityFocus("all"); setVaultCurrentPage(1); }}>全部 {securityIssueCount}</button>
                 <button className={securityFocus === "weak_password" ? "is-selected" : ""} aria-pressed={securityFocus === "weak_password"} onClick={() => { setSecurityFocus("weak_password"); setVaultCurrentPage(1); }} disabled={weakPasswordCount === 0}>密码长度不足 {weakPasswordCount}</button>
@@ -1644,7 +1662,7 @@ export default function VaultClient({ viewer: initialViewer }: { viewer: Viewer 
                   <span className="row-chevron"><ChevronRight size={18} /></span>
                 </button>
               )) : (
-                collection === "security" && totalItems > 0 && securityIssueCount === 0 ? <div className="empty-state empty-state-success"><ShieldCheck size={24} /><h3>基础检查已通过</h3><p>未发现基础风险。</p><button className="secondary-button" onClick={openAccountManagement}>全部账户</button></div> : <div className="empty-state"><Search size={24} /><h3>{totalItems === 0 ? "暂无数据" : collection === "security" ? "无匹配风险" : "无匹配项目"}</h3>{totalItems > 0 && <p>调整筛选条件后重试。</p>}{totalItems > 0 && <button className="secondary-button" onClick={clearVaultFilters}>清除筛选</button>}</div>
+                collection === "security" && totalItems > 0 && securityIssueCount === 0 ? <div className="empty-state empty-state-success"><ShieldCheck size={24} /><h3>基础检查已通过</h3><p>未发现基础风险。</p><button className="secondary-button" onClick={openAccountManagement}>全部项目</button></div> : <div className="empty-state"><Search size={24} /><h3>{totalItems === 0 ? "暂无数据" : collection === "security" ? "无匹配风险" : "无匹配项目"}</h3>{totalItems > 0 && <p>调整筛选条件后重试。</p>}{totalItems > 0 && <button className="secondary-button" onClick={clearVaultFilters}>清除筛选</button>}</div>
               )}
             </div>
             {!isLoading && !loadError && <TablePagination pagination={vaultPagination} onChange={setVaultCurrentPage} label="账户" />}
@@ -1747,6 +1765,7 @@ export default function VaultClient({ viewer: initialViewer }: { viewer: Viewer 
               <label>用户名<input required value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} placeholder="name@example.com" autoComplete="username" /></label>
               <label>密码<div className="form-password"><input required type={showNewPassword ? "text" : "password"} value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} placeholder="输入或生成强密码" autoComplete="new-password" /><button type="button" className="password-visibility" onClick={() => setShowNewPassword((current) => !current)} aria-label={showNewPassword ? "隐藏输入的密码" : "显示输入的密码"}>{showNewPassword ? <EyeOff size={16} /> : <Eye size={16} />}</button><button type="button" onClick={generatePassword}><WandSparkles size={16} />生成</button></div><small>建议至少 14 位；较短密码会标记为风险。</small></label>
               <div className="field-control"><span>可见范围</span><SurfaceSelect id="add-space" ariaLabel="可见范围" value={form.group} onChange={(group) => setForm({ ...form, group })} options={[{ value: "个人", label: "个人项目" }, ...(isAdmin ? [{ value: "公共", label: "公共项目" }] : [])]} />{form.group === "公共" && <p className="inline-access-note"><UsersRound size={16} aria-hidden="true" /><span>全体启用用户可查看，仅管理员可修改。</span></p>}</div>
+              <label className="credential-two-factor-toggle"><input type="checkbox" checked={form.twoFactor || addFormHasTotp} disabled={addFormHasTotp} onChange={(event) => setForm({ ...form, twoFactor: event.target.checked })} /><span><strong>该网站账户已启用双重验证</strong><small>{addFormHasTotp ? "已填写验证器密钥，因此会自动记录为已启用。" : "不保存验证器密钥时，也可以单独记录实际启用状态。"}</small></span></label>
               <TotpEntryFields entries={form.totpEntries} formId="add" isReading={isReadingTotp} onChange={(id, changes) => updateTotpEntry("add", id, changes)} onAdd={() => addTotpEntry("add")} onRemove={(id) => removeTotpEntry("add", id)} onReadImage={(event, id) => void importTotpFromImage(event, "add", id)} />
               </div>
               <footer className="modal-footer"><button type="button" className="secondary-button" onClick={() => setShowAdd(false)} disabled={isSaving}>取消</button><button type="submit" className="primary-button" disabled={isSaving}>{isSaving ? <LoadingMark className="button-loading-mark" /> : <Plus size={17} />}{isSaving ? "正在保存" : "添加项目"}</button></footer>
@@ -1767,6 +1786,7 @@ export default function VaultClient({ viewer: initialViewer }: { viewer: Viewer 
               <label>用户名<input required value={editForm.username} onChange={(event) => setEditForm({ ...editForm, username: event.target.value })} autoComplete="username" /></label>
               <label>密码<div className="form-password"><input required type={showEditPassword ? "text" : "password"} value={editForm.password} onChange={(event) => setEditForm({ ...editForm, password: event.target.value })} autoComplete="new-password" /><button type="button" className="password-visibility" onClick={() => setShowEditPassword((current) => !current)} aria-label={showEditPassword ? "隐藏输入的密码" : "显示输入的密码"}>{showEditPassword ? <EyeOff size={16} /> : <Eye size={16} />}</button><button type="button" onClick={generateEditPassword}><WandSparkles size={16} />生成</button></div><small>建议至少 14 位；较短密码会标记为风险。</small></label>
               <div className="field-control"><span>可见范围</span><SurfaceSelect id="edit-space" ariaLabel="可见范围" value={editForm.group} onChange={(group) => setEditForm({ ...editForm, group })} options={[{ value: "个人", label: "个人项目" }, ...(isAdmin ? [{ value: "公共", label: "公共项目" }] : [])]} disabled={editingItem.group === "公共"} />{editingItem.group === "公共" ? <p className="inline-access-note"><UsersRound size={16} aria-hidden="true" /><span>全体启用用户可查看，仅管理员可维护。</span></p> : null}</div>
+              <label className="credential-two-factor-toggle"><input type="checkbox" checked={editForm.twoFactor || editFormHasTotp} disabled={editFormHasTotp} onChange={(event) => setEditForm({ ...editForm, twoFactor: event.target.checked })} /><span><strong>该网站账户已启用双重验证</strong><small>{editFormHasTotp ? "已保存或填写验证器密钥；移除密钥后可单独关闭此状态。" : "此状态与是否在密码库保存验证器密钥相互独立。"}</small></span></label>
               <TotpEntryFields entries={editForm.totpEntries} formId="edit" isReading={isReadingTotp} onChange={(id, changes) => updateTotpEntry("edit", id, changes)} onAdd={() => addTotpEntry("edit")} onRemove={(id) => removeTotpEntry("edit", id)} onReadImage={(event, id) => void importTotpFromImage(event, "edit", id)} />
               {editingItem.group === "公共" && <label>Google 验证码<input required value={publicItemCode} onChange={(event) => setPublicItemCode(event.target.value.replace(/\D/g, "").slice(0, 6))} inputMode="numeric" autoComplete="one-time-code" placeholder="000000" /></label>}
               </div>

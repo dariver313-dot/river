@@ -13,6 +13,7 @@ function cleanCode(value: string) {
 export default function ActivateAccountForm() {
   const [activationCode, setActivationCode] = useState("");
   const [password, setPassword] = useState("");
+  const [passwordConfirmation, setPasswordConfirmation] = useState("");
   const [confirmation, setConfirmation] = useState("");
   const [stage, setStage] = useState<ActivationStage | null>(null);
   const [message, setMessage] = useState("");
@@ -21,6 +22,10 @@ export default function ActivateAccountForm() {
   async function begin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (isSubmitting) return;
+    if (password !== passwordConfirmation) {
+      setMessage("两次输入的登录密码不一致。");
+      return;
+    }
     setIsSubmitting(true);
     setMessage("");
     try {
@@ -29,6 +34,7 @@ export default function ActivateAccountForm() {
       if (!response.ok || !payload.setupKey || !payload.confirmationCode || !payload.expiresAt) throw new Error(payload.error || "账号激活未开始。");
       setStage({ setupKey: payload.setupKey, confirmationCode: payload.confirmationCode, expiresAt: payload.expiresAt });
       setPassword("");
+      setPasswordConfirmation("");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "账号激活未开始。");
     } finally {
@@ -72,6 +78,7 @@ export default function ActivateAccountForm() {
   return <form className="selfhost-login-form" onSubmit={begin}>
     <label htmlFor="activation-code">一次性激活码<input id="activation-code" required autoComplete="one-time-code" value={activationCode} onChange={(event) => setActivationCode(cleanCode(event.target.value))} placeholder="例如 ABCDE-FGHIJ-…" /></label>
     <label htmlFor="activation-password">设置登录密码<input id="activation-password" required type="password" minLength={14} maxLength={512} autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="至少 14 位" /></label>
+    <label htmlFor="activation-password-confirm">确认登录密码<input id="activation-password-confirm" required type="password" minLength={14} maxLength={512} autoComplete="new-password" value={passwordConfirmation} onChange={(event) => setPasswordConfirmation(event.target.value)} placeholder="再次输入登录密码" /></label>
     <p className="login-note">下一步将生成仅供你扫码的 Google 验证器密钥。</p>
     {message && <p className="login-error" role="alert">{message}</p>}
     <button className="login-action" type="submit" disabled={isSubmitting}>{isSubmitting ? <LoadingMark className="button-loading-mark" /> : <ShieldCheck size={19} />}{isSubmitting ? "正在准备" : "继续设置验证器"}</button>

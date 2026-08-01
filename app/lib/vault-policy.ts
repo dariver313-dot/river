@@ -1,3 +1,5 @@
+import { ClientSafeError } from "./security-errors.ts";
+
 export type VaultSpace = "个人" | "公共";
 
 // 小型团队产品的硬上限：避免单次全量解密、导出或安全检查被异常数据量拖垮。
@@ -27,17 +29,17 @@ export function isVaultSpace(value: unknown): value is VaultSpace {
 
 export function boundedText(value: unknown, field: keyof typeof fieldLimits, options: { trim?: boolean; required?: boolean } = {}) {
   const text = typeof value === "string" ? (options.trim === false ? value : value.trim()) : "";
-  if (options.required && !text) throw new Error(`${fieldLabel(field)}不能为空。`);
-  if (text.length > fieldLimits[field]) throw new Error(`${fieldLabel(field)}不能超过 ${fieldLimits[field]} 个字符。`);
+  if (options.required && !text) throw new ClientSafeError(`${fieldLabel(field)}不能为空。`);
+  if (text.length > fieldLimits[field]) throw new ClientSafeError(`${fieldLabel(field)}不能超过 ${fieldLimits[field]} 个字符。`);
   return text;
 }
 
 export function assertVaultMoveAllowed(currentSpace: VaultSpace, nextSpace: VaultSpace, isAdmin: boolean) {
   if (currentSpace === "公共" && nextSpace !== "公共") {
-    throw new Error("公共项目不能移入个人项目。若不再需要公开，请删除或归档。");
+    throw new ClientSafeError("公共项目不能移入个人项目。若不再需要公开，请删除或归档。", 409, "PUBLIC_VAULT_MOVE_FORBIDDEN");
   }
   if (currentSpace === "个人" && nextSpace === "公共" && !isAdmin) {
-    throw new Error("只有管理员可以将个人项目设为公共项目。");
+    throw new ClientSafeError("只有管理员可以将个人项目设为公共项目。", 403, "ADMIN_REQUIRED");
   }
 }
 

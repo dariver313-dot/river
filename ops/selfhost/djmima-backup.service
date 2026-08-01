@@ -1,13 +1,13 @@
 [Unit]
 Description=djmima encrypted SQLite backup
-Documentation=file:///opt/djmima/docs/operations/backup-recovery-runbook.md
 Requires=docker.service
 After=docker.service
 
 [Service]
 Type=oneshot
-WorkingDirectory=/opt/djmima
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-ExecStart=/usr/bin/env docker compose -f /opt/djmima/compose.yaml exec -T djmima node scripts/selfhost-backup.mjs
+Environment=DJMIMA_APP_DIR=/opt/djmima
+EnvironmentFile=-/etc/default/djmima
+ExecStart=/usr/bin/env docker compose --project-directory ${DJMIMA_APP_DIR} -f ${DJMIMA_APP_DIR}/compose.yaml exec -T djmima node scripts/selfhost-backup.mjs
 NoNewPrivileges=true
 PrivateTmp=true

@@ -6,6 +6,8 @@ import { sharedAuditVaultId } from "./embedded-audit";
 import { isValidLoginAccount, normalizeLoginAccount } from "./identity";
 import { consumePendingAccountTokenStatement, inspectAccountToken, issueAccountToken, issueAdministratorRecoveryCodes, pendingAccountToken } from "./one-time-tokens";
 import { securityEmailConfigured, sendPasswordRecoveryCode, sendSecurityEmailChangeCode } from "./security-email";
+import { securityEmailConfirmationRequired } from "./security-email-policy";
+import { ClientSafeError } from "./security-errors";
 import { generateTotpSecret, generateTotpCode, parseTotpInput } from "./totp";
 import { isInitialAdminAccount } from "./initial-admin";
 
@@ -320,11 +322,15 @@ export async function completePasswordRecovery(input: { code: unknown; password:
 export async function requestSecurityEmailChange(input: { account: string; securityEmail: unknown }) {
   const email = normalizeLoginAccount(input.account);
   const target = securityEmail(typeof input.securityEmail === "string" ? input.securityEmail : null);
-  if (!isValidLoginAccount(email) || !target) throw new Error("请填写有效的安全邮箱。");
-  if (!securityEmailConfigured()) throw new Error("尚未配置安全邮箱通知服务，暂不能变更安全邮箱。");
+  if (!isValidLoginAccount(email) || !target) throw new ClientSafeError("请填写有效的安全邮箱。");
+  if (!securityEmailConfigured()) throw new ClientSafeError("尚未配置安全邮箱通知服务，暂不能变更安全邮箱。", 503, "SECURITY_EMAIL_UNAVAILABLE");
   const row = await account(email);
   if (!row || row.status !== "active") return null;
-  if (securityEmail(row.security_email) === target) return { unchanged: true as const };
+  if (!securityEmailConfirmationRequired({
+    currentEmail: row.security_email,
+    verifiedAt: row.security_email_verified_at,
+    targetEmail: target,
+  })) return { unchanged: true as const };
   const token = await issueAccountToken({
     email,
     purpose: "security_email_change",
@@ -386,9 +392,9 @@ export async function confirmSecurityEmailChange(input: { account: string; secur
 /** Replaces every unused initial-administrator recovery code after fresh TOTP confirmation. */
 export async function regenerateAdministratorRecoveryCodes(accountEmail: string) {
   const email = normalizeLoginAccount(accountEmail);
-  if (!isInitialAdminAccount(email)) throw new Error("只有初始管理员可以轮换离线恢复码。");
+  if (!isInitialAdminAccount(email)) throw new ClientSafeError("只有初始管理员可以轮换离线恢复码。", 403, "INITIAL_ADMIN_REQUIRED");
   const row = await account(email);
-  if (!row || row.status !== "active") throw new Error("初始管理员账户不可用。");
+  if (!row || row.status !== "active") throw new ClientSafeError("初始管理员账户不可用。", 409, "INITIAL_ADMIN_UNAVAILABLE");
   const database = getDatabase();
   await writeAuditedMutation(await sharedAuditVaultId(email), email, "initial_admin_recovery_codes_rotated", email, {
     auditOrder: "before",

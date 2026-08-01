@@ -141,20 +141,25 @@ function totpEntryLabel(value: unknown, index: number) {
 
 function parseTotpEntries(input: Record<string, unknown>): VaultTotp[] {
   if (Array.isArray(input.totpEntries)) {
-    if (input.totpEntries.length > 3) throw new Error("每个项目最多保存 3 个验证器。");
+    if (input.totpEntries.length > 3) throw new ClientSafeError("每个项目最多保存 3 个验证器。");
     const entries: VaultTotp[] = [];
     const secrets = new Set<string>();
 
     input.totpEntries.forEach((value, index) => {
       if (!value || typeof value !== "object" || Array.isArray(value)) {
-        throw new Error("验证器配置无效。请重新输入 Setup Key 或二维码内容。");
+        throw new ClientSafeError("验证器配置无效。请重新输入 Setup Key 或二维码内容。");
       }
       const source = value as Record<string, unknown>;
       const raw = typeof source.value === "string" ? source.value.trim() : typeof source.totpInput === "string" ? source.totpInput.trim() : "";
-      if (raw.length > 4_096) throw new Error("验证器配置内容过长。请粘贴 Setup Key 或完整二维码内容。");
-      const config = raw ? parseTotpInput(raw) : toTotpConfig(source.config);
+      if (raw.length > 4_096) throw new ClientSafeError("验证器配置内容过长。请粘贴 Setup Key 或完整二维码内容。");
+      let config: TotpConfig | undefined;
+      try {
+        config = raw ? parseTotpInput(raw) : toTotpConfig(source.config);
+      } catch {
+        throw new ClientSafeError("验证器配置无效。请重新输入 Setup Key 或二维码内容。");
+      }
       if (!config) return;
-      if (secrets.has(config.secret)) throw new Error("同一个验证器密钥只能添加一次。");
+      if (secrets.has(config.secret)) throw new ClientSafeError("同一个验证器密钥只能添加一次。");
       secrets.add(config.secret);
       entries.push({ label: totpEntryLabel(source.label, index), config });
     });
@@ -162,8 +167,13 @@ function parseTotpEntries(input: Record<string, unknown>): VaultTotp[] {
   }
 
   const legacyInput = typeof input.totpInput === "string" ? input.totpInput.trim() : "";
-  if (legacyInput.length > 4_096) throw new Error("验证器配置内容过长。请粘贴 Setup Key 或完整二维码内容。");
-  const legacy = input.removeTotp === true ? undefined : legacyInput ? parseTotpInput(legacyInput) : toTotpConfig(input.totp);
+  if (legacyInput.length > 4_096) throw new ClientSafeError("验证器配置内容过长。请粘贴 Setup Key 或完整二维码内容。");
+  let legacy: TotpConfig | undefined;
+  try {
+    legacy = input.removeTotp === true ? undefined : legacyInput ? parseTotpInput(legacyInput) : toTotpConfig(input.totp);
+  } catch {
+    throw new ClientSafeError("验证器配置无效。请重新输入 Setup Key 或二维码内容。");
+  }
   return legacy ? [{ label: "登录验证器", config: legacy }] : [];
 }
 
@@ -199,7 +209,7 @@ function storedPayload(input: Record<string, unknown>): StoredCredential {
   const totps = parseTotpEntries(input);
 
   if (!name || !domain || !username || !password) {
-    throw new Error("名称、网址、用户名和密码不能为空。");
+    throw new ClientSafeError("名称、网址、用户名和密码不能为空。");
   }
 
   return {
@@ -295,7 +305,7 @@ async function ensureSharedPublicVault(adminEmail: string): Promise<AccessibleVa
 
 async function accessibleVaults(email: string): Promise<AccessibleVault[]> {
   const actor = await getActiveApplicationActor(email);
-  if (!actor) throw new Error("当前系统账户未启用。");
+  if (!actor) throw new ClientSafeError("当前系统账户未启用。", 403, "ACCOUNT_INACTIVE");
 
   const personalVault = await ensureOwnedVault(email, "personal");
   const publicVault = await findSharedPublicVault();
@@ -364,7 +374,7 @@ function toSummary(credential: VaultCredential, securityIssues: SecurityIssue[] 
 export async function listVaultData(email: string) {
   const database = getDatabase();
   const actor = await getActiveApplicationActor(email);
-  if (!actor) throw new Error("当前系统账户未启用。");
+  if (!actor) throw new ClientSafeError("当前系统账户未启用。", 403, "ACCOUNT_INACTIVE");
   await assertVaultEncryptionReady();
   const vaultAccess = await accessibleVaults(email);
   const items: Array<{ value: VaultCredential; updatedAt: string }> = [];
@@ -403,7 +413,7 @@ export async function listVaultData(email: string) {
 
 export async function listManagementAudit(email: string, options: { page?: number; pageSize?: number; category?: ManagementAuditCategory } = {}): Promise<ManagementAuditPage> {
   const actor = await getActiveApplicationActor(email);
-  if (!actor || actor.role !== "admin") throw new Error("只有管理员可以查看操作审计。");
+  if (!actor || actor.role !== "admin") throw new ClientSafeError("只有管理员可以查看操作审计。", 403, "ADMIN_REQUIRED");
 
   const publicVault = await findSharedPublicVault();
   const pageSize = boundedPageSize(options.pageSize);
@@ -577,9 +587,9 @@ export async function listVaultSummaryData(email: string, options: VaultListOpti
 export async function createVaultItem(email: string, input: Record<string, unknown>) {
   const space = isVaultSpace(input.group) ? input.group : "个人";
   const actor = await getActiveApplicationActor(email);
-  if (!actor) throw new Error("当前系统账户未启用。");
+  if (!actor) throw new ClientSafeError("当前系统账户未启用。", 403, "ACCOUNT_INACTIVE");
   if (space === "公共" && actor.role !== "admin") {
-    throw new Error("公共项目仅允许管理员新建。");
+    throw new ClientSafeError("公共项目仅允许管理员新建。", 403, "ADMIN_REQUIRED");
   }
   const vault = await vaultForSpace(email, space);
   const payload = storedPayload(input);
@@ -621,10 +631,10 @@ async function findItemAccess(email: string, itemId: string) {
   const item = await database.prepare(
     "SELECT id, vault_id, ciphertext, iv, key_id, encryption_version, created_at, updated_at FROM vault_items WHERE id = ? LIMIT 1",
   ).bind(itemId).first<VaultItemRow>();
-  if (!item) throw new Error("未找到该项目。");
+  if (!item) throw new ClientSafeError("未找到该项目。", 404, "VAULT_ITEM_NOT_FOUND");
 
   const vault = (await accessibleVaults(email)).find((candidate) => candidate.id === item.vault_id);
-  if (!vault) throw new Error("你没有访问该项目的权限。");
+  if (!vault) throw new ClientSafeError("你没有访问该项目的权限。", 403, "VAULT_ITEM_ACCESS_DENIED");
 
   return { item, vault };
 }
@@ -643,7 +653,7 @@ function assertVaultItemScopeUnchanged(item: VaultItemRow, expectedVaultId?: str
 export async function updateVaultItem(email: string, itemId: string, input: Record<string, unknown>, expectedVaultId?: string) {
   const { item, vault } = await findItemAccess(email, itemId);
   assertVaultItemScopeUnchanged(item, expectedVaultId);
-  if (!canWrite(vault.role)) throw new Error("你只有查看权限，无法编辑该项目。");
+  if (!canWrite(vault.role)) throw new ClientSafeError("你只有查看权限，无法编辑该项目。", 403, "VAULT_ITEM_READ_ONLY");
 
   const currentSpace: VaultSpace = vault.kind === "personal" ? "个人" : "公共";
   const nextSpace = isVaultSpace(input.group) ? input.group : currentSpace;
@@ -711,7 +721,7 @@ export async function getVaultItem(email: string, itemId: string) {
 export async function deleteVaultItem(email: string, itemId: string, expectedVaultId?: string) {
   const { item, vault } = await findItemAccess(email, itemId);
   assertVaultItemScopeUnchanged(item, expectedVaultId);
-  if (!canWrite(vault.role)) throw new Error("你只有查看权限，无法删除该项目。");
+  if (!canWrite(vault.role)) throw new ClientSafeError("你只有查看权限，无法删除该项目。", 403, "VAULT_ITEM_READ_ONLY");
 
   const database = getDatabase();
   await writeAuditedMutation(vault.id, email, "item_deleted", item.id, {

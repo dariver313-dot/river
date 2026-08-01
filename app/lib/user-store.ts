@@ -233,19 +233,19 @@ export async function listManagedUsers(actorEmail: string, options: { page?: num
 async function requireAdmin(actorEmail: string) {
   const actor = await findUser(actorEmail);
   if (!actor || actor.status !== "active" || actor.role !== "admin") {
-    throw new Error("只有管理员可以管理系统用户。");
+    throw new ClientSafeError("只有管理员可以管理系统用户。", 403, "ADMIN_REQUIRED");
   }
   return actor;
 }
 
 function inputRole(value: unknown): AppRole {
   if (value === "admin" || value === "user") return value;
-  throw new Error("系统角色无效。");
+  throw new ClientSafeError("系统角色无效。");
 }
 
 function inputStatus(value: unknown): AppUserStatus {
   if (value === "pending" || value === "active" || value === "suspended" || value === "frozen") return value;
-  throw new Error("账户状态无效。");
+  throw new ClientSafeError("账户状态无效。");
 }
 
 function toManagedUser(row: AppUserRow, actorEmail: string): ManagedAppUser {
@@ -272,10 +272,10 @@ async function activationDeliveryMode(allowManualActivation: boolean) {
 export async function createManagedUser(actorEmail: string, input: Record<string, unknown>) {
   const actor = await requireAdmin(actorEmail);
   const email = typeof input.email === "string" ? normalizedEmail(input.email) : "";
-  if (!isValidEmail(email)) throw new Error("请输入有效的登录账号（邮箱或英文数字组合）。");
+  if (!isValidEmail(email)) throw new ClientSafeError("请输入有效的登录账号（邮箱或英文数字组合）。");
   const role = inputRole(input.role);
   const securityEmail = typeof input.securityEmail === "string" ? input.securityEmail.trim().toLowerCase() : "";
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(securityEmail)) throw new Error("请填写接收安全确认码的邮箱。");
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(securityEmail)) throw new ClientSafeError("请填写接收安全确认码的邮箱。");
   const allowManualActivation = process.env.NODE_ENV !== "production" || process.env.DJMIMA_ALLOW_MANUAL_ACTIVATION_CODES === "1";
   const delivery = await activationDeliveryMode(allowManualActivation);
   const database = getDatabase();
@@ -299,7 +299,7 @@ export async function createManagedUser(actorEmail: string, input: Record<string
     });
   } catch (error) {
     const existing = await findUser(email);
-    if (existing) throw new Error("该用户已存在，可直接调整其角色或状态。");
+    if (existing) throw new ClientSafeError("该用户已存在，可直接调整其角色或状态。", 409, "USER_EXISTS");
     throw error;
   }
 
@@ -328,11 +328,11 @@ export async function createManagedUser(actorEmail: string, input: Record<string
 export async function resendManagedUserActivation(actorEmail: string, input: Record<string, unknown>) {
   const actor = await requireAdmin(actorEmail);
   const email = typeof input.email === "string" ? normalizedEmail(input.email) : "";
-  if (!email) throw new Error("缺少用户账号。");
+  if (!email) throw new ClientSafeError("缺少用户账号。");
   const current = await findUser(email);
-  if (!current || current.status !== "pending") throw new Error("只有待激活用户可以重新发送激活码。");
+  if (!current || current.status !== "pending") throw new ClientSafeError("只有待激活用户可以重新发送激活码。", 409, "USER_NOT_PENDING");
   const target = current.security_email?.trim().toLowerCase() ?? "";
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(target)) throw new Error("该用户未配置有效的安全邮箱。");
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(target)) throw new ClientSafeError("该用户未配置有效的安全邮箱。", 409, "USER_SECURITY_EMAIL_INVALID");
   const allowManualActivation = process.env.NODE_ENV !== "production" || process.env.DJMIMA_ALLOW_MANUAL_ACTIVATION_CODES === "1";
   const delivery = await activationDeliveryMode(allowManualActivation);
   const database = getDatabase();
@@ -367,10 +367,10 @@ export async function resendManagedUserActivation(actorEmail: string, input: Rec
 export async function updateManagedUser(actorEmail: string, input: Record<string, unknown>) {
   const actor = await requireAdmin(actorEmail);
   const email = typeof input.email === "string" ? normalizedEmail(input.email) : "";
-  if (!email) throw new Error("缺少用户邮箱。");
+  if (!email) throw new ClientSafeError("缺少用户邮箱。");
 
   const current = await findUser(email);
-  if (!current) throw new Error("未找到该用户。");
+  if (!current) throw new ClientSafeError("未找到该用户。", 404, "USER_NOT_FOUND");
   const nextRole = input.role === undefined ? current.role : inputRole(input.role);
   const nextStatus = input.status === undefined ? current.status : inputStatus(input.status);
   assertSystemUserStatusTransitionAllowed(current.status, nextStatus);
@@ -429,7 +429,7 @@ export async function updateManagedUser(actorEmail: string, input: Record<string
       ],
     });
   } catch (error) {
-    if (removesActiveAdmin) throw new Error("系统至少需要保留一位有效管理员。");
+    if (removesActiveAdmin) throw new ClientSafeError("系统至少需要保留一位有效管理员。", 409, "ACTIVE_ADMIN_REQUIRED");
     throw error;
   }
   const updated = await findUser(current.email);
@@ -440,18 +440,18 @@ export async function updateManagedUser(actorEmail: string, input: Record<string
 export async function resetManagedUserAuthenticator(actorEmail: string, input: Record<string, unknown>): Promise<ManagedAuthenticatorReset> {
   const actor = await requireAdmin(actorEmail);
   const email = typeof input.email === "string" ? normalizedEmail(input.email) : "";
-  if (!email) throw new Error("缺少用户邮箱。");
-  if (email === actor.email) throw new Error("不能在当前会话中重置自己的登录验证器。");
-  if (email === configuredPrimaryAdminEmail()) throw new Error("初始管理员验证器由部署配置保护，请按运维恢复流程处理。");
+  if (!email) throw new ClientSafeError("缺少用户邮箱。");
+  if (email === actor.email) throw new ClientSafeError("不能在当前会话中重置自己的登录验证器。", 409, "SELF_AUTHENTICATOR_RESET_FORBIDDEN");
+  if (email === configuredPrimaryAdminEmail()) throw new ClientSafeError("初始管理员验证器由部署配置保护，请按运维恢复流程处理。", 409, "INITIAL_ADMIN_AUTHENTICATOR_PROTECTED");
 
   const current = await findUser(email);
-  if (!current) throw new Error("未找到该用户。");
-  if (current.status !== "active") throw new Error("请先启用该用户后再重置登录验证器。");
+  if (!current) throw new ClientSafeError("未找到该用户。", 404, "USER_NOT_FOUND");
+  if (current.status !== "active") throw new ClientSafeError("请先启用该用户后再重置登录验证器。", 409, "USER_NOT_ACTIVE");
   const securityEmail = current.security_email?.trim().toLowerCase() ?? "";
   if (!current.security_email_verified_at || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(securityEmail)) {
-    throw new Error("该用户尚未验证安全邮箱，不能重置登录验证器。");
+    throw new ClientSafeError("该用户尚未验证安全邮箱，不能重置登录验证器。", 409, "USER_SECURITY_EMAIL_UNVERIFIED");
   }
-  if (!securityEmailConfigured() || !await securityEmailReady()) throw new Error("安全邮箱服务不可用，暂不能重置登录验证器。");
+  if (!securityEmailConfigured() || !await securityEmailReady()) throw new ClientSafeError("安全邮箱服务不可用，暂不能重置登录验证器。", 503, "SECURITY_EMAIL_UNAVAILABLE");
   const now = new Date().toISOString();
   const database = getDatabase();
 
@@ -461,7 +461,7 @@ export async function resetManagedUserAuthenticator(actorEmail: string, input: R
   try {
     await sendAuthenticatorResetCode({ to: securityEmail, code: reset.code, expiresAt: reset.expiresAt });
   } catch {
-    throw new Error("验证器恢复邮件发送失败；请检查邮件服务后重新发起重置。");
+    throw new ClientSafeError("验证器恢复邮件发送失败；请检查邮件服务后重新发起重置。", 503, "AUTHENTICATOR_RESET_DELIVERY_FAILED");
   }
 
   await writeAuditedMutation(await sharedAuditVaultId(actor.email), actor.email, "system_user_authenticator_reset", current.email, {
@@ -515,10 +515,10 @@ export async function resetManagedUserAuthenticator(actorEmail: string, input: R
 export async function deleteManagedUser(actorEmail: string, input: Record<string, unknown>) {
   const actor = await requireAdmin(actorEmail);
   const email = typeof input.email === "string" ? normalizedEmail(input.email) : "";
-  if (!email) throw new Error("缺少用户邮箱。");
+  if (!email) throw new ClientSafeError("缺少用户邮箱。");
 
   const current = await findUser(email);
-  if (!current) throw new Error("未找到该用户。");
+  if (!current) throw new ClientSafeError("未找到该用户。", 404, "USER_NOT_FOUND");
   const admins = current.role === "admin" && current.status === "active"
     ? await getDatabase().prepare(
       "SELECT COUNT(*) AS count FROM app_users WHERE role = 'admin' AND status = 'active'",

@@ -3,6 +3,7 @@ import { writeAuditedMutation } from "./audit-log";
 import { embeddedAuditVaultId } from "./embedded-audit";
 import { isEmbeddedOriginAllowed } from "./embedded-origins";
 import { normalizeEmbeddedPageUrl } from "./embedded-page-policy";
+import { ClientSafeError } from "./security-errors";
 
 export { normalizeEmbeddedPageUrl } from "./embedded-page-policy";
 
@@ -51,25 +52,25 @@ function toPage(row: EmbeddedPageRow): EmbeddedPage {
 
 function cleanName(value: unknown) {
   const name = typeof value === "string" ? value.trim().replace(/[\p{C}]/gu, "") : "";
-  if (name.length < 1 || name.length > 120) throw new Error("页面名称需为 1–120 个字符。");
+  if (name.length < 1 || name.length > 120) throw new ClientSafeError("页面名称需为 1–120 个字符。");
   return name;
 }
 
 function cleanSortOrder(value: unknown) {
   if (value === undefined) return 0;
   const number = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : NaN;
-  if (!Number.isInteger(number) || number < 0 || number > 100_000) throw new Error("排序值必须是 0–100000 的整数。");
+  if (!Number.isInteger(number) || number < 0 || number > 100_000) throw new ClientSafeError("排序值必须是 0–100000 的整数。");
   return number;
 }
 
 function inputVisibility(value: unknown): EmbeddedPage["visibility"] {
   if (value === "admin" || value === "all") return value;
-  throw new Error("页面可见范围无效。");
+  throw new ClientSafeError("页面可见范围无效。");
 }
 
 function inputEnabled(value: unknown) {
   if (value === undefined) return true;
-  if (typeof value !== "boolean") throw new Error("页面启用状态无效。");
+  if (typeof value !== "boolean") throw new ClientSafeError("页面启用状态无效。");
   return value;
 }
 
@@ -124,7 +125,7 @@ export async function listManagedEmbeddedPagesPage(options: { page?: number; pag
 
 export async function createEmbeddedPage(actorEmail: string, input: Record<string, unknown>) {
   const page = normalizeEmbeddedPageUrl(input.url);
-  if (!await isEmbeddedOriginAllowed(page.origin)) throw new Error("该地址的来源尚未加入可信来源。请由初始管理员先在“可信来源”中添加。");
+  if (!await isEmbeddedOriginAllowed(page.origin)) throw new ClientSafeError("该地址的来源尚未加入可信来源。请由初始管理员先在“可信来源”中添加。", 409, "EMBEDDED_ORIGIN_REQUIRED");
   const name = cleanName(input.name);
   const visibility = inputVisibility(input.visibility);
   const enabled = inputEnabled(input.enabled);
@@ -149,9 +150,9 @@ export async function createEmbeddedPage(actorEmail: string, input: Record<strin
 
 export async function updateEmbeddedPage(actorEmail: string, input: Record<string, unknown>) {
   const id = typeof input.id === "string" ? input.id.trim() : "";
-  if (!id || id.length > 128) throw new Error("内嵌页面项目无效。");
+  if (!id || id.length > 128) throw new ClientSafeError("内嵌页面项目无效。");
   const page = normalizeEmbeddedPageUrl(input.url);
-  if (!await isEmbeddedOriginAllowed(page.origin)) throw new Error("该地址的来源尚未加入可信来源。请由初始管理员先在“可信来源”中添加。");
+  if (!await isEmbeddedOriginAllowed(page.origin)) throw new ClientSafeError("该地址的来源尚未加入可信来源。请由初始管理员先在“可信来源”中添加。", 409, "EMBEDDED_ORIGIN_REQUIRED");
   const name = cleanName(input.name);
   const visibility = inputVisibility(input.visibility);
   const enabled = inputEnabled(input.enabled);
@@ -160,7 +161,7 @@ export async function updateEmbeddedPage(actorEmail: string, input: Record<strin
   const existing = await database.prepare(
     "SELECT id, name, url, origin, visibility, enabled, sort_order, created_at, updated_at FROM embedded_pages WHERE id = ? LIMIT 1",
   ).bind(id).first<EmbeddedPageRow>();
-  if (!existing) throw new Error("未找到内嵌页面项目。");
+  if (!existing) throw new ClientSafeError("未找到内嵌页面项目。", 404, "EMBEDDED_PAGE_NOT_FOUND");
   const nextPage = { id, name, url: page.url, origin: page.origin, visibility, enabled, sortOrder };
   await writeAuditedMutation(await embeddedAuditVaultId(actorEmail), actorEmail, "embedded_page_updated", auditSubject(nextPage, toPage(existing)), {
     auditOrder: "before",
@@ -179,12 +180,12 @@ export async function updateEmbeddedPage(actorEmail: string, input: Record<strin
 
 export async function deleteEmbeddedPage(actorEmail: string, id: unknown) {
   const value = typeof id === "string" ? id.trim() : "";
-  if (!value || value.length > 128) throw new Error("内嵌页面项目无效。");
+  if (!value || value.length > 128) throw new ClientSafeError("内嵌页面项目无效。");
   const database = getDatabase();
   const existing = await database.prepare(
     "SELECT id, name, url, origin, visibility, enabled, sort_order, created_at, updated_at FROM embedded_pages WHERE id = ? LIMIT 1",
   ).bind(value).first<EmbeddedPageRow>();
-  if (!existing) throw new Error("未找到内嵌页面项目。");
+  if (!existing) throw new ClientSafeError("未找到内嵌页面项目。", 404, "EMBEDDED_PAGE_NOT_FOUND");
   await writeAuditedMutation(await embeddedAuditVaultId(actorEmail), actorEmail, "embedded_page_deleted", auditSubject(toPage(existing)), {
     auditOrder: "before",
     auditPrerequisite: { sql: "SELECT 1 FROM embedded_pages WHERE id = ?", values: [value] },

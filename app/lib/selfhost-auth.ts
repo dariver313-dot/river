@@ -7,7 +7,7 @@ import { initialAdminAccount } from "./initial-admin";
 import { generateTotpCode, parseTotpInput } from "./totp";
 import { writeAuditedMutation } from "./audit-log";
 import { sharedAuditVaultId } from "./embedded-audit";
-import { issueAdministratorRecoveryCodes } from "./one-time-tokens";
+import { prepareAuditedAdministratorRecoveryCodes } from "./one-time-tokens";
 import { ClientSafeError } from "./security-errors";
 
 export type SelfHostedUser = {
@@ -187,6 +187,7 @@ export async function completeInitialAuthenticatorSetup(
   const passwordHash = await hashLoginPassword(password);
   const encryptedTotpSecret = await encryptAuthTotpSecret(setup.email, setup.primarySecret);
   const database = getDatabase();
+  const recovery = prepareAuditedAdministratorRecoveryCodes({ email: setup.email, createdBy: setup.email });
 
   // Bootstrap stores the administrator and its safety mailbox. The mailbox is
   // deliberately marked unverified until the first password + TOTP login
@@ -201,10 +202,14 @@ export async function completeInitialAuthenticatorSetup(
     commitPrerequisite: {
       sql: `SELECT 1
             WHERE EXISTS (SELECT 1 FROM app_settings WHERE key = ? AND value = 'completed')
-              AND EXISTS (SELECT 1 FROM app_users WHERE email = ? AND role = 'admin' AND status = 'active' AND password_hash = ? AND auth_totp_secret = ? AND security_email = ?)`,
-      values: [bootstrapSetupKey, setup.email, passwordHash, encryptedTotpSecret, normalizedSecurityEmail],
+              AND EXISTS (SELECT 1 FROM app_users WHERE email = ? AND role = 'admin' AND status = 'active' AND password_hash = ? AND auth_totp_secret = ? AND security_email = ?)
+              AND (SELECT COUNT(*) FROM account_tokens WHERE email = ? AND purpose = 'admin_recovery' AND used_at IS NULL AND revoked_at IS NULL) = ?`,
+      values: [bootstrapSetupKey, setup.email, passwordHash, encryptedTotpSecret, normalizedSecurityEmail, setup.email, recovery.count],
     },
-    expectedChanges: (results) => (results[0]?.meta.changes ?? 0) === 1 && (results[1]?.meta.changes ?? 0) === 1,
+    expectedChanges: (results) => (results[0]?.meta.changes ?? 0) === 1
+      && (results[1]?.meta.changes ?? 0) === 1
+      && results.slice(3).length === recovery.count
+      && results.slice(3).every((result) => (result.meta.changes ?? 0) === 1),
     statements: (guard) => [
       database.prepare(
         `INSERT INTO app_users (email, role, status, password_hash, auth_totp_secret, security_email, must_change_password, created_by)
@@ -224,10 +229,10 @@ export async function completeInitialAuthenticatorSetup(
            AND ${guard.conditionSql}
            AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`,
       ).bind(bootstrapSetupKey, bootstrapSetupKey, setup.email, passwordHash, encryptedTotpSecret, normalizedSecurityEmail, ...guard.values, guard.auditEventId),
+      ...recovery.statements(guard),
     ],
   });
-  const recoveryCodes = await issueAdministratorRecoveryCodes({ email: setup.email, createdBy: setup.email });
-  return { completed: true, recoveryCodes };
+  return { completed: true, recoveryCodes: recovery.codes };
 }
 
 async function loginCredentialsFor(email: string) {

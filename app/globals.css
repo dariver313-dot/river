@@ -711,6 +711,32 @@ button:disabled {
   padding: 20px;
 }
 
+.profile-identity {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 15px;
+}
+
+.profile-account-line {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.profile-account-line > span {
+  overflow: hidden;
+  color: var(--ink-soft);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.profile-account-line .role-badge { flex: 0 0 auto; }
+.profile-hero-actions { display: flex; align-items: center; gap: 11px; }
+
 .profile-avatar {
   width: 52px;
   height: 52px;
@@ -4529,6 +4555,24 @@ button:disabled {
 }
 
 @media (max-width: 420px) {
+  .topbar.is-compact:has(.profile-password-action) {
+    min-height: 0;
+    grid-template-columns: auto minmax(0, 1fr);
+    padding-block: 10px;
+  }
+  .topbar.is-compact:has(.profile-password-action) .page-title { min-width: 0; }
+  .topbar.is-compact:has(.profile-password-action) .topbar-page-actions {
+    grid-column: 1 / -1;
+    width: 100%;
+    justify-self: stretch;
+  }
+  .topbar.is-compact:has(.profile-password-action) .profile-password-action {
+    width: auto;
+    min-width: 0;
+    flex: 1 1 0;
+    padding-inline: 6px;
+    font-size: 11px;
+  }
   .modal-footer { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .modal-footer button { width: 100%; }
   .recovery-code-list { grid-template-columns: 1fr; }

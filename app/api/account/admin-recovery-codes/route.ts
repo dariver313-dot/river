@@ -24,6 +24,6 @@ export async function POST(request: Request) {
     const recoveryCodes = await regenerateAdministratorRecoveryCodes(actor.email);
     return secureJson({ recoveryCodes });
   } catch (error) {
-    return apiError(error, 400, request);
+    return apiError(error, 500, request);
   }
 }

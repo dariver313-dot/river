@@ -22,6 +22,7 @@ export type VaultCredential = {
   type: VaultItemType;
   group: VaultSpace;
   updated: string;
+  revision: string;
   strength: VaultStrength;
   twoFactor: boolean;
   favorite: boolean;
@@ -32,7 +33,7 @@ export type VaultCredential = {
   sharedBy?: string;
 };
 
-export type VaultItemSummary = Omit<VaultCredential, "password" | "note" | "totps"> & {
+export type VaultItemSummary = Omit<VaultCredential, "password" | "note" | "totps" | "revision"> & {
   passwordLength: number;
   hasTotp: boolean;
   securityIssues: SecurityIssue[];
@@ -57,7 +58,7 @@ export type ManagementAuditPage = {
   pagination: { page: number; pageSize: number; total: number; pageCount: number };
 };
 
-type StoredCredential = Omit<VaultCredential, "id" | "group" | "updated" | "canEdit" | "sharedBy" | "category" | "totps"> & {
+type StoredCredential = Omit<VaultCredential, "id" | "group" | "updated" | "revision" | "canEdit" | "sharedBy" | "category" | "totps"> & {
   // 分类随加密项目一起存储；旧项目解密时没有该字段，也应可继续读取。
   category?: string;
   totps?: VaultTotp[];
@@ -197,6 +198,16 @@ function timeLabel(value: string) {
   if (elapsedMinutes < 60) return `${elapsedMinutes} 分钟前`;
   if (elapsedMinutes < 1_440) return `${Math.floor(elapsedMinutes / 60)} 小时前`;
   return `${Math.floor(elapsedMinutes / 1_440)} 天前`;
+}
+
+function nextStoredRevision(previous?: string) {
+  const previousTimestamp = previous
+    ? Date.parse(previous.includes("T") ? previous : `${previous.replace(" ", "T")}Z`)
+    : Number.NaN;
+  return new Date(Math.max(Date.now(), Number.isFinite(previousTimestamp) ? previousTimestamp + 1 : Date.now()))
+    .toISOString()
+    .replace("T", " ")
+    .replace("Z", "");
 }
 
 function storedPayload(input: Record<string, unknown>): StoredCredential {
@@ -344,6 +355,7 @@ function toCredential(row: VaultItemRow, payload: StoredCredential, vault: Acces
     totps: storedTotpEntries(payload),
     group: vault.kind === "personal" ? "个人" : "公共",
     updated: timeLabel(row.updated_at),
+    revision: row.updated_at,
     canEdit: canWrite(vault.role),
     ...(vault.kind === "public" && vault.ownerEmail ? { sharedBy: vault.ownerEmail } : {}),
   };
@@ -594,6 +606,7 @@ export async function createVaultItem(email: string, input: Record<string, unkno
   const vault = await vaultForSpace(email, space);
   const payload = storedPayload(input);
   const id = crypto.randomUUID();
+  const revision = nextStoredRevision();
   const encrypted = await encryptVaultPayload(payload, { vaultId: vault.id, itemId: id });
   const database = getDatabase();
 
@@ -603,8 +616,8 @@ export async function createVaultItem(email: string, input: Record<string, unkno
     commitPrerequisite: { sql: "SELECT 1 FROM vault_items WHERE id = ?", values: [id] },
     expectedChanges: 1,
     statements: (guard) => [database.prepare(
-      `INSERT INTO vault_items (id, vault_id, ciphertext, iv, key_id, encryption_version)
-       SELECT ?, ?, ?, ?, ?, ?
+      `INSERT INTO vault_items (id, vault_id, ciphertext, iv, key_id, encryption_version, created_at, updated_at)
+       SELECT ?, ?, ?, ?, ?, ?, ?, ?
        WHERE (SELECT COUNT(*) FROM vault_items WHERE vault_id = ?) < ?
          AND ${guard.conditionSql}
          AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`,
@@ -615,6 +628,8 @@ export async function createVaultItem(email: string, input: Record<string, unkno
       encrypted.iv,
       encrypted.keyId,
       encrypted.encryptionVersion,
+      revision,
+      revision,
       vault.id,
       vaultItemLimit(space),
       ...guard.values,
@@ -623,7 +638,7 @@ export async function createVaultItem(email: string, input: Record<string, unkno
   });
   clearVaultSummaryCache();
 
-  return { id, ...payload, category: payload.category ?? "", totps: payload.totps ?? [], group: space, updated: "刚刚更新", canEdit: space === "个人" || actor.role === "admin" } satisfies VaultCredential;
+  return { id, ...payload, category: payload.category ?? "", totps: payload.totps ?? [], group: space, updated: "刚刚更新", revision, canEdit: space === "个人" || actor.role === "admin" } satisfies VaultCredential;
 }
 
 async function findItemAccess(email: string, itemId: string) {
@@ -654,6 +669,13 @@ export async function updateVaultItem(email: string, itemId: string, input: Reco
   const { item, vault } = await findItemAccess(email, itemId);
   assertVaultItemScopeUnchanged(item, expectedVaultId);
   if (!canWrite(vault.role)) throw new ClientSafeError("你只有查看权限，无法编辑该项目。", 403, "VAULT_ITEM_READ_ONLY");
+  const expectedRevision = typeof input.revision === "string" ? input.revision.trim() : "";
+  if (!expectedRevision || expectedRevision.length > 64) {
+    throw new ClientSafeError("项目已更新，请刷新详情后再保存。", 409, "VAULT_ITEM_REVISION_REQUIRED");
+  }
+  if (item.updated_at !== expectedRevision) {
+    throw new ClientSafeError("项目已被其他操作更新，请刷新后重试。", 409, "VAULT_ITEM_REVISION_CONFLICT");
+  }
 
   const currentSpace: VaultSpace = vault.kind === "personal" ? "个人" : "公共";
   const nextSpace = isVaultSpace(input.group) ? input.group : currentSpace;
@@ -664,40 +686,51 @@ export async function updateVaultItem(email: string, itemId: string, input: Reco
   const payload = storedPayload(input);
   const encrypted = await encryptVaultPayload(payload, { vaultId: destination.id, itemId: item.id });
   const database = getDatabase();
+  const revision = nextStoredRevision(item.updated_at);
 
-  await writeAuditedMutation(destination.id, email, nextSpace !== currentSpace ? "item_published_to_public" : "item_updated", item.id, {
-    auditOrder: "before",
-    auditPrerequisite: { sql: "SELECT 1 FROM vault_items WHERE id = ? AND vault_id = ?", values: [item.id, item.vault_id] },
-    commitPrerequisite: {
-      sql: "SELECT 1 FROM vault_items WHERE id = ? AND vault_id = ? AND ciphertext = ? AND iv = ?",
-      values: [item.id, destination.id, encrypted.ciphertext, encrypted.iv],
-    },
-    expectedChanges: 1,
-    statements: (guard) => [database.prepare(
-      `UPDATE vault_items
-       SET vault_id = ?, ciphertext = ?, iv = ?, key_id = ?, encryption_version = ?, updated_at = CURRENT_TIMESTAMP
-       WHERE id = ? AND vault_id = ?
-         AND (? = 0 OR (SELECT COUNT(*) FROM vault_items WHERE vault_id = ?) < ?)
-         AND ${guard.conditionSql}
-         AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`,
-    ).bind(
-      destination.id,
-      encrypted.ciphertext,
-      encrypted.iv,
-      encrypted.keyId,
-      encrypted.encryptionVersion,
-      item.id,
-      item.vault_id,
-      destination.id === item.vault_id ? 0 : 1,
-      destination.id,
-      vaultItemLimit(nextSpace),
-      ...guard.values,
-      guard.auditEventId,
-    )],
-  });
+  try {
+    await writeAuditedMutation(destination.id, email, nextSpace !== currentSpace ? "item_published_to_public" : "item_updated", item.id, {
+      auditOrder: "before",
+      auditPrerequisite: { sql: "SELECT 1 FROM vault_items WHERE id = ? AND vault_id = ? AND updated_at = ?", values: [item.id, item.vault_id, expectedRevision] },
+      commitPrerequisite: {
+        sql: "SELECT 1 FROM vault_items WHERE id = ? AND vault_id = ? AND ciphertext = ? AND iv = ? AND updated_at = ?",
+        values: [item.id, destination.id, encrypted.ciphertext, encrypted.iv, revision],
+      },
+      expectedChanges: 1,
+      statements: (guard) => [database.prepare(
+        `UPDATE vault_items
+         SET vault_id = ?, ciphertext = ?, iv = ?, key_id = ?, encryption_version = ?, updated_at = ?
+         WHERE id = ? AND vault_id = ? AND updated_at = ?
+           AND (? = 0 OR (SELECT COUNT(*) FROM vault_items WHERE vault_id = ?) < ?)
+           AND ${guard.conditionSql}
+           AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`,
+      ).bind(
+        destination.id,
+        encrypted.ciphertext,
+        encrypted.iv,
+        encrypted.keyId,
+        encrypted.encryptionVersion,
+        revision,
+        item.id,
+        item.vault_id,
+        expectedRevision,
+        destination.id === item.vault_id ? 0 : 1,
+        destination.id,
+        vaultItemLimit(nextSpace),
+        ...guard.values,
+        guard.auditEventId,
+      )],
+    });
+  } catch (error) {
+    const current = await database.prepare("SELECT updated_at FROM vault_items WHERE id = ? LIMIT 1").bind(item.id).first<{ updated_at: string }>();
+    if (current && current.updated_at !== expectedRevision) {
+      throw new ClientSafeError("项目已被其他操作更新，请刷新后重试。", 409, "VAULT_ITEM_REVISION_CONFLICT");
+    }
+    throw error;
+  }
   clearVaultSummaryCache();
 
-  return { id: item.id, ...payload, category: payload.category ?? "", totps: payload.totps ?? [], group: nextSpace, updated: "刚刚更新", canEdit: nextSpace === "个人" || actor?.role === "admin" } satisfies VaultCredential;
+  return { id: item.id, ...payload, category: payload.category ?? "", totps: payload.totps ?? [], group: nextSpace, updated: "刚刚更新", revision, canEdit: nextSpace === "个人" || actor?.role === "admin" } satisfies VaultCredential;
 }
 
 export async function getVaultItem(email: string, itemId: string) {

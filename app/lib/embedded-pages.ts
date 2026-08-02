@@ -74,6 +74,14 @@ function inputEnabled(value: unknown) {
   return value;
 }
 
+function nextStoredRevision(previous: string) {
+  const previousTimestamp = Date.parse(previous.includes("T") ? previous : `${previous.replace(" ", "T")}Z`);
+  return new Date(Math.max(Date.now(), Number.isFinite(previousTimestamp) ? previousTimestamp + 1 : Date.now()))
+    .toISOString()
+    .replace("T", " ")
+    .replace("Z", "");
+}
+
 type EmbeddedPageAuditSnapshot = Pick<EmbeddedPage, "id" | "name" | "origin" | "visibility" | "enabled" | "sortOrder"> & { path: string };
 
 function auditSnapshot(page: Pick<EmbeddedPage, "id" | "name" | "url" | "origin" | "visibility" | "enabled" | "sortOrder">): EmbeddedPageAuditSnapshot {
@@ -151,6 +159,10 @@ export async function createEmbeddedPage(actorEmail: string, input: Record<strin
 export async function updateEmbeddedPage(actorEmail: string, input: Record<string, unknown>) {
   const id = typeof input.id === "string" ? input.id.trim() : "";
   if (!id || id.length > 128) throw new ClientSafeError("内嵌页面项目无效。");
+  const expectedUpdatedAt = typeof input.expectedUpdatedAt === "string" ? input.expectedUpdatedAt.trim() : "";
+  if (!expectedUpdatedAt || expectedUpdatedAt.length > 64) {
+    throw new ClientSafeError("页面配置已更新，请刷新后再保存。", 409, "EMBEDDED_PAGE_REVISION_REQUIRED");
+  }
   const page = normalizeEmbeddedPageUrl(input.url);
   if (!await isEmbeddedOriginAllowed(page.origin)) throw new ClientSafeError("该地址的来源尚未加入可信来源。请由初始管理员先在“可信来源”中添加。", 409, "EMBEDDED_ORIGIN_REQUIRED");
   const name = cleanName(input.name);
@@ -162,20 +174,32 @@ export async function updateEmbeddedPage(actorEmail: string, input: Record<strin
     "SELECT id, name, url, origin, visibility, enabled, sort_order, created_at, updated_at FROM embedded_pages WHERE id = ? LIMIT 1",
   ).bind(id).first<EmbeddedPageRow>();
   if (!existing) throw new ClientSafeError("未找到内嵌页面项目。", 404, "EMBEDDED_PAGE_NOT_FOUND");
+  if (existing.updated_at !== expectedUpdatedAt) {
+    throw new ClientSafeError("页面配置已被其他操作更新，请刷新后重试。", 409, "EMBEDDED_PAGE_REVISION_CONFLICT");
+  }
+  const updatedAt = nextStoredRevision(existing.updated_at);
   const nextPage = { id, name, url: page.url, origin: page.origin, visibility, enabled, sortOrder };
-  await writeAuditedMutation(await embeddedAuditVaultId(actorEmail), actorEmail, "embedded_page_updated", auditSubject(nextPage, toPage(existing)), {
-    auditOrder: "before",
-    auditPrerequisite: { sql: "SELECT 1 FROM embedded_pages WHERE id = ? AND EXISTS (SELECT 1 FROM embedded_allowed_origins WHERE origin = ?)", values: [id, page.origin] },
-    commitPrerequisite: { sql: "SELECT 1 FROM embedded_pages WHERE id = ? AND origin = ? AND EXISTS (SELECT 1 FROM embedded_allowed_origins WHERE origin = ?)", values: [id, page.origin, page.origin] },
-    expectedChanges: 1,
-    statements: (guard) => [database.prepare(
-      `UPDATE embedded_pages
-       SET name = ?, url = ?, origin = ?, visibility = ?, enabled = ?, sort_order = ?, updated_at = CURRENT_TIMESTAMP
-       WHERE id = ? AND ${guard.conditionSql}
-         AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)
-         AND EXISTS (SELECT 1 FROM embedded_allowed_origins WHERE origin = ?)`,
-    ).bind(name, page.url, page.origin, visibility, enabled ? 1 : 0, sortOrder, id, ...guard.values, guard.auditEventId, page.origin)],
-  });
+  try {
+    await writeAuditedMutation(await embeddedAuditVaultId(actorEmail), actorEmail, "embedded_page_updated", auditSubject(nextPage, toPage(existing)), {
+      auditOrder: "before",
+      auditPrerequisite: { sql: "SELECT 1 FROM embedded_pages WHERE id = ? AND updated_at = ? AND EXISTS (SELECT 1 FROM embedded_allowed_origins WHERE origin = ?)", values: [id, expectedUpdatedAt, page.origin] },
+      commitPrerequisite: { sql: "SELECT 1 FROM embedded_pages WHERE id = ? AND origin = ? AND updated_at = ? AND EXISTS (SELECT 1 FROM embedded_allowed_origins WHERE origin = ?)", values: [id, page.origin, updatedAt, page.origin] },
+      expectedChanges: 1,
+      statements: (guard) => [database.prepare(
+        `UPDATE embedded_pages
+         SET name = ?, url = ?, origin = ?, visibility = ?, enabled = ?, sort_order = ?, updated_at = ?
+         WHERE id = ? AND updated_at = ? AND ${guard.conditionSql}
+           AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)
+           AND EXISTS (SELECT 1 FROM embedded_allowed_origins WHERE origin = ?)`,
+      ).bind(name, page.url, page.origin, visibility, enabled ? 1 : 0, sortOrder, updatedAt, id, expectedUpdatedAt, ...guard.values, guard.auditEventId, page.origin)],
+    });
+  } catch (error) {
+    const current = await database.prepare("SELECT updated_at FROM embedded_pages WHERE id = ? LIMIT 1").bind(id).first<{ updated_at: string }>();
+    if (current && current.updated_at !== expectedUpdatedAt) {
+      throw new ClientSafeError("页面配置已被其他操作更新，请刷新后重试。", 409, "EMBEDDED_PAGE_REVISION_CONFLICT");
+    }
+    throw error;
+  }
 }
 
 export async function deleteEmbeddedPage(actorEmail: string, id: unknown) {

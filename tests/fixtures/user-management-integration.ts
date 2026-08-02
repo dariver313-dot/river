@@ -41,6 +41,10 @@ await database.prepare(
 await database.prepare(
   "INSERT INTO vault_items (id, vault_id, ciphertext, iv) VALUES ('member01-item', ?, 'ciphertext', 'iv')",
 ).bind(personalVaultId).run();
+await database.prepare(
+  `INSERT INTO authenticator_reset_stages (id, email, confirmation_token_id, auth_totp_secret, expires_at)
+   VALUES ('member01-reset', ?, 'member01-reset-confirm', 'encrypted-secret', '2999-12-31T23:59:59.000Z')`,
+).bind(departingUser).run();
 
 await deleteManagedUser(actor, { email: departingUser });
 for (const [table, where] of [
@@ -48,6 +52,7 @@ for (const [table, where] of [
   ["vaults", "owner_email = 'member01' AND kind = 'personal'"],
   ["vault_members", "vault_id = 'member01-personal'"],
   ["vault_items", "vault_id = 'member01-personal'"],
+  ["authenticator_reset_stages", "email = 'member01'"],
 ] as const) {
   const result = await database.prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE ${where}`).first<{ count: number }>();
   assert.equal(result?.count, 0, `${table} must be removed with the departing user`);

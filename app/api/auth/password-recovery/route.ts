@@ -1,4 +1,5 @@
 import { completePasswordRecovery, requestPasswordRecovery } from "../../../lib/account-lifecycle";
+import { apiError } from "../../../lib/api-response";
 import { readLimitedJsonObject } from "../../../lib/request-validation";
 import { anonymousEdgeRateLimitResponse } from "../../../lib/rate-limit";
 import { crossOriginRequestResponse, secureJson } from "../../../lib/response-security";
@@ -21,10 +22,10 @@ export async function POST(request: Request) {
     }
     await requestPasswordRecovery({ account: payload.account });
     return secureJson({ accepted: true });
-  } catch {
+  } catch (error) {
     // Do not turn mail or account lookup failures into account-existence clues.
     if (completing) {
-      return secureJson({ error: "密码恢复未完成。请确认恢复码和新密码后重试。" }, { status: 400 });
+      return apiError(error, 500, request);
     }
     return secureJson({ accepted: true });
   }

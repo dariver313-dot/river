@@ -265,3 +265,100 @@ test("用户创建保持待激活状态，删除会清理个人库", () => {
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("更换已验证安全邮箱时依次验证原邮箱和新邮箱", () => {
+  const directory = mkdtempSync(join(tmpdir(), "djmima-security-email-change-"));
+  const databasePath = join(directory, "security-email.sqlite");
+
+  try {
+    const key = Buffer.alloc(32, 109).toString("base64url");
+    const child = spawnSync(
+      process.execPath,
+      [
+        "node_modules/jiti/lib/jiti-cli.mjs",
+        "tests/fixtures/security-email-change-integration.ts",
+      ],
+      {
+        cwd: resolve("."),
+        env: {
+          ...process.env,
+          DJMIMA_DATABASE_PATH: databasePath,
+          DJMIMA_SMTP_HOST: "smtp.example.test",
+          DJMIMA_SMTP_FROM: "djmima@example.test",
+          PRIMARY_ADMIN_ACCOUNT: "admin01",
+          AUTH_TOTP_ENCRYPTION_KEY: key,
+          VAULT_ENCRYPTION_KEY: key,
+          VAULT_AUDIT_SIGNING_KEY: key,
+          LOGIN_TOKEN_HASH_KEY: key,
+        },
+        encoding: "utf8",
+      },
+    );
+    assert.equal(child.status, 0, `${child.stderr}\n${child.stdout}`);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("审计业务断言在 SQLite 提交前失败会回滚整批写入", () => {
+  const directory = mkdtempSync(join(tmpdir(), "djmima-audit-transaction-"));
+  const databasePath = join(directory, "audit-transaction.sqlite");
+
+  try {
+    const key = Buffer.alloc(32, 113).toString("base64url");
+    const child = spawnSync(
+      process.execPath,
+      [
+        "node_modules/jiti/lib/jiti-cli.mjs",
+        "tests/fixtures/audit-transaction-validation-integration.ts",
+      ],
+      {
+        cwd: resolve("."),
+        env: {
+          ...process.env,
+          DJMIMA_DATABASE_PATH: databasePath,
+          VAULT_AUDIT_SIGNING_KEY: key,
+        },
+        encoding: "utf8",
+      },
+    );
+    assert.equal(child.status, 0, `${child.stderr}\n${child.stdout}`);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("初始管理员恢复码与账户初始化、轮换审计保持原子提交", () => {
+  const directory = mkdtempSync(join(tmpdir(), "djmima-admin-recovery-codes-"));
+  const databasePath = join(directory, "admin-recovery.sqlite");
+
+  try {
+    const key = Buffer.alloc(32, 127).toString("base64url");
+    const child = spawnSync(
+      process.execPath,
+      [
+        "node_modules/jiti/lib/jiti-cli.mjs",
+        "tests/fixtures/administrator-recovery-codes-integration.ts",
+      ],
+      {
+        cwd: resolve("."),
+        env: {
+          ...process.env,
+          DJMIMA_DATABASE_PATH: databasePath,
+          NODE_ENV: "test",
+          PRIMARY_ADMIN_ACCOUNT: "admin01",
+          PRIMARY_ADMIN_TOTP_SECRET: "JBSWY3DPEHPK3PXP",
+          SELFHOST_SETUP_TOKEN: "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGH",
+          AUTH_TOTP_ENCRYPTION_KEY: key,
+          VAULT_ENCRYPTION_KEY: key,
+          VAULT_AUDIT_SIGNING_KEY: key,
+          LOGIN_TOKEN_HASH_KEY: key,
+        },
+        encoding: "utf8",
+      },
+    );
+    assert.equal(child.status, 0, `${child.stderr}\n${child.stdout}`);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

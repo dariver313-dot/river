@@ -36,13 +36,13 @@ export function adminRequiredResponse() {
 
 export function apiError(error: unknown, status = 500, request?: Request) {
   const requestId = crypto.randomUUID();
-  const internalMessage = error instanceof Error ? error.message : String(error);
-  // 绝不记录请求体，避免把密码、TOTP 秘钥或导出内容写入日志。
-  console.error("djmima_api_error", { requestId, path: request ? new URL(request.url).pathname : "unknown", status, message: internalMessage });
-
   if (error instanceof ClientSafeError) {
     return secureJson({ error: error.message, code: error.code, requestId }, { status: error.status });
   }
+
+  const internalMessage = error instanceof Error ? error.message : String(error);
+  // 绝不记录请求体，避免把密码、TOTP 秘钥或导出内容写入日志。
+  console.error("djmima_api_error", { requestId, path: request ? new URL(request.url).pathname : "unknown", status, message: internalMessage });
 
   const message = status >= 500
     ? "服务器暂时无法完成该操作。请稍后重试。"

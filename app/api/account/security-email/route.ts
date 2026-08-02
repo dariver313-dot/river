@@ -1,4 +1,4 @@
-import { confirmSecurityEmailChange, requestSecurityEmailChange } from "../../../lib/account-lifecycle";
+import { confirmCurrentSecurityEmailChange, confirmSecurityEmailChange, requestSecurityEmailChange } from "../../../lib/account-lifecycle";
 import { actorRequiredResponse, apiError, readJsonObject } from "../../../lib/api-response";
 import { rateLimitResponse } from "../../../lib/rate-limit";
 import { crossOriginRequestResponse, secureJson } from "../../../lib/response-security";
@@ -39,7 +39,7 @@ export async function POST(request: Request) {
     if (!result) return actorRequiredResponse();
     return secureJson(result);
   } catch (error) {
-    return apiError(error, 400, request);
+    return apiError(error, 500, request);
   }
 }
 
@@ -58,10 +58,15 @@ export async function PATCH(request: Request) {
 
   try {
     const body = await readJsonObject(request);
+    if (body.action === "confirm_current") {
+      const result = await confirmCurrentSecurityEmailChange({ account: actor.email, securityEmail: body.securityEmail, code: body.code });
+      if (!result) return secureJson({ error: "原邮箱确认码无效或已失效，请重新获取。" }, { status: 401 });
+      return secureJson(result);
+    }
     const result = await confirmSecurityEmailChange({ account: actor.email, securityEmail: body.securityEmail, code: body.code });
     if (!result) return secureJson({ error: "确认码无效或已失效，请重新获取。" }, { status: 401 });
     return secureJson({ updated: true, securityEmail: result.securityEmail, requiresRelogin: result.requiresRelogin });
   } catch (error) {
-    return apiError(error, 400, request);
+    return apiError(error, 500, request);
   }
 }

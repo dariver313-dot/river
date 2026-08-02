@@ -1,4 +1,5 @@
 import { beginAuthenticatorReset, confirmAuthenticatorReset } from "../../../lib/account-lifecycle";
+import { apiError } from "../../../lib/api-response";
 import { readLimitedJsonObject } from "../../../lib/request-validation";
 import { anonymousEdgeRateLimitResponse } from "../../../lib/rate-limit";
 import { crossOriginRequestResponse, secureJson } from "../../../lib/response-security";
@@ -22,6 +23,6 @@ export async function POST(request: Request) {
     if (!reset) return secureJson({ error: "恢复码无效、已过期，或该账号当前不可恢复。" }, { status: 401 });
     return secureJson(reset);
   } catch (error) {
-    return secureJson({ error: error instanceof Error ? error.message : "验证器恢复暂时不可用。" }, { status: 400 });
+    return apiError(error, 500, request);
   }
 }

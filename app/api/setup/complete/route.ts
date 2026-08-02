@@ -1,8 +1,8 @@
 import { readLimitedJsonObject } from "../../../lib/request-validation";
+import { apiError } from "../../../lib/api-response";
 import { crossOriginRequestResponse, secureJson } from "../../../lib/response-security";
 import { anonymousEdgeRateLimitResponse } from "../../../lib/rate-limit";
 import { completeInitialAuthenticatorSetup } from "../../../lib/selfhost-auth";
-import { ClientSafeError } from "../../../lib/security-errors";
 
 export const dynamic = "force-dynamic";
 
@@ -20,7 +20,6 @@ export async function POST(request: Request) {
     if (!completed) return secureJson({ error: "初始化令牌无效或已失效。" }, { status: 404 });
     return secureJson({ completed: true, recoveryCodes: completed.recoveryCodes });
   } catch (error) {
-    if (error instanceof ClientSafeError) return secureJson({ error: error.message }, { status: error.status });
-    return secureJson({ error: "初始化确认未完成。" }, { status: 400 });
+    return apiError(error, 500, request);
   }
 }

@@ -35,6 +35,7 @@ import {
 import { ChangeEvent, FormEvent, KeyboardEvent as ReactKeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AdminTableLoading, AdminTableState } from "./components/admin-table-state";
 import { LoadingIndicator, LoadingMark } from "./components/loading-indicator";
+import { ModalPortal } from "./components/modal-portal";
 import { TablePagination } from "./components/table-pagination";
 import { Spotlight } from "./components/ui/spotlight";
 import { SurfaceSelect, type SurfaceSelectOption } from "./components/surface-select";
@@ -63,6 +64,7 @@ type VaultItem = {
   type: ItemType;
   group: string;
   updated: string;
+  revision: string;
   strength: Strength;
   twoFactor: boolean;
   favorite: boolean;
@@ -73,11 +75,13 @@ type VaultItem = {
   sharedBy?: string;
 };
 
-type VaultItemSummary = Omit<VaultItem, "password" | "note" | "totps"> & {
+type VaultItemSummary = Omit<VaultItem, "password" | "note" | "totps" | "revision"> & {
   passwordLength: number;
   hasTotp: boolean;
   securityIssues: SecurityIssue[];
 };
+
+type VaultRequestError = Error & { code?: string; requestId?: string };
 
 type Viewer = {
   displayName: string;
@@ -344,7 +348,7 @@ function ProfileOverview({
     <div className="profile-layout">
       <section className="profile-card" aria-labelledby="profile-account-title"><div className="profile-card-heading"><span className="profile-card-icon"><UserRound size={18} /></span><div><h3 id="profile-account-title">基本信息</h3><p>当前登录账户</p></div></div><div className="profile-card-body"><dl className="profile-details"><div><dt>登录账号</dt><dd title={viewer.email}>{viewer.email}</dd></div><div><dt>登录方式</dt><dd>{loginMethod}</dd></div><div><dt>安全邮箱</dt><dd>已验证</dd></div><div><dt>访问限制</dt><dd>{loginAccessScope}</dd></div></dl></div></section>
       <section className="profile-card" aria-labelledby="profile-permission-title"><div className="profile-card-heading"><span className="profile-card-icon"><UsersRound size={18} /></span><div><h3 id="profile-permission-title">项目权限</h3><p>由系统角色决定</p></div></div><div className="profile-card-body"><div className="profile-permission-list"><div><span>个人项目</span><strong>仅自己管理</strong></div><div><span>公共项目</span><strong>{isAdmin ? "可查看和管理" : "仅查看"}</strong></div><div><span>系统范围</span><strong>{systemAccessScope}</strong></div></div></div></section>
-      <section className="profile-card profile-security-card" aria-labelledby="profile-security-title" aria-busy={isLoading}><div className="profile-card-heading"><span className="profile-card-icon"><ShieldCheck size={18} /></span><div><h3 id="profile-security-title">密码库安全</h3><p>已保存凭据检查</p></div></div><div className="profile-security-summary"><div><strong>{isLoading ? <Skeleton className="skeleton-score" /> : securitySummaryReady && securityTotalItems > 0 ? securityScore : "—"}</strong><span>凭据安全评分</span></div><p>{isLoading ? <Skeleton className="skeleton-line skeleton-line-profile" /> : !securitySummaryReady ? "暂时无法读取凭据检查结果" : securityTotalItems === 0 ? "暂无可检查项目" : securityIssueCount === 0 ? "已保存凭据暂无基础风险" : `${securityIssueCount} 条凭据风险待处理`}</p></div><div className="profile-security-footer"><span>登录会话空闲 15 分钟或最长 8 小时后结束</span><button type="button" className="secondary-button" onClick={onOpenSecurity} disabled={isLoading}>{isLoading ? "读取中" : "检查凭据"}</button></div></section>
+      <section className="profile-card profile-security-card" aria-labelledby="profile-security-title" aria-busy={isLoading}><div className="profile-card-heading"><span className="profile-card-icon"><ShieldCheck size={18} /></span><div><h3 id="profile-security-title">密码库安全</h3><p>已保存凭据检查</p></div></div><div className="profile-security-summary"><div><strong>{isLoading ? <Skeleton className="skeleton-score" /> : securitySummaryReady && securityTotalItems > 0 ? securityScore : "—"}</strong><span>凭据安全评分</span></div><p>{isLoading ? <Skeleton className="skeleton-line skeleton-line-profile" /> : !securitySummaryReady ? "暂时无法读取凭据检查结果" : securityTotalItems === 0 ? "暂无可检查项目" : securityIssueCount === 0 ? "已保存凭据暂无基础风险" : `${securityIssueCount} 条凭据风险待处理`}</p></div><div className="profile-security-footer"><span>登录会话空闲 15 分钟或最长 8 小时后结束</span><button type="button" className="secondary-button" onClick={() => onOpenSecurity()} disabled={isLoading}>{isLoading ? "读取中" : "检查凭据"}</button></div></section>
       <section className="profile-card profile-data-security-card" aria-labelledby="profile-data-security-title"><div className="profile-card-heading"><span className="profile-card-icon"><ShieldCheck size={18} /></span><div><h3 id="profile-data-security-title">敏感操作</h3><p>公共项目和系统管理</p></div></div><div className="profile-card-body profile-sensitive-body"><div className="profile-sensitive-actions"><button type="button" className="secondary-button" onClick={onRestartSecuritySession} disabled={isSaving}><ShieldCheck size={17} />重新验证</button></div><p className="profile-card-note">个人项目使用当前会话；公共项目与系统操作需 Google 验证码。</p></div></section>
     </div>
   </section>;
@@ -563,6 +567,72 @@ function AuditEventRow({ entry }: { entry: AuditEntry }) {
   </li>;
 }
 
+function UserProvisioningDialog({ provisioning, onClose, onCopy }: {
+  provisioning: SystemUserProvisioning;
+  onClose: () => void;
+  onCopy: (value: string, label: string) => void;
+}) {
+  return <div className="modal-layer" role="presentation">
+    <section className="modal user-create-modal" role="dialog" aria-modal="true" aria-labelledby="user-provisioning-title">
+      <header><div><span className="modal-icon"><KeyRound size={20} /></span><div><h2 id="user-provisioning-title">用户激活</h2><p>激活码不会与密码或验证器密钥混用。</p></div></div><button className="icon-button" type="button" onClick={onClose} aria-label="关闭用户激活提示"><X size={20} /></button></header>
+      <div className="modal-body provisioning-body">
+        <aside className="access-setup-note" role="note"><ShieldCheck size={17} aria-hidden="true" /><div><strong>{provisioning.account}</strong><p>{provisioning.delivery === "email" ? "激活码已发送至该用户的安全邮箱。" : "本地预览未配置邮件服务；请通过安全渠道交付下方激活码。"}</p></div></aside>
+        {provisioning.delivery === "manual" && provisioning.code && <label className="provisioning-key">一次性激活码
+          <span><code>{provisioning.code}</code><button type="button" className="icon-button" onClick={() => onCopy(provisioning.code!, "一次性激活码")} aria-label="复制一次性激活码" title="复制激活码"><Copy size={17} /></button></span>
+        </label>}
+        <p className="form-hint">请在激活页输入安全码；激活码将在 {exactTime(provisioning.expiresAt)} 失效。</p>
+      </div>
+      <footer className="modal-footer"><button type="button" className="primary-button" onClick={onClose}><Check size={17} />已处理</button></footer>
+    </section>
+  </div>;
+}
+
+function AuthenticatorRecoveryDialog({ recovery, onClose }: { recovery: AuthenticatorRecovery; onClose: () => void }) {
+  return <div className="modal-layer" role="presentation">
+    <section className="modal user-create-modal" role="dialog" aria-modal="true" aria-labelledby="authenticator-recovery-title">
+      <header><div><span className="modal-icon"><KeyRound size={20} /></span><div><h2 id="authenticator-recovery-title">验证器恢复已发起</h2><p>恢复码仅发送到该用户已验证的安全邮箱。</p></div></div><button className="icon-button" type="button" onClick={onClose} aria-label="关闭验证器恢复提示"><X size={20} /></button></header>
+      <div className="modal-body provisioning-body">
+        <aside className="access-setup-note" role="note"><ShieldCheck size={17} aria-hidden="true" /><div><strong>{recovery.account}</strong><p>旧验证器和全部会话已失效；用户需在 15 分钟内完成邮箱确认并重新绑定 Google 验证器。</p></div></aside>
+        <p className="form-hint">恢复码不会在管理端显示，也无需人工转交。</p>
+      </div>
+      <footer className="modal-footer"><button type="button" className="primary-button" onClick={onClose}><Check size={17} />知道了</button></footer>
+    </section>
+  </div>;
+}
+
+function systemUserActionCopy(action: SystemUserAction) {
+  if (action.kind === "delete") return { title: "删除系统用户？", subtitle: "个人项目将一并删除。", description: "删除后无法恢复。", submit: "删除用户" };
+  if (action.kind === "suspend") return { title: "停用系统用户？", subtitle: "用户将无法登录。", description: "项目数据会保留。", submit: "确认停用" };
+  if (action.kind === "activate") return { title: "启用系统用户？", subtitle: "用户可重新登录。", description: "按现有登录规则访问。", submit: "确认启用" };
+  if (action.kind === "resend-activation") return { title: "重新发送激活码？", subtitle: "旧激活码会立即失效，新激活码将发送至该用户的安全邮箱。", description: "用户完成密码和验证器设置后才可登录。", submit: "确认发送" };
+  if (action.kind === "reset-authenticator") return { title: "重置登录验证器？", subtitle: "旧验证器和会话将失效。", description: "恢复码将发送到该用户已验证的安全邮箱。", submit: "确认重置" };
+  return { title: "调整系统角色？", subtitle: `调整为${action.role === "admin" ? "管理员" : "普通用户"}。`, description: "权限立即生效。", submit: "确认调整" };
+}
+
+function SystemUserActionDialog({ action, code, isSaving, onCodeChange, onClose, onConfirm }: {
+  action: SystemUserAction;
+  code: string;
+  isSaving: boolean;
+  onCodeChange: (value: string) => void;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  const copy = systemUserActionCopy(action);
+  return <div className="modal-layer" role="presentation">
+    <section className="modal user-create-modal" role="dialog" aria-modal="true" aria-labelledby="system-user-action-title">
+      <header><div><span className="modal-icon danger-icon"><AlertTriangle size={20} /></span><div><h2 id="system-user-action-title">{copy.title}</h2><p>{copy.subtitle}</p></div></div><button className="icon-button" type="button" onClick={onClose} aria-label="关闭用户操作确认"><X size={20} /></button></header>
+      <form className="modal-form" onSubmit={(event) => { event.preventDefault(); onConfirm(); }}>
+        <div className="modal-body">
+          <div className="delete-summary"><strong>{action.user.email}</strong><span>{action.user.role === "admin" ? "管理员" : "普通用户"} · {action.user.status === "active" ? "已启用" : "已停用"}</span></div>
+          <p className="delete-description">{copy.description}</p>
+          <label>Google 验证码<input required autoFocus value={code} onChange={(event) => onCodeChange(event.target.value.replace(/\D/g, "").slice(0, 6))} inputMode="numeric" autoComplete="one-time-code" placeholder="000000" /></label>
+        </div>
+        <footer className="modal-footer"><button type="button" className="secondary-button" onClick={onClose} disabled={isSaving}>取消</button><button type="submit" className="danger-button" disabled={isSaving}>{isSaving ? <LoadingMark className="button-loading-mark" /> : action.kind === "delete" ? <Trash2 size={17} /> : <UserCog size={17} />}{isSaving ? "正在处理" : copy.submit}</button></footer>
+      </form>
+    </section>
+  </div>;
+}
+
 
 export default function VaultClient({ viewer: initialViewer }: { viewer: Viewer }) {
   const [viewer, setViewer] = useState<Viewer>(initialViewer);
@@ -657,7 +727,7 @@ export default function VaultClient({ viewer: initialViewer }: { viewer: Viewer 
       : space === "全部" ? "全部项目" : `${space}项目`;
   const viewerInitial = viewer.displayName.trim().slice(0, 1).toLocaleUpperCase() || "你";
   const isAdmin = viewer.role === "admin";
-  const activeDialogKey = embeddedPageDialogOpen ? "embedded-page" : showSecurityReverify ? "security-reverify" : showProfileEditor ? "profile-editor" : authenticatorRecovery ? "authenticator-recovery" : systemUserProvisioning ? "user-provisioning" : pendingPublicPublish ? "publish" : deleteTarget ? "delete" : systemUserAction ? "system-user-action" : showUserCreateDialog ? "user-create" : editingItem ? "edit" : showAdd ? "add" : null;
+  const activeDialogKey = showSecurityReverify ? "security-reverify" : embeddedPageDialogOpen ? "embedded-page" : showProfileEditor ? "profile-editor" : authenticatorRecovery ? "authenticator-recovery" : systemUserProvisioning ? "user-provisioning" : pendingPublicPublish ? "publish" : deleteTarget ? "delete" : systemUserAction ? "system-user-action" : showUserCreateDialog ? "user-create" : editingItem ? "edit" : showAdd ? "add" : null;
   const isModalOpen = activeDialogKey !== null;
   const pageTransitionKey = page === "users" ? `${page}-${userManagementTab}` : page;
   const { totalItems, weakPasswordCount, reusedPasswordCount, missingTwoFactorCount, securityIssueCount, score: securityScore } = securitySummary;
@@ -677,10 +747,15 @@ export default function VaultClient({ viewer: initialViewer }: { viewer: Viewer 
       credentials: "same-origin",
       headers: { "Content-Type": "application/json", ...(init.headers ?? {}) },
     });
-    const payload = response.status === 204 ? null : await readJsonResponse<T & { error?: string; code?: string }>(response, "操作未完成，请稍后重试。");
+    const payload = response.status === 204 ? null : await readJsonResponse<T & { error?: string; code?: string; requestId?: string }>(response, "操作未完成，请稍后重试。");
     if (response.status === 401 && payload?.code === "SECURITY_SESSION_REQUIRED" && path !== "/api/security/session") endCurrentSecuritySession("/login");
     if (payload?.code === "RECENT_SECURITY_CONFIRMATION_REQUIRED") restartSecuritySession();
-    if (!response.ok) throw new Error(payload?.error ?? "操作未完成，请稍后重试。");
+    if (!response.ok) {
+      const error = new Error(payload?.error ?? "操作未完成，请稍后重试。") as VaultRequestError;
+      error.code = payload?.code;
+      error.requestId = payload?.requestId;
+      throw error;
+    }
     return payload as T;
   }, [restartSecuritySession]);
 
@@ -817,8 +892,8 @@ export default function VaultClient({ viewer: initialViewer }: { viewer: Viewer 
     }
 
     const getActiveDialog = () => {
-      const layers = document.querySelectorAll<HTMLElement>(".modal-layer");
-      return layers.item(layers.length - 1)?.querySelector<HTMLElement>('[role="dialog"]') ?? null;
+      const dialogs = document.querySelectorAll<HTMLElement>('[role="dialog"][aria-modal="true"]');
+      return dialogs.item(dialogs.length - 1) ?? null;
     };
     const getFocusable = (dialog: HTMLElement) => Array.from(dialog.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'));
     const focusInitialControl = () => {
@@ -867,6 +942,7 @@ export default function VaultClient({ viewer: initialViewer }: { viewer: Viewer 
     async function loadVault() {
       setIsLoading(true);
       setLoadError(null);
+      if (page === "profile") setSecuritySummaryReady(false);
       try {
         const profileOnly = page === "profile";
         const search = profileOnly
@@ -1342,7 +1418,8 @@ export default function VaultClient({ viewer: initialViewer }: { viewer: Viewer 
     focusMainContent();
   }
 
-  function openSecurityReview(focus: SecurityFocus = "all") {
+  function openSecurityReview(focus: unknown = "all") {
+    const selectedFocus: SecurityFocus = focus === "weak_password" || focus === "reused_password" || focus === "missing_two_factor" ? focus : "all";
     clearCredentialSelection();
     setPage("vault");
     setCollection("security");
@@ -1350,10 +1427,10 @@ export default function VaultClient({ viewer: initialViewer }: { viewer: Viewer 
     setSpace("全部");
     setCategory("全部");
     setSortOrder("updated");
-    setSecurityFocus(focus);
+    setSecurityFocus(selectedFocus);
     setVaultCurrentPage(1);
     setMobileNav(false);
-    writeRoute({ page: "vault", collection: "security", securityFocus: focus, userManagementTab: "users", auditCategory: "all" });
+    writeRoute({ page: "vault", collection: "security", securityFocus: selectedFocus, userManagementTab: "users", auditCategory: "all" });
     focusMainContent();
   }
 
@@ -1390,6 +1467,18 @@ export default function VaultClient({ viewer: initialViewer }: { viewer: Viewer 
       setLoadAttempt((current) => current + 1);
       setToast("用户已创建，等待完成激活。");
     } catch (error) {
+      const requestError = error as VaultRequestError;
+      if (requestError?.code === "ACTIVATION_DELIVERY_FAILED") {
+        setSystemUserEmail("");
+        setSystemUserSecurityEmail("");
+        setSystemUserCode("");
+        setSystemUserRole("user");
+        setShowUserCreateDialog(false);
+        setUserQuery("");
+        setUserCurrentPage(1);
+        setUserLoadAttempt((current) => current + 1);
+        setLoadAttempt((current) => current + 1);
+      }
       setToast(error instanceof Error ? error.message : "无法创建系统用户。");
     } finally {
       setIsSaving(false);
@@ -1615,7 +1704,7 @@ export default function VaultClient({ viewer: initialViewer }: { viewer: Viewer 
               </> : <AdminTableState icon={ShieldCheck} title="暂无数据" />}
             </section>}
           </section>
-        </section> : page === "embedded-manage" ? <EmbeddedPageManagerContent onDialogStateChange={setEmbeddedPageDialogOpen} serverSessionReady={serverSessionReady} onPagesChanged={refreshEmbeddedNavigation} onRecentSecurityConfirmationRequired={restartSecuritySession} /> : page === "embedded" ? <EmbeddedPagesWorkspace selectedPageId={embeddedPageId} onPageSelect={selectEmbeddedPage} /> : page === "profile" ? <ProfileOverview viewer={viewer} viewerInitial={viewerInitial} isLoading={isLoading} securitySummaryReady={securitySummaryReady} securityTotalItems={totalItems} securityScore={securityScore} securityIssueCount={securityIssueCount} isSaving={isSaving} onOpenSecurity={openSecurityReview} onRestartSecuritySession={restartSecuritySession} onOpenProfileEditor={openProfileEditor} /> : <>
+        </section> : page === "embedded-manage" ? <EmbeddedPageManagerContent externalDialogOpen={showSecurityReverify} onDialogStateChange={setEmbeddedPageDialogOpen} serverSessionReady={serverSessionReady} onPagesChanged={refreshEmbeddedNavigation} onRecentSecurityConfirmationRequired={restartSecuritySession} /> : page === "embedded" ? <EmbeddedPagesWorkspace selectedPageId={embeddedPageId} onPageSelect={selectEmbeddedPage} /> : page === "profile" ? <ProfileOverview viewer={viewer} viewerInitial={viewerInitial} isLoading={isLoading} securitySummaryReady={securitySummaryReady} securityTotalItems={totalItems} securityScore={securityScore} securityIssueCount={securityIssueCount} isSaving={isSaving} onOpenSecurity={openSecurityReview} onRestartSecuritySession={restartSecuritySession} onOpenProfileEditor={openProfileEditor} /> : <>
         <section className="security-strip" aria-label="密码库凭据安全概览" aria-busy={isLoading}>
           {isLoading ? <SecurityStripLoading /> : securityIssueCount > 0 ? <button type="button" className="risk-item" onClick={() => openSecurityReview()} aria-label="查看全部密码库凭据检查结果">
             <span className="risk-icon risk-danger"><AlertTriangle size={17} /></span><span><strong id="security-heading">凭据安全评分 {securityScore}/100</strong><small>{securityIssueCount} 条风险待处理</small></span><ChevronRight size={18} aria-hidden="true" />
@@ -1722,7 +1811,7 @@ export default function VaultClient({ viewer: initialViewer }: { viewer: Viewer 
         </div>
       </main>
 
-      {showSecurityReverify && (
+      {showSecurityReverify && <ModalPortal>
         <div className="modal-layer" role="presentation">
           <section className="modal user-create-modal" role="dialog" aria-modal="true" aria-labelledby="security-reverify-title">
             <header><div><span className="modal-icon"><ShieldCheck size={20} /></span><div><h2 id="security-reverify-title">重新验证</h2><p>输入当前 Google 验证码以继续敏感操作。</p></div></div><button className="icon-button" type="button" onClick={() => { setShowSecurityReverify(false); setSecurityReverifyCode(""); setSecurityReverifyError(""); }} aria-label="关闭重新验证"><X size={20} /></button></header>
@@ -1732,7 +1821,7 @@ export default function VaultClient({ viewer: initialViewer }: { viewer: Viewer 
             </form>
           </section>
         </div>
-      )}
+      </ModalPortal>}
 
       {showProfileEditor && page === "profile" && (
         <div className="modal-layer" role="presentation">
@@ -1846,50 +1935,11 @@ export default function VaultClient({ viewer: initialViewer }: { viewer: Viewer 
         </div>
       )}
 
-      {systemUserProvisioning && isAdmin && (
-        <div className="modal-layer" role="presentation">
-          <section className="modal user-create-modal" role="dialog" aria-modal="true" aria-labelledby="user-provisioning-title">
-            <header><div><span className="modal-icon"><KeyRound size={20} /></span><div><h2 id="user-provisioning-title">用户激活</h2><p>激活码不会与密码或验证器密钥混用。</p></div></div><button className="icon-button" type="button" onClick={() => setSystemUserProvisioning(null)} aria-label="关闭用户激活提示"><X size={20} /></button></header>
-            <div className="modal-body provisioning-body">
-              <aside className="access-setup-note" role="note"><ShieldCheck size={17} aria-hidden="true" /><div><strong>{systemUserProvisioning.account}</strong><p>{systemUserProvisioning.delivery === "email" ? "激活码已发送至该用户的安全邮箱。" : "本地预览未配置邮件服务；请通过安全渠道交付下方激活码。"}</p></div></aside>
-              {systemUserProvisioning.delivery === "manual" && systemUserProvisioning.code && <label className="provisioning-key">一次性激活码
-                <span><code>{systemUserProvisioning.code}</code><button type="button" className="icon-button" onClick={() => copyValue(systemUserProvisioning.code!, "一次性激活码")} aria-label="复制一次性激活码" title="复制激活码"><Copy size={17} /></button></span>
-              </label>}
-              <p className="form-hint">请在激活页输入安全码；激活码将在 {exactTime(systemUserProvisioning.expiresAt)} 失效。</p>
-            </div>
-            <footer className="modal-footer"><button type="button" className="primary-button" onClick={() => setSystemUserProvisioning(null)}><Check size={17} />已处理</button></footer>
-          </section>
-        </div>
-      )}
+      {systemUserProvisioning && isAdmin && <UserProvisioningDialog provisioning={systemUserProvisioning} onClose={() => setSystemUserProvisioning(null)} onCopy={copyValue} />}
 
-      {authenticatorRecovery && isAdmin && (
-        <div className="modal-layer" role="presentation">
-          <section className="modal user-create-modal" role="dialog" aria-modal="true" aria-labelledby="authenticator-recovery-title">
-            <header><div><span className="modal-icon"><KeyRound size={20} /></span><div><h2 id="authenticator-recovery-title">验证器恢复已发起</h2><p>恢复码仅发送到该用户已验证的安全邮箱。</p></div></div><button className="icon-button" type="button" onClick={() => setAuthenticatorRecovery(null)} aria-label="关闭验证器恢复提示"><X size={20} /></button></header>
-            <div className="modal-body provisioning-body">
-              <aside className="access-setup-note" role="note"><ShieldCheck size={17} aria-hidden="true" /><div><strong>{authenticatorRecovery.account}</strong><p>旧验证器和全部会话已失效；用户需在 15 分钟内完成邮箱确认并重新绑定 Google 验证器。</p></div></aside>
-              <p className="form-hint">恢复码不会在管理端显示，也无需人工转交。</p>
-            </div>
-            <footer className="modal-footer"><button type="button" className="primary-button" onClick={() => setAuthenticatorRecovery(null)}><Check size={17} />知道了</button></footer>
-          </section>
-        </div>
-      )}
+      {authenticatorRecovery && isAdmin && <AuthenticatorRecoveryDialog recovery={authenticatorRecovery} onClose={() => setAuthenticatorRecovery(null)} />}
 
-      {systemUserAction && isAdmin && (
-        <div className="modal-layer" role="presentation">
-          <section className="modal user-create-modal" role="dialog" aria-modal="true" aria-labelledby="system-user-action-title">
-            <header><div><span className="modal-icon danger-icon"><AlertTriangle size={20} /></span><div><h2 id="system-user-action-title">{systemUserAction.kind === "delete" ? "删除系统用户？" : systemUserAction.kind === "suspend" ? "停用系统用户？" : systemUserAction.kind === "activate" ? "启用系统用户？" : systemUserAction.kind === "resend-activation" ? "重新发送激活码？" : systemUserAction.kind === "reset-authenticator" ? "重置登录验证器？" : "调整系统角色？"}</h2><p>{systemUserAction.kind === "delete" ? "个人项目将一并删除。" : systemUserAction.kind === "suspend" ? "用户将无法登录。" : systemUserAction.kind === "activate" ? "用户可重新登录。" : systemUserAction.kind === "resend-activation" ? "旧激活码会立即失效，新激活码将发送至该用户的安全邮箱。" : systemUserAction.kind === "reset-authenticator" ? "旧验证器和会话将失效。" : `调整为${systemUserAction.role === "admin" ? "管理员" : "普通用户"}。`}</p></div></div><button className="icon-button" type="button" onClick={() => { setSystemUserCode(""); setSystemUserAction(null); }} aria-label="关闭用户操作确认"><X size={20} /></button></header>
-            <form className="modal-form" onSubmit={(event) => { event.preventDefault(); void confirmSystemUserAction(); }}>
-              <div className="modal-body">
-                <div className="delete-summary"><strong>{systemUserAction.user.email}</strong><span>{systemUserAction.user.role === "admin" ? "管理员" : "普通用户"} · {systemUserAction.user.status === "active" ? "已启用" : "已停用"}</span></div>
-                <p className="delete-description">{systemUserAction.kind === "delete" ? "删除后无法恢复。" : systemUserAction.kind === "suspend" ? "项目数据会保留。" : systemUserAction.kind === "activate" ? "按现有登录规则访问。" : systemUserAction.kind === "resend-activation" ? "用户完成密码和验证器设置后才可登录。" : systemUserAction.kind === "reset-authenticator" ? "恢复码将发送到该用户已验证的安全邮箱。" : "权限立即生效。"}</p>
-                <label>Google 验证码<input required autoFocus value={systemUserCode} onChange={(event) => setSystemUserCode(event.target.value.replace(/\D/g, "").slice(0, 6))} inputMode="numeric" autoComplete="one-time-code" placeholder="000000" /></label>
-              </div>
-              <footer className="modal-footer"><button type="button" className="secondary-button" onClick={() => { setSystemUserCode(""); setSystemUserAction(null); }} disabled={isSaving}>取消</button><button type="submit" className="danger-button" disabled={isSaving}>{isSaving ? <LoadingMark className="button-loading-mark" /> : systemUserAction.kind === "delete" ? <Trash2 size={17} /> : <UserCog size={17} />}{isSaving ? "正在处理" : systemUserAction.kind === "delete" ? "删除用户" : systemUserAction.kind === "suspend" ? "确认停用" : systemUserAction.kind === "activate" ? "确认启用" : systemUserAction.kind === "resend-activation" ? "确认发送" : systemUserAction.kind === "reset-authenticator" ? "确认重置" : "确认调整"}</button></footer>
-            </form>
-          </section>
-        </div>
-      )}
+      {systemUserAction && isAdmin && <SystemUserActionDialog action={systemUserAction} code={systemUserCode} isSaving={isSaving} onCodeChange={setSystemUserCode} onClose={() => { setSystemUserCode(""); setSystemUserAction(null); }} onConfirm={() => void confirmSystemUserAction()} />}
 
       <div className={`toast ${toast ? "is-visible" : ""}`} role="status" aria-live="polite"><Clipboard size={17} />{toast}</div>
     </div>

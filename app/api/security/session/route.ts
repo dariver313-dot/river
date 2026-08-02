@@ -19,7 +19,7 @@ export async function POST(request: Request) {
     try {
       body = await readJsonObject(request);
     } catch (error) {
-      return apiError(error, 400, request);
+      return apiError(error, 500, request);
     }
   }
   const userCode = typeof body.userCode === "string" ? body.userCode : "";

@@ -101,6 +101,16 @@ export function sendSecurityEmailChangeCode(input: { to: string; code: string; e
   });
 }
 
+export function sendCurrentSecurityEmailChangeCode(input: { to: string; targetEmail: string; code: string; expiresAt: string }) {
+  return sendAccountCode({
+    to: input.to,
+    code: input.code,
+    expiresAt: input.expiresAt,
+    subject: "djmima 安全邮箱变更授权",
+    lead: `你正在申请将 djmima 安全邮箱更换为 ${input.targetEmail}。请仅在你本人发起操作时输入以下一次性安全码。`,
+  });
+}
+
 export function sendAuthenticatorResetCode(input: { to: string; code: string; expiresAt: string }) {
   return sendAccountCode({
     ...input,

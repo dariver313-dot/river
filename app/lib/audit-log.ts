@@ -29,6 +29,8 @@ type AuditStateGuard = {
   auditEventId: string;
 };
 
+class AuditTransactionRetry extends Error {}
+
 export type AuditedMutation = {
   /** All audited domain mutations reserve their audit event before changing data. */
   auditOrder: "before";
@@ -88,8 +90,9 @@ export async function writeAuditEvent(vaultId: string, actorEmail: string, actio
     });
 
     // 条件插入和状态推进处在同一个 SQLite batch 内。若另一请求先写入，两个语句都不会改变状态，随后重试。
-    const result = await database.batch([
-      database.prepare(
+    try {
+      await database.batch([
+        database.prepare(
         `INSERT INTO audit_events (
           id, vault_id, actor_email, action, item_id, created_at, signature, signature_key_id, event_version, sequence, previous_hash, chain_hash
         )
@@ -112,17 +115,22 @@ export async function writeAuditEvent(vaultId: string, actorEmail: string, actio
         state.last_sequence,
         state.head_hash,
       ),
-      database.prepare(
+        database.prepare(
         `UPDATE audit_chain_states
          SET last_sequence = ?, head_hash = ?, updated_at = CURRENT_TIMESTAMP
          WHERE vault_id = ? AND last_sequence = ? AND head_hash = ?
            AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`,
-      ).bind(event.sequence, nextHash, event.vaultId, state.last_sequence, state.head_hash, event.id),
-    ]);
-    const inserted = result[0].meta.changes ?? 0;
-    const advanced = result[1].meta.changes ?? 0;
-    if (inserted === 1 && advanced === 1) return event.id;
-    if (inserted > 0) await database.prepare("DELETE FROM audit_events WHERE id = ?").bind(event.id).run();
+        ).bind(event.sequence, nextHash, event.vaultId, state.last_sequence, state.head_hash, event.id),
+      ], (results) => {
+        const inserted = results[0]?.meta.changes ?? 0;
+        const advanced = results[1]?.meta.changes ?? 0;
+        if (inserted !== 1 || advanced !== 1) throw new AuditTransactionRetry();
+      });
+      return event.id;
+    } catch (error) {
+      if (error instanceof AuditTransactionRetry) continue;
+      throw error;
+    }
   }
   throw new Error("审计链繁忙，操作未被记录。请稍后重试。");
 }
@@ -205,23 +213,24 @@ export async function writeAuditedMutation(vaultId: string, actorEmail: string, 
     );
     const domainStatements = mutation.statements(guard);
     const statements = [auditInsert, ...domainStatements, chainAdvance];
-    const results = await database.batch(statements);
-    const domainResults = results.slice(1, 1 + domainStatements.length);
-    const domainChanges = domainResults.reduce((total, result) => total + (result.meta.changes ?? 0), 0);
-    const auditChanges = results[0]?.meta.changes ?? 0;
-    const advanceChanges = results[results.length - 1]?.meta.changes ?? 0;
-
-    const expected = typeof mutation.expectedChanges === "number"
-      ? domainChanges === mutation.expectedChanges
-      : mutation.expectedChanges(domainResults);
-    if (expected && auditChanges === 1 && advanceChanges === 1) return event.id;
-    // The domain statements are required to depend on the reserved audit event.
-    // If a prerequisite failed, remove that unchained reservation before retrying.
-    if (auditChanges === 1 && advanceChanges === 0) {
-      await database.prepare("DELETE FROM audit_events WHERE id = ?").bind(event.id).run();
+    try {
+      await database.batch(statements, (results) => {
+        const domainResults = results.slice(1, 1 + domainStatements.length);
+        const domainChanges = domainResults.reduce((total, result) => total + (result.meta.changes ?? 0), 0);
+        const auditChanges = results[0]?.meta.changes ?? 0;
+        const advanceChanges = results[results.length - 1]?.meta.changes ?? 0;
+        const expected = typeof mutation.expectedChanges === "number"
+          ? domainChanges === mutation.expectedChanges
+          : mutation.expectedChanges(domainResults);
+        if (expected && auditChanges === 1 && advanceChanges === 1) return;
+        if (domainChanges === 0 && advanceChanges === 0) throw new AuditTransactionRetry();
+        throw new Error("业务变更与审计记录未能同步提交。");
+      });
+      return event.id;
+    } catch (error) {
+      if (error instanceof AuditTransactionRetry) continue;
+      throw error;
     }
-    if (domainChanges === 0 && advanceChanges === 0) continue;
-    throw new Error("业务变更与审计记录未能同步提交。");
   }
   throw new Error("审计链繁忙，操作未被记录。请稍后重试。");
 }

@@ -1,4 +1,5 @@
 import { beginAccountActivation, confirmAccountActivation } from "../../../lib/account-lifecycle";
+import { apiError } from "../../../lib/api-response";
 import { readLimitedJsonObject } from "../../../lib/request-validation";
 import { anonymousEdgeRateLimitResponse } from "../../../lib/rate-limit";
 import { crossOriginRequestResponse, secureJson } from "../../../lib/response-security";
@@ -22,6 +23,6 @@ export async function POST(request: Request) {
     if (!activation) return secureJson({ error: "激活码无效、已过期，或账号无法继续激活。" }, { status: 401 });
     return secureJson(activation);
   } catch (error) {
-    return secureJson({ error: error instanceof Error ? error.message : "激活暂时不可用。" }, { status: 400 });
+    return apiError(error, 500, request);
   }
 }

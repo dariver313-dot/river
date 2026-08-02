@@ -2,7 +2,7 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { getDatabase } from "../../db";
 import { normalizeLoginAccount } from "./identity";
 
-export type AccountTokenPurpose = "activation" | "activation_confirm" | "password_recovery" | "admin_recovery" | "admin_recovery_confirm" | "security_email_change" | "authenticator_reset" | "authenticator_reset_confirm";
+export type AccountTokenPurpose = "activation" | "activation_confirm" | "password_recovery" | "admin_recovery" | "admin_recovery_confirm" | "security_email_change_current" | "security_email_change" | "authenticator_reset" | "authenticator_reset_confirm";
 
 type AccountTokenRow = {
   id: string;
@@ -27,7 +27,7 @@ export type PendingAccountToken = {
 
 type AuditGuard = { conditionSql: string; values: readonly unknown[]; auditEventId: string };
 
-const allowedPurposes = new Set<AccountTokenPurpose>(["activation", "activation_confirm", "password_recovery", "admin_recovery", "admin_recovery_confirm", "security_email_change", "authenticator_reset", "authenticator_reset_confirm"]);
+const allowedPurposes = new Set<AccountTokenPurpose>(["activation", "activation_confirm", "password_recovery", "admin_recovery", "admin_recovery_confirm", "security_email_change_current", "security_email_change", "authenticator_reset", "authenticator_reset_confirm"]);
 const tokenAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
 function configuredHashKey() {
@@ -125,6 +125,17 @@ export function consumePendingAccountTokenStatement(input: {
   );
 }
 
+/** Consumes a one-time token used only to advance to another confirmation stage. */
+export async function consumePendingAccountToken(token: PendingAccountToken) {
+  const usedAt = new Date().toISOString();
+  const result = await getDatabase().prepare(
+    `UPDATE account_tokens SET used_at = ?
+     WHERE id = ? AND token_hash = ? AND purpose = ?
+       AND used_at IS NULL AND revoked_at IS NULL AND expires_at > ?`,
+  ).bind(usedAt, token.id, token.tokenHash, token.purpose, usedAt).run();
+  return (result.meta.changes ?? 0) === 1;
+}
+
 export async function issueAccountToken(input: {
   email: string;
   purpose: AccountTokenPurpose;
@@ -173,22 +184,40 @@ export async function revokeAccountTokens(input: { email: string; purpose?: Acco
   ).bind(now, email).run();
 }
 
-export async function issueAdministratorRecoveryCodes(input: { email: string; createdBy: string; count?: number }) {
+/**
+ * Prepares recovery-code writes for inclusion in a larger audited batch.
+ * Keeping the raw values outside SQL lets callers return them once, while the
+ * guarded statements ensure the codes cannot be committed without the audit.
+ */
+export function prepareAuditedAdministratorRecoveryCodes(input: { email: string; createdBy: string; count?: number }) {
   const count = Math.max(1, Math.min(20, Math.floor(input.count ?? 10)));
   const email = normalizeLoginAccount(input.email);
-  const now = new Date().toISOString();
-  const database = getDatabase();
+  const createdBy = normalizeLoginAccount(input.createdBy);
+  const revokedAt = new Date().toISOString();
   const codes = Array.from({ length: count }, () => createCode());
-  const statements = [
-    database.prepare(
-      "UPDATE account_tokens SET revoked_at = ? WHERE email = ? AND purpose = 'admin_recovery' AND used_at IS NULL AND revoked_at IS NULL",
-    ).bind(now, email),
-    ...codes.map((code) => database.prepare(
-      "INSERT INTO account_tokens (id, email, purpose, token_hash, expires_at, created_by) VALUES (?, ?, 'admin_recovery', ?, ?, ?)",
-    ).bind(crypto.randomUUID(), email, tokenHash(normalizeCode(code)), "2999-12-31T23:59:59.000Z", normalizeLoginAccount(input.createdBy))),
-  ];
-  await database.batch(statements);
-  return codes;
+  const entries = codes.map((code) => ({ id: crypto.randomUUID(), hash: tokenHash(normalizeCode(code)) }));
+
+  return {
+    codes,
+    count,
+    statements(guard: AuditGuard) {
+      const database = getDatabase();
+      return [
+        database.prepare(
+          `UPDATE account_tokens SET revoked_at = ?
+           WHERE email = ? AND purpose = 'admin_recovery' AND used_at IS NULL AND revoked_at IS NULL
+             AND ${guard.conditionSql}
+             AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`,
+        ).bind(revokedAt, email, ...guard.values, guard.auditEventId),
+        ...entries.map((entry) => database.prepare(
+          `INSERT INTO account_tokens (id, email, purpose, token_hash, expires_at, created_by)
+           SELECT ?, ?, 'admin_recovery', ?, ?, ?
+           WHERE ${guard.conditionSql}
+             AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`,
+        ).bind(entry.id, email, entry.hash, "2999-12-31T23:59:59.000Z", createdBy, ...guard.values, guard.auditEventId)),
+      ];
+    },
+  };
 }
 
 export function accountTokenCodesEqual(left: string, right: string) {

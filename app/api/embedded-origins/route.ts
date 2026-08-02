@@ -46,7 +46,7 @@ export async function POST(request: Request) {
     if (result.response || !result.actor || !result.body) return result.response!;
     return secureJson({ origins: await addEmbeddedOrigin(result.actor.email, result.body.origin) }, { status: 201 });
   } catch (error) {
-    return apiError(error, 400, request);
+    return apiError(error, 500, request);
   }
 }
 
@@ -58,6 +58,6 @@ export async function DELETE(request: Request) {
     if (result.response || !result.actor || !result.body) return result.response!;
     return secureJson({ origins: await deleteEmbeddedOrigin(result.actor.email, result.body.origin) });
   } catch (error) {
-    return apiError(error, 400, request);
+    return apiError(error, 500, request);
   }
 }

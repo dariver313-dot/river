@@ -61,7 +61,7 @@ export async function POST(request: Request) {
     const created = await createManagedUser(actor.email, body);
     return secureJson(created, { status: 201 });
   } catch (error) {
-    return apiError(error, 400, request);
+    return apiError(error, 500, request);
   }
 }
 
@@ -82,7 +82,7 @@ export async function PATCH(request: Request) {
     const user = await updateManagedUser(actor.email, body);
     return secureJson({ user });
   } catch (error) {
-    return apiError(error, 400, request);
+    return apiError(error, 500, request);
   }
 }
 
@@ -103,6 +103,6 @@ export async function DELETE(request: Request) {
     await deleteManagedUser(actor.email, body);
     return secureEmpty();
   } catch (error) {
-    return apiError(error, 400, request);
+    return apiError(error, 500, request);
   }
 }

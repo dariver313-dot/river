@@ -22,7 +22,10 @@ type PreparedStatement = {
 
 export type SqliteDatabase = {
   prepare(query: string): PreparedStatement;
-  batch(statements: Array<BoundStatement | PreparedStatement>): Promise<QueryResult<unknown>[]>;
+  batch(
+    statements: Array<BoundStatement | PreparedStatement>,
+    validateBeforeCommit?: (results: QueryResult<unknown>[]) => void,
+  ): Promise<QueryResult<unknown>[]>;
 };
 
 const schema = `
@@ -370,9 +373,15 @@ function createSqliteAdapter(): SqliteDatabase {
         execute: () => boundStatement(query, []).execute(),
       };
     },
-    async batch(statements) {
+    async batch(statements, validateBeforeCommit) {
       const db = openDatabase();
-      const transaction = db.transaction(() => statements.map((statement) => statement.execute()));
+      const transaction = db.transaction(() => {
+        const results = statements.map((statement) => statement.execute());
+        // Throwing here rolls the complete better-sqlite3 transaction back.
+        // Callers can therefore assert cross-statement invariants before commit.
+        validateBeforeCommit?.(results);
+        return results;
+      });
       return transaction();
     },
   };

@@ -14,7 +14,7 @@
 docker compose exec -T djmima node scripts/selfhost-backup.mjs
 ```
 
-脚本使用 SQLite 在线备份 API，不会通过复制正在写入的 WAL 文件来备份；完成后会执行 `PRAGMA integrity_check`，校验失败不会保留备份文件。默认 Compose 使用 `./data:/app/data` 绑定挂载，因此备份文件保存在服务器应用目录的 `./data/backups/`（容器内为 `/app/data/backups/`），本地仅保留最近 14 份。
+脚本使用 SQLite 在线备份 API，不会通过复制正在写入的 WAL 文件来备份；完成后会执行 `PRAGMA integrity_check`，校验失败不会保留 `.partial` 数据库及其 WAL/SHM/journal 临时文件。脚本还会清理超过 24 小时的中断临时文件；正式备份及其可能存在的 sidecar 按同一保留策略删除。默认 Compose 使用 `./data:/app/data` 绑定挂载，因此备份文件保存在服务器应用目录的 `./data/backups/`（容器内为 `/app/data/backups/`），本地仅保留最近 14 份。
 
 ### 启用每日定时任务
 

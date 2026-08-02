@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 
 import { getDatabase } from "../../db";
 import { addEmbeddedOrigin, deleteEmbeddedOrigin, listEmbeddedOrigins } from "../../app/lib/embedded-origins";
-import { createEmbeddedPage, deleteEmbeddedPage, listEmbeddedPages, updateEmbeddedPage } from "../../app/lib/embedded-pages";
+import { createEmbeddedPage, deleteEmbeddedPage, listEmbeddedPages, listManagedEmbeddedPages, updateEmbeddedPage } from "../../app/lib/embedded-pages";
 import { listManagementAudit } from "../../app/lib/vault-store";
 
 const actor = "admin01";
@@ -23,15 +23,29 @@ const pageId = await createEmbeddedPage(actor, {
 
 assert.equal((await listEmbeddedOrigins())[0]?.pageCount, 1, "可信来源必须返回关联页面数。");
 await assert.rejects(deleteEmbeddedOrigin(actor, origin), /仍被内嵌页面使用/);
+const initialPage = (await listManagedEmbeddedPages()).find((page) => page.id === pageId);
+assert(initialPage, "The created page must be available for editing.");
 
 await updateEmbeddedPage(actor, {
   id: pageId,
+  expectedUpdatedAt: initialPage.updatedAt,
   name: "运营报表（管理员）",
   url: "https://reports.example.test/admin/dashboard?access_token=still-not-audit",
   visibility: "admin",
   enabled: false,
   sortOrder: 5,
 });
+
+await assert.rejects(updateEmbeddedPage(actor, {
+  id: pageId,
+  expectedUpdatedAt: initialPage.updatedAt,
+  name: "不应覆盖的新标题",
+  url: "https://reports.example.test/stale-update",
+  visibility: "all",
+  enabled: true,
+  sortOrder: 99,
+}), /已被其他操作更新/);
+assert.equal((await listManagedEmbeddedPages()).find((page) => page.id === pageId)?.name, "运营报表（管理员）", "A stale edit must not overwrite the latest page.");
 
 assert.equal((await listEmbeddedPages("admin")).length, 0, "停用页面不得返回给工作台。");
 const audit = await listManagementAudit(actor, { category: "embedded" });

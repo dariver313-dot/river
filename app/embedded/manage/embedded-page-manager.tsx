@@ -62,12 +62,13 @@ function managementErrorMessage(error: unknown, fallback: string, onRecentSecuri
   return error instanceof Error ? error.message : fallback;
 }
 
-export function EmbeddedPageManagerContent({ onDialogStateChange, onPagesChanged, onRecentSecurityConfirmationRequired, serverSessionReady }: { onDialogStateChange?: (isOpen: boolean) => void; onPagesChanged?: () => void; onRecentSecurityConfirmationRequired?: () => void; serverSessionReady: boolean }) {
+export function EmbeddedPageManagerContent({ externalDialogOpen = false, onDialogStateChange, onPagesChanged, onRecentSecurityConfirmationRequired, serverSessionReady }: { externalDialogOpen?: boolean; onDialogStateChange?: (isOpen: boolean) => void; onPagesChanged?: () => void; onRecentSecurityConfirmationRequired?: () => void; serverSessionReady: boolean }) {
   const [pages, setPages] = useState<EmbeddedPage[]>([]);
   const [origins, setOrigins] = useState<EmbeddedOrigin[]>([]);
   const [canManageOrigins, setCanManageOrigins] = useState(false);
   const [form, setForm] = useState<EmbeddedPageForm>(blankForm);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingRevision, setEditingRevision] = useState<string | null>(null);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [isOriginsOpen, setIsOriginsOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<EmbeddedPage | null>(null);
@@ -146,10 +147,11 @@ export function EmbeddedPageManagerContent({ onDialogStateChange, onPagesChanged
 
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || saving) return;
+      if (event.key !== "Escape" || saving || externalDialogOpen) return;
       if (isFormOpen) {
         setForm(blankForm);
         setEditingId(null);
+        setEditingRevision(null);
         setFormError("");
         setIsFormOpen(false);
       }
@@ -171,11 +173,12 @@ export function EmbeddedPageManagerContent({ onDialogStateChange, onPagesChanged
     };
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [deleteTarget, isFormOpen, isOriginsOpen, originDeleteTarget, saving]);
+  }, [deleteTarget, externalDialogOpen, isFormOpen, isOriginsOpen, originDeleteTarget, saving]);
 
   function resetForm() {
     setForm(blankForm);
     setEditingId(null);
+    setEditingRevision(null);
     setFormError("");
   }
 
@@ -228,6 +231,7 @@ export function EmbeddedPageManagerContent({ onDialogStateChange, onPagesChanged
   function openEditForm(page: EmbeddedPage) {
     setForm({ name: page.name, url: page.url, visibility: page.visibility, enabled: page.enabled, sortOrder: page.sortOrder });
     setEditingId(page.id);
+    setEditingRevision(page.updatedAt);
     setFormError("");
     setNotice("");
     setIsFormOpen(true);
@@ -247,7 +251,7 @@ export function EmbeddedPageManagerContent({ onDialogStateChange, onPagesChanged
     try {
       await request("/api/embedded-pages", {
         method: wasEditing ? "PATCH" : "POST",
-        body: JSON.stringify({ ...form, id: editingId }),
+        body: JSON.stringify({ ...form, id: editingId, ...(wasEditing ? { expectedUpdatedAt: editingRevision } : {}) }),
       });
       const targetPage = wasEditing ? currentPage : 1;
       if (!wasEditing) setCurrentPage(targetPage);
@@ -366,8 +370,8 @@ export function EmbeddedPageManagerContent({ onDialogStateChange, onPagesChanged
       </section>
     </section>
 
-    {isFormOpen && <ModalPortal><div className="modal-layer" role="presentation">
-      <section className="modal credential-modal embedded-page-form-modal" role="dialog" aria-modal="true" aria-labelledby="embedded-page-form-title">
+    {isFormOpen && <ModalPortal><div className="modal-layer" role="presentation" aria-hidden={externalDialogOpen || undefined} inert={externalDialogOpen || undefined}>
+      <section className="modal credential-modal embedded-page-form-modal" role="dialog" aria-modal={externalDialogOpen ? undefined : true} aria-labelledby="embedded-page-form-title">
         <header><div><span className="modal-icon">{editing ? <Edit3 size={20} /> : <Plus size={20} />}</span><div><h2 id="embedded-page-form-title">{editing ? "编辑页面" : "添加页面"}</h2><p>按可见范围发布</p></div></div><button type="button" className="icon-button" onClick={closeForm} aria-label="关闭页面配置" disabled={saving}><X size={20} /></button></header>
         <form className="modal-form" onSubmit={save}>
           <div className="modal-body embedded-management-form-body">
@@ -388,8 +392,8 @@ export function EmbeddedPageManagerContent({ onDialogStateChange, onPagesChanged
       </section>
     </div></ModalPortal>}
 
-    {isOriginsOpen && <ModalPortal><div className="modal-layer" role="presentation">
-      <section className="modal credential-modal embedded-origins-modal" role="dialog" aria-modal="true" aria-labelledby="embedded-origins-title">
+    {isOriginsOpen && <ModalPortal><div className="modal-layer" role="presentation" aria-hidden={externalDialogOpen || undefined} inert={externalDialogOpen || undefined}>
+      <section className="modal credential-modal embedded-origins-modal" role="dialog" aria-modal={externalDialogOpen ? undefined : true} aria-labelledby="embedded-origins-title">
         <header><div><span className="modal-icon"><Globe2 size={20} /></span><div><h2 id="embedded-origins-title">可信来源</h2><p>仅列出的 HTTPS 域名可用于内嵌。</p></div></div><button type="button" className="icon-button" onClick={closeOriginsDialog} aria-label="关闭可信来源" disabled={saving}><X size={20} /></button></header>
         <form className="modal-form" onSubmit={addOrigin}>
           <div className="modal-body embedded-origins-body">
@@ -402,8 +406,8 @@ export function EmbeddedPageManagerContent({ onDialogStateChange, onPagesChanged
       </section>
     </div></ModalPortal>}
 
-    {deleteTarget && <ModalPortal><div className="modal-layer" role="presentation">
-      <section className="modal danger-modal" role="dialog" aria-modal="true" aria-labelledby="embedded-page-delete-title">
+    {deleteTarget && <ModalPortal><div className="modal-layer" role="presentation" aria-hidden={externalDialogOpen || undefined} inert={externalDialogOpen || undefined}>
+      <section className="modal danger-modal" role="dialog" aria-modal={externalDialogOpen ? undefined : true} aria-labelledby="embedded-page-delete-title">
         <header><div><span className="modal-icon danger-icon"><AlertTriangle size={20} /></span><div><h2 id="embedded-page-delete-title">删除页面？</h2><p>此操作不可恢复。</p></div></div><button type="button" className="icon-button" onClick={() => closeDeleteConfirmation()} aria-label="关闭删除确认" disabled={saving}><X size={20} /></button></header>
         <form className="modal-form" onSubmit={deletePage}>
           <div className="modal-body">
@@ -416,8 +420,8 @@ export function EmbeddedPageManagerContent({ onDialogStateChange, onPagesChanged
       </section>
     </div></ModalPortal>}
 
-    {originDeleteTarget && <ModalPortal><div className="modal-layer" role="presentation">
-      <section className="modal danger-modal" role="dialog" aria-modal="true" aria-labelledby="embedded-origin-delete-title">
+    {originDeleteTarget && <ModalPortal><div className="modal-layer" role="presentation" aria-hidden={externalDialogOpen || undefined} inert={externalDialogOpen || undefined}>
+      <section className="modal danger-modal" role="dialog" aria-modal={externalDialogOpen ? undefined : true} aria-labelledby="embedded-origin-delete-title">
         <header><div><span className="modal-icon danger-icon"><AlertTriangle size={20} /></span><div><h2 id="embedded-origin-delete-title">移除可信来源？</h2><p>此操作不可恢复。</p></div></div><button type="button" className="icon-button" onClick={() => closeOriginDeleteConfirmation()} aria-label="关闭移除可信来源确认" disabled={saving}><X size={20} /></button></header>
         <form className="modal-form" onSubmit={deleteOrigin}>
           <div className="modal-body"><div className="delete-summary"><strong>{originDeleteTarget.origin}</strong><span>系统范围可信来源</span></div><p className="delete-description">{originDeleteTarget.pageCount > 0 ? `当前关联 ${originDeleteTarget.pageCount} 个页面，请先迁移或删除。` : "移除后，该来源不能再用于新增或编辑页面。"}</p>{originError && <Feedback tone="error">{originError}</Feedback>}<label>Google 验证码<input required autoFocus value={originUserCode} onChange={(event) => { setOriginUserCode(formatVerificationCode(event.target.value)); setOriginError(""); }} inputMode="numeric" autoComplete="one-time-code" placeholder="000000" /></label></div>

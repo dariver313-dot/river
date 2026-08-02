@@ -24,7 +24,7 @@ export async function GET(request: Request, context: RouteContext) {
     // returns any decrypted public credential to this response.
     return secureJson({ item: await getVaultItem(actor.email, id) });
   } catch (error) {
-    return apiError(error, 400, request);
+    return apiError(error, 500, request);
   }
 }
 
@@ -46,7 +46,7 @@ export async function PATCH(request: Request, context: RouteContext) {
     const item = await updateVaultItem(actor.email, id, body, scope.vaultId);
     return secureJson({ item });
   } catch (error) {
-    return apiError(error, 400, request);
+    return apiError(error, 500, request);
   }
 }
 
@@ -68,6 +68,6 @@ export async function DELETE(request: Request, context: RouteContext) {
     await deleteVaultItem(actor.email, id, scope.vaultId);
     return secureEmpty();
   } catch (error) {
-    return apiError(error, 400, request);
+    return apiError(error, 500, request);
   }
 }

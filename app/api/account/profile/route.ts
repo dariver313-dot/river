@@ -22,6 +22,6 @@ export async function PATCH(request: Request) {
     if (!profile) return actorRequiredResponse();
     return secureJson({ profile });
   } catch (error) {
-    return apiError(error, 400, request);
+    return apiError(error, 500, request);
   }
 }

@@ -68,6 +68,11 @@ const personalItem = await createVaultItem("member01", {
 });
 const markedTwoFactor = await updateVaultItem("member01", personalItem.id, { ...personalItem, twoFactor: true });
 assert.equal(markedTwoFactor.twoFactor, true, "External two-factor use must be recordable without storing a TOTP secret.");
+await assert.rejects(
+  updateVaultItem("member01", personalItem.id, { ...personalItem, name: "stale overwrite" }),
+  /已被其他操作更新/,
+);
+assert.equal((await getVaultItem("member01", personalItem.id)).name, personalItem.name, "A stale credential edit must not overwrite the latest value.");
 const clearedTwoFactor = await updateVaultItem("member01", personalItem.id, { ...markedTwoFactor, twoFactor: false });
 assert.equal(clearedTwoFactor.twoFactor, false, "Removing the independent two-factor flag must not preserve stale state.");
 const personalAuditBeforeRead = await database.prepare(

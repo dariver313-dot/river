@@ -1,4 +1,5 @@
 import { beginAdministratorRecovery, confirmAdministratorRecovery } from "../../../lib/account-lifecycle";
+import { apiError } from "../../../lib/api-response";
 import { readLimitedJsonObject } from "../../../lib/request-validation";
 import { anonymousEdgeRateLimitResponse } from "../../../lib/rate-limit";
 import { crossOriginRequestResponse, secureJson } from "../../../lib/response-security";
@@ -25,9 +26,9 @@ export async function POST(request: Request) {
     const recovery = await beginAdministratorRecovery({ code: payload.recoveryCode, password: payload.password });
     if (!recovery) return secureJson({ error: "恢复码无效、已使用或当前不可恢复。" }, { status: 401 });
     return secureJson(recovery);
-  } catch {
+  } catch (error) {
     // This endpoint accepts a recovery factor. Do not reflect configuration or
     // cryptographic failures to an unauthenticated caller.
-    return secureJson({ error: "管理员恢复暂时不可用，请稍后重试。" }, { status: 400 });
+    return apiError(error, 500, request);
   }
 }

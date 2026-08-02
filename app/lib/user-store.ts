@@ -557,6 +557,7 @@ export async function deleteManagedUser(actorEmail: string, input: Record<string
           AND ${targetStillCurrent} AND ${guard.conditionSql} AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`)
         .bind(current.email, ...targetValues, ...guard.values, guard.auditEventId),
       database.prepare(`DELETE FROM vault_members WHERE email = ? AND ${targetStillCurrent} AND ${guard.conditionSql} AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`).bind(current.email, ...targetValues, ...guard.values, guard.auditEventId),
+      database.prepare(`DELETE FROM authenticator_reset_stages WHERE email = ? AND ${targetStillCurrent} AND ${guard.conditionSql} AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`).bind(current.email, ...targetValues, ...guard.values, guard.auditEventId),
       database.prepare(`DELETE FROM account_tokens WHERE email = ? AND ${targetStillCurrent} AND ${guard.conditionSql} AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`).bind(current.email, ...targetValues, ...guard.values, guard.auditEventId),
       database.prepare(`DELETE FROM login_challenges WHERE email = ? AND ${targetStillCurrent} AND ${guard.conditionSql} AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`).bind(current.email, ...targetValues, ...guard.values, guard.auditEventId),
       database.prepare(`DELETE FROM login_events WHERE email = ? AND ${targetStillCurrent} AND ${guard.conditionSql} AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`).bind(current.email, ...targetValues, ...guard.values, guard.auditEventId),

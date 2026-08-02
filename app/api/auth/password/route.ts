@@ -1,4 +1,4 @@
-import { actorRequiredResponse, requireApplicationActor } from "../../../lib/api-response";
+import { actorRequiredResponse, apiError, requireApplicationActor } from "../../../lib/api-response";
 import { changeSelfHostedPassword, endAuthSession } from "../../../lib/selfhost-auth";
 import { readLimitedJsonObject } from "../../../lib/request-validation";
 import { rateLimitResponse } from "../../../lib/rate-limit";
@@ -29,7 +29,6 @@ export async function POST(request: Request) {
       { headers: { "Set-Cookie": await endAuthSession(request) } },
     );
   } catch (error) {
-    const message = error instanceof Error ? error.message : "密码更新未完成，请稍后重试。";
-    return secureJson({ error: message }, { status: 400 });
+    return apiError(error, 500, request);
   }
 }

@@ -4,8 +4,8 @@ import { hashLoginPassword } from "./auth-password";
 import { writeAuditedMutation } from "./audit-log";
 import { sharedAuditVaultId } from "./embedded-audit";
 import { isValidLoginAccount, normalizeLoginAccount } from "./identity";
-import { consumePendingAccountTokenStatement, inspectAccountToken, issueAccountToken, issueAdministratorRecoveryCodes, pendingAccountToken } from "./one-time-tokens";
-import { securityEmailConfigured, sendPasswordRecoveryCode, sendSecurityEmailChangeCode } from "./security-email";
+import { consumePendingAccountToken, consumePendingAccountTokenStatement, inspectAccountToken, issueAccountToken, pendingAccountToken, prepareAuditedAdministratorRecoveryCodes, revokeAccountTokens } from "./one-time-tokens";
+import { securityEmailConfigured, sendCurrentSecurityEmailChangeCode, sendPasswordRecoveryCode, sendSecurityEmailChangeCode } from "./security-email";
 import { securityEmailConfirmationRequired } from "./security-email-policy";
 import { ClientSafeError } from "./security-errors";
 import { generateTotpSecret, generateTotpCode, parseTotpInput } from "./totp";
@@ -319,18 +319,51 @@ export async function completePasswordRecovery(input: { code: unknown; password:
  * starts this change requires a current Google verification for established
  * accounts; the destination mailbox still has to confirm the final change.
  */
-export async function requestSecurityEmailChange(input: { account: string; securityEmail: unknown }) {
+type SecurityEmailChangeDelivery = {
+  sendCurrent: (input: { to: string; targetEmail: string; code: string; expiresAt: string }) => Promise<unknown>;
+  sendTarget: (input: { to: string; code: string; expiresAt: string }) => Promise<unknown>;
+};
+
+const defaultSecurityEmailChangeDelivery: SecurityEmailChangeDelivery = {
+  sendCurrent: sendCurrentSecurityEmailChangeCode,
+  sendTarget: sendSecurityEmailChangeCode,
+};
+
+export async function requestSecurityEmailChange(
+  input: { account: string; securityEmail: unknown },
+  delivery: SecurityEmailChangeDelivery = defaultSecurityEmailChangeDelivery,
+) {
   const email = normalizeLoginAccount(input.account);
   const target = securityEmail(typeof input.securityEmail === "string" ? input.securityEmail : null);
   if (!isValidLoginAccount(email) || !target) throw new ClientSafeError("请填写有效的安全邮箱。");
   if (!securityEmailConfigured()) throw new ClientSafeError("尚未配置安全邮箱通知服务，暂不能变更安全邮箱。", 503, "SECURITY_EMAIL_UNAVAILABLE");
   const row = await account(email);
   if (!row || row.status !== "active") return null;
+  const current = securityEmail(row.security_email);
+  if (row.security_email_verified_at && !current) {
+    throw new ClientSafeError("当前安全邮箱配置异常，请联系管理员。", 409, "SECURITY_EMAIL_INVALID");
+  }
   if (!securityEmailConfirmationRequired({
     currentEmail: row.security_email,
     verifiedAt: row.security_email_verified_at,
     targetEmail: target,
   })) return { unchanged: true as const };
+
+  if (current && row.security_email_verified_at) {
+    // A previously issued destination code must never bypass the fresh proof
+    // from the currently verified mailbox.
+    await revokeAccountTokens({ email, purpose: "security_email_change" });
+    const token = await issueAccountToken({
+      email,
+      purpose: "security_email_change_current",
+      createdBy: email,
+      lifetimeMs: 15 * 60_000,
+      targetEmail: target,
+    });
+    await delivery.sendCurrent({ to: current, targetEmail: target, code: token.code, expiresAt: token.expiresAt });
+    return { unchanged: false as const, step: "confirm_current" as const, expiresAt: token.expiresAt };
+  }
+
   const token = await issueAccountToken({
     email,
     purpose: "security_email_change",
@@ -338,8 +371,38 @@ export async function requestSecurityEmailChange(input: { account: string; secur
     lifetimeMs: 15 * 60_000,
     targetEmail: target,
   });
-  await sendSecurityEmailChangeCode({ to: target, code: token.code, expiresAt: token.expiresAt });
-  return { unchanged: false as const, expiresAt: token.expiresAt };
+  await delivery.sendTarget({ to: target, code: token.code, expiresAt: token.expiresAt });
+  return { unchanged: false as const, step: "confirm_new" as const, expiresAt: token.expiresAt };
+}
+
+export async function confirmCurrentSecurityEmailChange(
+  input: { account: string; securityEmail: unknown; code: unknown },
+  delivery: SecurityEmailChangeDelivery = defaultSecurityEmailChangeDelivery,
+) {
+  const email = normalizeLoginAccount(input.account);
+  const target = securityEmail(typeof input.securityEmail === "string" ? input.securityEmail : null);
+  if (!isValidLoginAccount(email) || !target) return null;
+  if (!securityEmailConfigured()) throw new ClientSafeError("尚未配置安全邮箱通知服务，暂不能变更安全邮箱。", 503, "SECURITY_EMAIL_UNAVAILABLE");
+  const token = await pendingAccountToken({ code: input.code, purpose: "security_email_change_current" });
+  if (!token || token.email !== email || token.targetEmail !== target) return null;
+  const row = await account(email);
+  const current = securityEmail(row?.security_email);
+  if (!row || row.status !== "active" || !current || !row.security_email_verified_at || current === target) return null;
+  if (!await consumePendingAccountToken(token)) return null;
+  const nextToken = await issueAccountToken({
+    email,
+    purpose: "security_email_change",
+    createdBy: email,
+    lifetimeMs: 15 * 60_000,
+    targetEmail: target,
+  });
+  try {
+    await delivery.sendTarget({ to: target, code: nextToken.code, expiresAt: nextToken.expiresAt });
+  } catch (error) {
+    await revokeAccountTokens({ email, purpose: "security_email_change" });
+    throw error;
+  }
+  return { step: "confirm_new" as const, expiresAt: nextToken.expiresAt };
 }
 
 export async function confirmSecurityEmailChange(input: { account: string; securityEmail: unknown; code: unknown }) {
@@ -396,18 +459,28 @@ export async function regenerateAdministratorRecoveryCodes(accountEmail: string)
   const row = await account(email);
   if (!row || row.status !== "active") throw new ClientSafeError("初始管理员账户不可用。", 409, "INITIAL_ADMIN_UNAVAILABLE");
   const database = getDatabase();
+  const recovery = prepareAuditedAdministratorRecoveryCodes({ email, createdBy: email });
   await writeAuditedMutation(await sharedAuditVaultId(email), email, "initial_admin_recovery_codes_rotated", email, {
     auditOrder: "before",
     auditPrerequisite: { sql: "SELECT 1 FROM app_users WHERE email = ? AND status = 'active'", values: [email] },
-    commitPrerequisite: { sql: "SELECT 1 FROM app_users WHERE email = ? AND status = 'active'", values: [email] },
-    expectedChanges: 1,
-    statements: (guard) => [database.prepare(
-      `UPDATE app_users SET updated_at = CURRENT_TIMESTAMP
-       WHERE email = ? AND status = 'active' AND ${guard.conditionSql}
-         AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`,
-    ).bind(email, ...guard.values, guard.auditEventId)],
+    commitPrerequisite: {
+      sql: `SELECT 1 FROM app_users WHERE email = ? AND status = 'active'
+            AND (SELECT COUNT(*) FROM account_tokens WHERE email = ? AND purpose = 'admin_recovery' AND used_at IS NULL AND revoked_at IS NULL) = ?`,
+      values: [email, email, recovery.count],
+    },
+    expectedChanges: (results) => (results[0]?.meta.changes ?? 0) === 1
+      && results.slice(2).length === recovery.count
+      && results.slice(2).every((result) => (result.meta.changes ?? 0) === 1),
+    statements: (guard) => [
+      database.prepare(
+        `UPDATE app_users SET updated_at = CURRENT_TIMESTAMP
+         WHERE email = ? AND status = 'active' AND ${guard.conditionSql}
+           AND EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`,
+      ).bind(email, ...guard.values, guard.auditEventId),
+      ...recovery.statements(guard),
+    ],
   });
-  return issueAdministratorRecoveryCodes({ email, createdBy: email });
+  return recovery.codes;
 }
 
 /**

@@ -24,6 +24,6 @@ export async function POST(request: Request) {
     const item = await createVaultItem(actor.email, body);
     return secureJson({ item }, { status: 201 });
   } catch (error) {
-    return apiError(error, 400, request);
+    return apiError(error, 500, request);
   }
 }

@@ -38,7 +38,7 @@ export async function POST(request: Request) {
     await createEmbeddedPage(actor.email, body);
     return secureJson({ created: true }, { status: 201 });
   } catch (error) {
-    return apiError(error, 400, request);
+    return apiError(error, 500, request);
   }
 }
 
@@ -56,7 +56,7 @@ export async function PATCH(request: Request) {
     await updateEmbeddedPage(actor.email, body);
     return secureJson({ updated: true });
   } catch (error) {
-    return apiError(error, 400, request);
+    return apiError(error, 500, request);
   }
 }
 
@@ -74,6 +74,6 @@ export async function DELETE(request: Request) {
     await deleteEmbeddedPage(actor.email, body.id);
     return secureEmpty();
   } catch (error) {
-    return apiError(error, 400, request);
+    return apiError(error, 500, request);
   }
 }
